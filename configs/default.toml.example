@@ -1,0 +1,51 @@
+# configs/<name>.toml — per-repo team wiki convention.
+# Copy this .example to a real file. It is the ONLY tracked file here; every
+# configs/*.toml you create is gitignored (user-local — safe for team-private scopes).
+#   • configs/default.toml   → applies to EVERY repo (omit `applies_to`)
+#   • configs/<team>.toml    → scope to specific folders with `applies_to`
+# Full field reference & precedence rules: ../llmwiki.config.example.toml
+# Verify what a repo resolves to:  bun <clone>/src/cli.ts config <repo>
+
+config_version = 1
+
+# Scope (configs/*.toml only). Omit for the all-repos default; or list folders to scope a
+# named config — segment-safe prefix, most-specific/longest match wins, ~ expands:
+# applies_to = ["~/work/team-backend", "/abs/path/shared-wikis"]
+
+[wiki]
+# lang = "ko"                    # UI/skeleton language (LLMWIKI_LANG env still wins per-session)
+
+# Declaring ANY [[category]] REPLACES the whole default list (no partial merge — predictability first).
+# Example — a Korean-labeled team format (dir = number = reading order):
+[[category]]
+dir = "1_방향"
+domain = "direction"
+review = "human"                 # strategic → queued to 0_review for human sign-off
+guide = "분기 방향과 변경 이력. 방향 전환은 사람이 확정."
+
+[[category]]
+dir = "2_작업"
+domain = "milestone"
+review = "model"                 # bookkeeping → strong-model adjudication, no human sign-off
+guide = "완료 작업과 다음 단계. transcript 근거 필수."
+
+[[category]]
+dir = "3_결정"
+domain = "decision"
+review = "model"
+guide = "ADR: 문제 → 대안 → 선택 → 결과."
+
+[[category]]
+dir = "4_교훈"
+domain = "insight"
+review = "model"
+guide = "작업 중 깨달음·gotcha."
+
+[topic]
+dir = "5_주제"                    # per-concept living encyclopedia (consolidation target)
+
+# [queue]
+# dir = "0_review"               # human-judgment queue (default 0_review)
+
+# [lint.banned_terms]            # banned word → preferred wording (warn-level)
+# "진북" = "방향성"

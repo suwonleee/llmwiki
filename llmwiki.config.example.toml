@@ -1,0 +1,68 @@
+# llmwiki.config.toml — team wiki conventions (copy to the engine clone root and edit).
+#
+# ZERO-CONFIG: without this file the engine runs the stock structure
+# (0_review · 1_direction · 2_milestone · 3_decision · 4_insight · 5_topic) — nothing changes.
+# Every key below is optional and overrides that default. Declaring ANY [[category]]
+# REPLACES the whole default category list (no partial merge — predictability first).
+# Check the result with:  bun <clone>/src/cli.ts config [workspace]
+# Team distribution: commit this file to your team's engine fork; members `git pull`.
+#
+# PER-REPO CONFIGS (optional): put multiple *.toml files under <clone>/configs/ instead.
+#   • a file WITH `applies_to = ["<folder>", ...]` governs those folders and everything
+#     under them (segment-safe prefix; the most specific/longest match wins; ~ expands)
+#   • a file WITHOUT applies_to is the default for all repos (canonical: configs/default.toml)
+#   • precedence: named applies_to match → configs/ default → this root file → built-in defaults
+#     (a configs/ default shadows this root file; named-only configs/ still falls back here)
+#   • matching uses the path the session hook passes (CLAUDE_PROJECT_DIR / cwd)
+#   • a broken file never breaks a session: it is skipped/faded to defaults and surfaced
+#     as a warning in `llmwiki config <workspace>`
+#
+# applies_to = ["~/work/repo-a", "/abs/path/team-wikis"]   # per-repo scope (configs/*.toml only)
+
+config_version = 1
+
+[wiki]
+# lang = "ko"            # UI/skeleton language; LLMWIKI_LANG env still wins per-session
+
+# --- log-layer categories: order = number = reading order --------------------------
+# dir    : folder under docs/wiki
+# domain : frontmatter `domain:` value routed to this folder (lowercase slug)
+# review : "human" → queued to 0_review for human confirmation (strategic judgment)
+#          "model" → strong-model adjudication, no human sign-off (fact bookkeeping)
+# guide  : one-line convention — rendered into prompts and `llmwiki conventions`
+#          (free text, ANY language — it is shown to the model as-is)
+#
+# [[category]]
+# dir = "1_goal"
+# domain = "goal"
+# review = "human"
+# guide = "분기 목표와 변경 이력. 목표 전환은 사람이 확정."
+#
+# [[category]]
+# dir = "2_lesson"
+# domain = "lesson"
+# review = "model"
+# guide = "작업 교훈·gotcha. transcript 근거 필수."
+#
+# [[category]]
+# dir = "3_adr"
+# domain = "adr"
+# review = "model"
+# guide = "ADR: 문제 → 대안 → 선택 → 결과."
+
+# [topic]
+# dir = "5_topic"        # per-concept living encyclopedia (consolidation target)
+
+# [queue]
+# dir = "0_review"       # human-judgment queue
+
+# [files]
+# l0 = "current-state.md"
+# overview = "overview.md"
+# log = "log.md"
+
+# legacy_dirs = ["milestones", "insights", "decisions", "directions"]  # extra dirs still scanned
+
+# [lint.banned_terms]    # banned word → preferred wording (warn-level)
+# "진북" = "방향성"
+# "distill" = "update / 업데이트"

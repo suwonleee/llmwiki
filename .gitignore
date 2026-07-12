@@ -1,0 +1,16 @@
+# machine-local runtime state (rebuildable by the daemon scanning transcripts)
+.state/
+# derived index (rebuildable from markdown)
+.llmwiki/
+__pycache__/
+*.pyc
+.DS_Store
+.omc/
+# per-repo team configs are user-local (the tracked configs/default.toml.example is the template)
+configs/*.toml
+# Node/Bun (TS rewrite)
+node_modules/
+*.tsbuildinfo
+bun.lockb
+docs/
+reference/
