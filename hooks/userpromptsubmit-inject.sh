@@ -12,6 +12,12 @@
 # Fail-safe: any error → silent exit 0 (never block or pollute a turn).
 set +e
 
+# Engine subprocesses (autoupdate/review/ingest shell out to `claude -p` via src/engine/claude.ts)
+# set this marker so the hook does NOT self-inject turn-context into the WRITE/VERIFY prompt —
+# that injection pollutes the generative passes. Mirrors sessionstart-inject.sh; real interactive
+# sessions never set it. (Exit before reading stdin — an unconsumed payload pipe is harmless.)
+[ -n "$LLMWIKI_ENGINE_SUBPROCESS" ] && exit 0
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 PROJ="${CLAUDE_PROJECT_DIR:-$PWD}"
 BUN="$(command -v bun)"
