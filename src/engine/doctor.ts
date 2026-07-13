@@ -40,9 +40,9 @@ const COMMANDS = ["wiki-update.md", "wiki-ask.md", "wiki-sync.md"] as const;
 const PLIST = join(HOME, "Library", "LaunchAgents", "com.llmwiki.daemon.plist");
 const LABEL = "com.llmwiki.daemon";
 // canonical SessionStart read-injection hook — what --fix re-registers if a profile lost it
-// (e.g. an OMC update regenerated settings.json). The stable substring used as the
-// presence key is the hook script filename, not "llmwiki" — so the check survives
-// any clone path/name (decision: path-agnostic setup).
+// (e.g. an OMC update regenerated settings.json). Presence keys on the hook script
+// filename (survives any clone path/name — decision: path-agnostic setup), then the
+// full command below distinguishes "wired to THIS clone" from "wired to another clone".
 const SESSIONSTART_CMD = `bash ${CLONE_ROOT}/hooks/sessionstart-inject.sh`;
 // per-turn read-injection hook — same self-heal contract as SessionStart
 const TURNCTX_CMD = `bash ${CLONE_ROOT}/hooks/userpromptsubmit-inject.sh`;
@@ -176,8 +176,15 @@ export function runDoctor(fix = false): number {
     // key on the stable hook script filename, not the substring "llmwiki" — so the
     // check holds regardless of the clone's name/path (decision: path-agnostic setup).
     const has = txt.includes("sessionstart-inject.sh") && txt.includes("SessionStart");
-    if (has) {
+    if (has && txt.includes(SESSIONSTART_CMD)) {
       console.log(`  [${name}] ✅ read-injection hook present`);
+    } else if (has) {
+      // script name found but pointing at a different clone — repairHook would only
+      // append a duplicate; wire.ts strip-then-add is the correct re-point path.
+      console.log(
+        `  [${name}] ⚠️ SessionStart hook points to a different clone (re-point: bun ${CLONE_ROOT}/src/daemon/wire.ts)`,
+      );
+      issues += 1;
     } else if (fix) {
       console.log(`  [${name}] ⚠️ no llmwiki SessionStart hook → ${repairHook(sp)}`);
     } else {
@@ -187,8 +194,13 @@ export function runDoctor(fix = false): number {
 
     // per-turn read-injection hook — same presence key + self-heal
     const hasTurn = txt.includes("userpromptsubmit-inject.sh") && txt.includes("UserPromptSubmit");
-    if (hasTurn) {
+    if (hasTurn && txt.includes(TURNCTX_CMD)) {
       console.log(`  [${name}] ✅ turn-context hook present`);
+    } else if (hasTurn) {
+      console.log(
+        `  [${name}] ⚠️ UserPromptSubmit hook points to a different clone (re-point: bun ${CLONE_ROOT}/src/daemon/wire.ts)`,
+      );
+      issues += 1;
     } else if (fix) {
       console.log(
         `  [${name}] ⚠️ no llmwiki UserPromptSubmit hook → ${repairHook(sp, "UserPromptSubmit", TURNCTX_CMD)}`,

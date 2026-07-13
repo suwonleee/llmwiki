@@ -23,9 +23,9 @@ PY="$(command -v bun || true)"
 # passes (autoupdate·synthesize·review) shell out to `claude -p`. Warn, never fail.
 if ! command -v claude >/dev/null 2>&1; then
     echo "⚠️ 'claude' CLI not found on PATH."
-    echo "   캡처·읽기 주입·/wiki-* 커맨드는 그대로 동작합니다."
-    echo "   단 autoupdate·synthesize·review(생성 패스)는 claude CLI가 필요합니다."
-    echo "   설치: https://docs.claude.com/en/docs/claude-code/setup"
+    echo "   Capture, read-injection, and the /wiki-* commands work without it."
+    echo "   Only the generative passes (autoupdate·synthesize·review) need the claude CLI."
+    echo "   Install: https://docs.claude.com/en/docs/claude-code/setup"
     echo
 fi
 
@@ -52,6 +52,6 @@ echo "--- 5) doctor (post) ---"
 "$PY" "$ROOT/src/cli.ts" doctor || true
 echo
 echo "=== done. ==="
-echo "  • 다른 프로젝트에서 쓰려면 그 폴더에서:  $PY $ROOT/src/cli.ts init <repo>"
-echo "  • 새 세션부터 cold-start 주입 + /wiki-update·/wiki-sync·/wiki-ask 사용 가능"
-echo "  • 되돌리기:  bash $ROOT/daemon/install.sh --uninstall  ·  $PY $ROOT/src/daemon/wire.ts --revert"
+echo "  • To use it in another project:  $PY $ROOT/src/cli.ts init <repo>"
+echo "  • From the next session: cold-start injection + /wiki-update·/wiki-sync·/wiki-ask"
+echo "  • Undo:  bash $ROOT/daemon/install.sh --uninstall  ·  $PY $ROOT/src/daemon/wire.ts --revert"

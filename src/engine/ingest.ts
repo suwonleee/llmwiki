@@ -31,7 +31,9 @@ export async function ingest(
 
   const src = opts.source ? sourceForKind(opts.source) : sourceForPath(path);
   const probed = src.probe(path);
-  const repo = opts.repo ? resolve(opts.repo) : probed?.repo ?? process.cwd();
+  // sources with no probeable provenance (plain drops) bucket under the target
+  // workspace, not the caller's cwd — a cwd row would pollute another repo's backlog.
+  const repo = opts.repo ? resolve(opts.repo) : probed?.repo ?? resolve(ws);
   const sessionId = probed?.sessionId ?? null;
   const lines = probed?.lines ?? 0;
 
