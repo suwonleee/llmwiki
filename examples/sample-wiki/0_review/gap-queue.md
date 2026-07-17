@@ -9,7 +9,7 @@ domain: meta
 source: semantic-lint
 ---
 
-> 자동 관리(LLM-0): review가 표면화한 사실 갭(개념 페이지·교차링크). 채우는 것도 LLM의 북키핑 — /wiki-sync 가 직접 작성. 사람 판단은 모순·방향성만.
+> 자동 관리(LLM-0): review가 표면화한 사실 갭(개념 페이지·교차링크). 채우는 것도 LLM의 북키핑 — /wiki-deep 가 직접 작성. 사람 판단은 모순·방향성만.
 > 2회 연속 review에서 안 보이면 자동 close.
 
 ## Open (2)

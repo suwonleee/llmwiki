@@ -1,19 +1,19 @@
 ---
-description: Fast session close-out (warm, O(this session)) — file THIS session into the log, consolidate its durable concepts into the topic encyclopedia (5_topic), refresh L0 (current-state), finish with overview·lint. The every-session habit; volume work (backlog · review · gaps · re-distill) defers to the periodic `/wiki-sync` deep pass
+description: Fast session close-out (warm, O(this session)) — file THIS session into the log, consolidate its durable concepts into the topic encyclopedia (5_topic), refresh L0 (current-state), finish with overview·lint. The every-session habit; volume work (backlog · review · gaps · re-distill) defers to the periodic `/wiki-deep` deep pass
 ---
 
-# /wiki-update — fast session close-out (warm, human-present)
+# /wiki-fast — fast session close-out (warm, human-present)
 
-Close the session by filing **THIS session's** work into durable knowledge, **right here (warm context)**, and keep the **reading input (L0) fresh**. This is the primary integration path — warm, human-present, not an unattended cron. **Minutes, not tens of minutes**: close-out latency is what makes people abandon a wiki (the maintenance-burden rule), so this pass is strictly O(this session). Everything heavier — the transcript backlog, the semantic review, the gap queue, topic re-distillation — belongs to the periodic **`/wiki-sync`** deep pass, and **deferring it loses nothing**: transcripts are immutable and the capture watermarks, gap queue, and lint backlog are all durable; everything deferred stays queued until some pass consumes it.
+Close the session by filing **THIS session's** work into durable knowledge, **right here (warm context)**, and keep the **reading input (L0) fresh**. This is the primary integration path — warm, human-present, not an unattended cron. **Minutes, not tens of minutes**: close-out latency is what makes people abandon a wiki (the maintenance-burden rule), so this pass is strictly O(this session). Everything heavier — the transcript backlog, the semantic review, the gap queue, topic re-distillation — belongs to the periodic **`/wiki-deep`** deep pass, and **deferring it loses nothing**: transcripts are immutable and the capture watermarks, gap queue, and lint backlog are all durable; everything deferred stays queued until some pass consumes it.
 
-(Why a human-invoked command and not a hook: no harness offers a reliable LLM-capable "session end" hook — Claude Code's SessionEnd is shell-only with a ~1.5s budget, OpenCode has no true session-close event, Codex automates only via hooks. The warm command is the quality path; any session that skips it lands safely in the backlog for `/wiki-sync`.)
+(Why a human-invoked command and not a hook: no harness offers a reliable LLM-capable "session end" hook — Claude Code's SessionEnd is shell-only with a ~1.5s budget, OpenCode has no true session-close event, Codex automates only via hooks. The warm command is the quality path; any session that skips it lands safely in the backlog for `/wiki-deep`.)
 
 ## Two passes, two scopes
 
 | Pass | Scope | When | Work |
 |------|-------|------|------|
-| **`/wiki-update`** (this skill) | THIS session | every session close | file the session into the log + fold its durable concepts into `5_topic` + L0 freshness + deterministic checks |
-| **`/wiki-sync`** (deep) | everything queued | day end · weekly · when the fast report recommends it | drain the whole transcript backlog + semantic review + gap queue + re-distill oversized topics |
+| **`/wiki-fast`** (this skill) | THIS session | every session close | file the session into the log + fold its durable concepts into `5_topic` + L0 freshness + deterministic checks |
+| **`/wiki-deep`** (deep) | everything queued | day end · weekly · when the fast report recommends it | drain the whole transcript backlog + semantic review + gap queue + re-distill oversized topics |
 
 The wiki itself has two layers on different axes: the **log** (`2_milestone`·`3_decision`·`4_insight` — time axis, one immutable entry per session, append-only) and the **topic encyclopedia** (`5_topic` — concept axis, one living page per recurring concept, create-or-update merged in place). A close-out writes the session's log entry AND selectively folds its durable concepts into `5_topic`. Promotion is one-directional (log → topic), never the reverse.
 
@@ -23,8 +23,8 @@ The wiki itself has two layers on different axes: the **log** (`2_milestone`·`3
 - **Inline, warm** — done directly in this session. No sub-agent delegation (context is quality).
 - **Standalone CLI engine** — only `bun ~/llmwiki/src/cli.ts` + `<repo>/docs/wiki/`. Don't confuse it with other wiki/MCP tools.
 - **Routine judgment by the strong model, only direction by the human**: the LLM decides classification, grounding checks, topic merges, and decision/insight confirmation *directly* as `status: ready`. Don't check with the human one by one. But **never fabricate ungrounded claims — omit** them. Only **direction shifts** and **unresolved contradictions** go to `0_review` for the human.
-- **Latency contract**: this close-out is O(this session), not O(backlog) or O(wiki). Defer volume work (backlog drain, semantic review, gap queue, topic distill) to `/wiki-sync` or the unattended `autoupdate` daemon instead of doing it inline — deferral is safe by design (durable queues); slowness is not (it kills the habit, and an unused wiki records nothing).
-- **Single-purpose close-out**: this ritual only maintains the wiki. Don't absorb unrelated tail work mid-run (applying code-review findings, running test suites, committing code) — finish or queue that BEFORE starting /wiki-update.
+- **Latency contract**: this close-out is O(this session), not O(backlog) or O(wiki). Defer volume work (backlog drain, semantic review, gap queue, topic distill) to `/wiki-deep` or the unattended `autoupdate` daemon instead of doing it inline — deferral is safe by design (durable queues); slowness is not (it kills the habit, and an unused wiki records nothing).
+- **Single-purpose close-out**: this ritual only maintains the wiki. Don't absorb unrelated tail work mid-run (applying code-review findings, running test suites, committing code) — finish or queue that BEFORE starting /wiki-fast.
 - **Validate as you write** (kills the write→lint→fix rework loop): immediately after writing or editing each page, run `llmwiki index <repo> >/dev/null && llmwiki lint <repo> --path '<page path under docs/wiki>' --errors-only` and fix findings NOW, while the file is still in context. The close-out lint then confirms instead of repairs.
 - **Routine filing needs routine reasoning**: most of this ritual is mechanical (classify, cite, cross-link). Don't deliberate at length over routine filing; reserve depth for contradictions, judgment-bearing merges, and direction shifts.
 
@@ -127,7 +127,7 @@ $ARGUMENTS
    - **ambiguous classification → don't ask the human; the strong model confirms into the best-fit folder** (not 0_review).
    - **only when direction/strategy actually shifted** → file a Q./A. question/draft (format below) into `0_review/` for the human. The transcript that produced a question file **does not advance its watermark** (unresolved, so it reappears next time).
    - not grounded → omit. Noise (trivial Q&A, no record value) → no page, `update-done --skipped`.
-   Then advance the watermark: `llmwiki update-done <repo> <transcript> <new_offset>`. **Leave the rest of the backlog pending and report the count** — it is safely queued behind byte watermarks for `/wiki-sync` or the unattended `autoupdate` daemon. Do NOT drain it inline: measured cost is ~40s+/session, so an 11-session backlog turns a close-out into a 10-minute wait. If 0 pending, skip.
+   Then advance the watermark: `llmwiki update-done <repo> <transcript> <new_offset>`. **Leave the rest of the backlog pending and report the count** — it is safely queued behind byte watermarks for `/wiki-deep` or the unattended `autoupdate` daemon. Do NOT drain it inline: measured cost is ~40s+/session, so an 11-session backlog turns a close-out into a 10-minute wait. If 0 pending, skip.
 
 3. **Consolidate the topic encyclopedia (5_topic)** — per the "Topic consolidation" section above: dry-run `llmwiki consolidate <repo>` → select durable/recurring concepts only → create-or-update `5_topic/<slug>.md` pages (add new facts with their own citations, preserve existing lines, build from the transcript/raw only) → cross-link with explicit relation words; flag contradictions as callouts (direction-level → `0_review`).
 
@@ -144,9 +144,9 @@ $ARGUMENTS
    - **Unresolved-citation guard (never strip to silence):** if lint flags `unresolved-citation`, **fix** the footnote — never delete it (deleting only downgrades to a `no-citation` warning and discards provenance). First decide the claim's KIND: **a human decision / judgment / statement** → the source is the **session transcript**, NOT code (normally already citable via `update-next`; else `llmwiki register-transcript <repo>`), cite `[^n]: <transcript>.jsonl` — **never repoint a decision to a code file**; **a factual claim about code** → cite **one repo-relative path that exists**. One path per footnote (no globs/commas/parentheticals); one footnote per source. Only if no real source exists, drop the underlying claim.
 
 8. **Semantic review — engine-gated auto-run**: whenever this session created or updated pages, run `llmwiki review <repo> --commit --if-due`. The engine skips it deterministically unless the cadence interval (~7 days, `LLMWIKI_REVIEW_INTERVAL_DAYS`) has passed since the last committed review — trust the gate; don't re-derive it from `log.md` and don't `--force` in a fast close-out. When it DOES run, it surfaces cross-page contradictions, stale claims, missing-concept pages, and next questions → an advisory draft in `0_review/` (it never edits existing pages): **announce the findings in chat**; for a real *contradiction*, add a `> [conflict] …` callout to the relevant `5_topic` page (never overwrite), and route only **direction-level** conflicts to `0_review` for the human. Then run **`llmwiki gaps <repo>`** to fold *missing-concept* / *next-question* findings into the tracked, self-closing `0_review/gap-queue.md` (a gap auto-closes once review stops re-flagging it for 2 runs; review is bounded+cached by P1-A2).
-   - **Fast gap quota — fill at most 2 quick gaps now**, oldest first, and only the cheap kinds: a `next-question` cross-link gap → add the wikilinks with explicit relation words, or the `> [conflict]` callout. *Missing-concept* pages and the rest of the queue are **`/wiki-sync`'s** job — announce the open count. A deferred gap is never lost: it stays tracked in the queue until some pass fills it (never hand-edit the queue's `<!-- gap:… -->` markers).
+   - **Fast gap quota — fill at most 2 quick gaps now**, oldest first, and only the cheap kinds: a `next-question` cross-link gap → add the wikilinks with explicit relation words, or the `> [conflict]` callout. *Missing-concept* pages and the rest of the queue are **`/wiki-deep`'s** job — announce the open count. A deferred gap is never lost: it stays tracked in the queue until some pass fills it (never hand-edit the queue's `<!-- gap:… -->` markers).
 
-9. **Report** (1–2 lines): "log reflected N (this session) / **backlog deferred: B sessions** / **topic pages: created A, updated B** / **gaps filled K (open M)** / 0_review pending N / L0 refreshed: yes/no / lint error·warn counts / review: ran|not-due / **deep pass (`/wiki-sync`) recommended: yes/no (why)**". Recommend `/wiki-sync` when any of these holds: pending backlog ≥ 5 sessions · lint shows `topic-oversize` · open gaps keep being deferred.
+9. **Report** (1–2 lines): "log reflected N (this session) / **backlog deferred: B sessions** / **topic pages: created A, updated B** / **gaps filled K (open M)** / 0_review pending N / L0 refreshed: yes/no / lint error·warn counts / review: ran|not-due / **deep pass (`/wiki-deep`) recommended: yes/no (why)**". Recommend `/wiki-deep` when any of these holds: pending backlog ≥ 5 sessions · lint shows `topic-oversize` · open gaps keep being deferred.
 
 ### 0_review file format — Q./A. form (no emojis)
 After the routine-judgment rule, `0_review` is almost entirely **direction-shift confirmation**. Labels/guidance in English; content (question + draft) in the wiki's own language. Separate paragraphs with blank lines so the human can write the answer directly under `A.`:
@@ -162,7 +162,7 @@ source: <transcript filename>
 
 Q. This session looks like a direction shift from <from> → <to>. Confirm?
 
-A. (write your decision below; on the next /wiki-update or /wiki-sync the LLM applies it and deletes this file)
+A. (write your decision below; on the next /wiki-fast or /wiki-deep the LLM applies it and deletes this file)
 
 
 Draft (candidate 1_direction page; moved into 1_direction/ once confirmed):
@@ -178,4 +178,4 @@ Draft (candidate 1_direction page; moved into 1_direction/ once confirmed):
 - **Defer, never drop**: this pass defers volume work because deferral is lossless by construction — transcripts are immutable; watermarks, the gap queue, and the lint backlog are durable and self-tracking. Slowness, not deferral, is what loses information: a close-out people skip records nothing.
 - Concurrency-safe: mostly new pages + appends. Commits are in the user's name alone — only when instructed.
 - Team merge recovery: `log.md` merges automatically (`merge=union` via the skeleton's `.gitattributes`). `gap-queue.md` and `overview.md` are whole-file regenerated — on a git conflict, take either side, then re-run `llmwiki gaps <repo>` / `llmwiki overview --normalize <repo>`; both converge. Never hand-merge their generated bodies.
-- Use `/wiki-update` to close out a session (this skill), `/wiki-ask` for a question, `/wiki-sync` for the periodic deep pass (backlog · review · gaps · re-distill).
+- Use `/wiki-fast` to close out a session (this skill), `/wiki-ask` for a question, `/wiki-deep` for the periodic deep pass (backlog · review · gaps · re-distill).

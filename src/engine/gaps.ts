@@ -5,7 +5,7 @@
 // findings as NAMED gaps (chum-mem: name gaps, don't silently omit) in a single append-managed
 // queue, and closes a gap when review stops re-emitting it (wikidesk loop closure). LLM-0 — it only
 // parses review's own output + the existing queue. Gaps are FACT bookkeeping (missing topic pages,
-// cross-links), so filling them is the LLM's job, not the human's — /wiki-sync fills them directly
+// cross-links), so filling them is the LLM's job, not the human's — /wiki-deep fills them directly
 // (humans abandon wikis when maintenance lands on them; the model does the grunt work).
 // Only genuine judgment calls (contradictory measurements, direction) are left for the human.
 //
@@ -102,7 +102,7 @@ export function renderQueue(gaps: Gap[], date: string): string {
     `date: ${date}\nupdated: ${date}\ntags: [gap-queue, meta]\nstatus: ready\ndomain: meta\nsource: semantic-lint\n---\n`;
   return (
     fm +
-    `\n> 자동 관리(LLM-0): review가 표면화한 사실 갭(개념 페이지·교차링크). 채우는 것도 LLM의 북키핑 — /wiki-sync 가 직접 작성. 사람 판단은 모순·방향성만.\n` +
+    `\n> 자동 관리(LLM-0): review가 표면화한 사실 갭(개념 페이지·교차링크). 채우는 것도 LLM의 북키핑 — /wiki-deep 가 직접 작성. 사람 판단은 모순·방향성만.\n` +
     `> ${RESOLVE_AFTER}회 연속 review에서 안 보이면 자동 close.\n\n` +
     `## Open (${open.length})\n\n` +
     (open.length ? open.map(row).join("\n") : "(none)") +

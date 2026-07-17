@@ -6,7 +6,7 @@
 # (current-state.md) is never touched.
 #
 # CUT-LINE: the unattended path does *fact bookkeeping only*. Integration
-# (synthesize) and judgment are JUDGMENT — they stay WARM (run /wiki-update, or the /wiki-sync
+# (synthesize) and judgment are JUDGMENT — they stay WARM (run /wiki-fast, or the /wiki-deep
 # deep pass, in a human-present session), because unattended judgment measured 0 accepted core
 # pages. So this
 # script no longer runs synthesize; it only accumulates verified facts.
@@ -31,7 +31,7 @@ for repo in $REPOS; do
     echo "=== $repo ==="
     # accumulate ONLY — drain pending transcripts into dated milestones (verified facts).
     # NO integration pass here: integration is judgment → warm-only. Run
-    # `/wiki-update` (or the `/wiki-sync` deep pass) in a human-present session for that.
+    # `/wiki-fast` (or the `/wiki-deep` deep pass) in a human-present session for that.
     "$(command -v bun)" "$ROOT/src/cli.ts" autoupdate "$repo" $COMMIT --limit "$PER" 2>&1 | sed 's/^/  /'
 done
-echo "### done (facts only). review: <repo>/docs/wiki/0_review/ — spot-check. 통합은 웜 /wiki-update·/wiki-sync. ###"
+echo "### done (facts only). review: <repo>/docs/wiki/0_review/ — spot-check. 통합은 웜 /wiki-fast·/wiki-deep. ###"

@@ -53,5 +53,5 @@ echo "--- 5) doctor (post) ---"
 echo
 echo "=== done. ==="
 echo "  • To use it in another project:  $PY $ROOT/src/cli.ts init <repo>"
-echo "  • From the next session: cold-start injection + /wiki-update·/wiki-sync·/wiki-ask"
+echo "  • From the next session: cold-start injection + /wiki-fast·/wiki-deep·/wiki-ask"
 echo "  • Undo:  bash $ROOT/daemon/install.sh --uninstall  ·  $PY $ROOT/src/daemon/wire.ts --revert"

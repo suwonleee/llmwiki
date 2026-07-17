@@ -2,7 +2,7 @@
 //
 // Two write paths advance the wiki, but only one advances the capture watermark:
 //   - programmatic `autoupdate` calls capture.mark(...'distilled')  → watermark moves
-//   - warm `/wiki-update` (in-session LLM writes pages directly)    → watermark does NOT move
+//   - warm `/wiki-fast` (in-session LLM writes pages directly)    → watermark does NOT move
 // So sessions filed warm linger as `pending` forever, inflating the count and burying genuine
 // backlog (the cold-start nag then cites an inflated number). Relying on the in-session LLM to
 // remember `update-done` is the discipline-dependent failure mode we want gone.

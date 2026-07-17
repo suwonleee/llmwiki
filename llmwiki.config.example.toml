@@ -57,7 +57,15 @@ config_version = 1
 # dir = "0_review"       # human-judgment queue
 
 # [quiz]
-# dir = "7_quiz"         # human memory loop (quiz ledger + session records) — never indexed/searched
+# dir = "6_quiz"         # human memory loop (quiz ledger + session records) — never indexed/searched
+
+# --- LLM model tiers (per generative pass) -----------------------------------------
+# light = WRITE/drafting tier (cheap, high-volume). heavy = VERIFY gate + semantic
+# review tier (judgment). Resolution order: env > this [models] block > builtin default.
+# Per-session env LLMWIKI_MODEL_LIGHT / LLMWIKI_MODEL_HEAVY still win over these values.
+# [models]
+# light = "claude-sonnet-5"   # WRITE pass (drafting, high-volume). env LLMWIKI_MODEL_LIGHT wins.
+# heavy = "claude-opus-4-8"   # VERIFY gate + semantic review (judgment). env LLMWIKI_MODEL_HEAVY wins.
 
 # [files]
 # l0 = "current-state.md"

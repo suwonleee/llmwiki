@@ -74,7 +74,7 @@ export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(w
   // The topic encyclopedia (5_topic): per-concept living pages built by consolidate.ts.
   // A different axis from the numbered log categories — created here so a fresh wiki is ready.
   mkdirSync(join(wiki, cfg.topicDir), { recursive: true });
-  // The quiz layer (7_quiz): the HUMAN-side memory loop (ledger + session records, written by
+  // The quiz layer (6_quiz): the HUMAN-side memory loop (ledger + session records, written by
   // /wiki-quiz + quiz-record). Deliberately excluded from index/search/cold-start — see quiz.ts.
   mkdirSync(join(wiki, cfg.quizDir), { recursive: true });
   const name = basename(root);
@@ -103,13 +103,13 @@ export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(w
           : `description: cold-start L0 — a one-glance snapshot of 'now' and 'next' (human-owned)\n`) +
         `updated: ${today}\ntags: [current-state, L0, meta]\n---\n\n` +
         (ko
-          ? "> **L0(현재 상태)는 판단층 — 사람이 소유한다.** LLM은 `/wiki-update`·`/wiki-sync` 때 '지금/다음'\n" +
+          ? "> **L0(현재 상태)는 판단층 — 사람이 소유한다.** LLM은 `/wiki-fast`·`/wiki-deep` 때 '지금/다음'\n" +
             "> 갱신을 *제안*만 하고, 방향성·절대 규칙은 사람이 확정한다. (포크용 템플릿 플레이스홀더)\n\n" +
             "## 방향성 (사람 확정)\n\n<이 프로젝트가 향하는 큰 방향. 사람만 바꾼다.>\n\n" +
             "## 지금 (TL;DR)\n\n<현재 상태 한 줄~몇 줄>\n\n" +
             "## 다음 (남은 작업)\n\n<바로 다음에 할 일>\n"
           : "> **L0 (current state) is the judgment layer — the human owns it.** The LLM only *proposes* 'now/next'\n" +
-            "> updates during /wiki-update·/wiki-sync; direction and absolute rules are confirmed by the human. (fork template placeholder)\n\n" +
+            "> updates during /wiki-fast·/wiki-deep; direction and absolute rules are confirmed by the human. (fork template placeholder)\n\n" +
             "## Direction (human-confirmed)\n\n<the big direction this project heads toward. only the human changes this.>\n\n" +
             "## Now (TL;DR)\n\n<current state in a line or a few>\n\n" +
             "## Next (remaining work)\n\n<what to do right next>\n"),

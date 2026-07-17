@@ -344,7 +344,7 @@ async function cmdIngest(p: Parsed) {
 // Register session transcript(s) as citable provenance sources so decision/insight pages can
 // cite the real session (not a repointed code file). With a transcript arg, registers that one;
 // otherwise registers every transcript the central queue has seen for this repo whose file still
-// exists. A warm /wiki-update runs this before lint so `[^1]: <transcript>.jsonl` resolves.
+// exists. A warm /wiki-fast runs this before lint so `[^1]: <transcript>.jsonl` resolves.
 function cmdRegisterTranscript(p: Parsed) {
   const ws = p.positionals[0] ?? die("register-transcript <workspace> [transcript] required");
   const idx = new WikiIndex(ws);
@@ -452,7 +452,7 @@ async function cmdReconcile(p: Parsed) {
 }
 
 // Topic consolidation: fold the per-session log into the per-concept topic encyclopedia
-// (docs/wiki/5_topic). Dry-run (default) surfaces candidate concepts for a warm /wiki-update to
+// (docs/wiki/5_topic). Dry-run (default) surfaces candidate concepts for a warm /wiki-fast to
 // merge by hand; --commit runs the gated unattended merge (write → independent verify →
 // grounding → lint), advancing consolidate's own watermark (NOT the log's capture queue).
 async function cmdConsolidate(p: Parsed) {
@@ -479,8 +479,8 @@ async function cmdConsolidate(p: Parsed) {
     }
     console.log(
       ko
-        ? "  → 웜 /wiki-update 에서 재발·내구 개념만 선별해 5_topic 페이지로 병합 (또는 --commit 로 무인 게이트 실행)."
-        : "  → in a warm /wiki-update, merge only durable/recurring concepts into 5_topic (or run --commit for the gated pass).",
+        ? "  → 웜 /wiki-fast 에서 재발·내구 개념만 선별해 5_topic 페이지로 병합 (또는 --commit 로 무인 게이트 실행)."
+        : "  → in a warm /wiki-fast, merge only durable/recurring concepts into 5_topic (or run --commit for the gated pass).",
     );
     return;
   }
@@ -599,8 +599,8 @@ async function cmdGaps(p: Parsed) {
   if (r.open) {
     console.log(
       ko
-        ? `  ※ 사실 갭(개념 페이지·교차링크)은 LLM의 북키핑 — 다음 /wiki-sync 가 직접 채움 (사람 판단은 모순·방향성만; 채워지면 자동 close)`
-        : `  ※ fact gaps (concept pages·cross-links) are the LLM's bookkeeping — the next /wiki-sync fills them (humans judge only contradictions·direction; auto-closes once filled)`,
+        ? `  ※ 사실 갭(개념 페이지·교차링크)은 LLM의 북키핑 — 다음 /wiki-deep 가 직접 채움 (사람 판단은 모순·방향성만; 채워지면 자동 close)`
+        : `  ※ fact gaps (concept pages·cross-links) are the LLM's bookkeeping — the next /wiki-deep fills them (humans judge only contradictions·direction; auto-closes once filled)`,
     );
   }
 }
@@ -769,8 +769,8 @@ function cmdQuizNext(p: Parsed) {
   if (!sel.picks.length) {
     console.log(
       ko
-        ? "  오늘 낼 문항 없음 — 작업을 /wiki-update 로 쌓으면 신규 후보가 생긴다."
-        : "  nothing to ask today — file work with /wiki-update to grow new candidates.",
+        ? "  오늘 낼 문항 없음 — 작업을 /wiki-fast 로 쌓으면 신규 후보가 생긴다."
+        : "  nothing to ask today — file work with /wiki-fast to grow new candidates.",
     );
     return;
   }

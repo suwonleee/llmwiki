@@ -132,3 +132,73 @@ guide = ""
   expect(g.error).toContain("parse failed");
   expect(logDirs(g)).toEqual(logDirs(defaults()));
 });
+
+// ---- models tier (env > toml [models] > builtin default) ----------------------------------
+// Save/restore the model env vars so these tests are independent of the ambient environment.
+function withModelEnv(light: string | undefined, heavy: string | undefined, fn: () => void): void {
+  const prevL = process.env.LLMWIKI_MODEL_LIGHT;
+  const prevH = process.env.LLMWIKI_MODEL_HEAVY;
+  if (light === undefined) delete process.env.LLMWIKI_MODEL_LIGHT;
+  else process.env.LLMWIKI_MODEL_LIGHT = light;
+  if (heavy === undefined) delete process.env.LLMWIKI_MODEL_HEAVY;
+  else process.env.LLMWIKI_MODEL_HEAVY = heavy;
+  try {
+    fn();
+  } finally {
+    if (prevL === undefined) delete process.env.LLMWIKI_MODEL_LIGHT;
+    else process.env.LLMWIKI_MODEL_LIGHT = prevL;
+    if (prevH === undefined) delete process.env.LLMWIKI_MODEL_HEAVY;
+    else process.env.LLMWIKI_MODEL_HEAVY = prevH;
+  }
+}
+
+test("models: builtin defaults when no env and no toml [models]", () => {
+  withModelEnv(undefined, undefined, () => {
+    const c = defaults();
+    expect(c.models.light).toBe("claude-sonnet-5");
+    expect(c.models.heavy).toBe("claude-opus-4-8");
+  });
+});
+
+test("models: toml [models] flows into cfg.models (no env override)", () => {
+  withModelEnv(undefined, undefined, () => {
+    const p = tmpToml(`
+config_version = 1
+[models]
+light = "my-light-model"
+heavy = "my-heavy-model"
+`);
+    const c = loadFrom(p);
+    expect(c.error).toBeUndefined();
+    expect(c.models.light).toBe("my-light-model");
+    expect(c.models.heavy).toBe("my-heavy-model");
+  });
+});
+
+test("models: partial toml [models] falls back to builtin for the unset tier", () => {
+  withModelEnv(undefined, undefined, () => {
+    const p = tmpToml(`
+[models]
+light = "only-light"
+`);
+    const c = loadFrom(p);
+    expect(c.models.light).toBe("only-light");
+    expect(c.models.heavy).toBe("claude-opus-4-8"); // unset → builtin
+  });
+});
+
+test("models: env overrides toml [models] (env > toml > builtin)", () => {
+  withModelEnv("env-light", "env-heavy", () => {
+    const p = tmpToml(`
+[models]
+light = "toml-light"
+heavy = "toml-heavy"
+`);
+    const c = loadFrom(p);
+    expect(c.models.light).toBe("env-light");
+    expect(c.models.heavy).toBe("env-heavy");
+    // defaults() (no toml) also honors env
+    expect(defaults().models.light).toBe("env-light");
+    expect(defaults().models.heavy).toBe("env-heavy");
+  });
+});

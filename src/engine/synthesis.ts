@@ -10,7 +10,7 @@
 // maintenance burden that keeps a wiki alive — and it carries NO collapse risk when it only
 // ASSEMBLES links/flags from the grounded citation graph (no new prose, no wiki→wiki
 // re-derivation). This module delivers (1): a bounded, regenerable relational digest built
-// deterministically from the index (zero LLM calls). (2) stays human/warm (wiki-sync L0,
+// deterministically from the index (zero LLM calls). (2) stays human/warm (wiki-deep L0,
 // wiki-ask) and is intentionally NOT produced here.
 //
 // The output is a DERIVED VIEW (like the index/refs graph), never a committed wiki page —
@@ -27,7 +27,7 @@ const T = {
   en: {
     head: (n: string) => `===== [llmwiki] ${n} — synthesis (auto·regenerable, LLM-0) =====`,
     note: "> Derived view assembled deterministically from the citation graph — links · hubs · freshness only, no new claims, rebuild anytime. (Interpretive synthesis stays human/warm.)",
-    empty: "\nNo category pages yet — start condensing with /wiki-update.",
+    empty: "\nNo category pages yet — start condensing with /wiki-fast.",
     cat: {
       "1_direction": "Direction",
       "2_milestone": "Milestone",
@@ -36,13 +36,13 @@ const T = {
     } as Record<string, string>,
     hubs: "## Key hubs (most-referenced)",
     inbound: (n: number) => `${n} inbound`,
-    stale: "## Freshness (a linked source changed — review at the next /wiki-sync)",
+    stale: "## Freshness (a linked source changed — review at the next /wiki-deep)",
     open: "## Open items (0_review — awaiting human confirmation)",
   },
   ko: {
     head: (n: string) => `===== [llmwiki] ${n} — synthesis (auto·재생성, LLM-0) =====`,
     note: "> 인용 그래프에서 결정적으로 조립한 파생 뷰 — 링크·허브·신선도만, 새 주장 0. 언제든 재생성. (해석적 종합은 사람·웜 영역)",
-    empty: "\n아직 카테고리 페이지가 없음 — /wiki-update 로 업데이트를 시작하세요.",
+    empty: "\n아직 카테고리 페이지가 없음 — /wiki-fast 로 업데이트를 시작하세요.",
     cat: {
       "1_direction": "방향성 (direction)",
       "2_milestone": "마일스톤 (milestone)",
@@ -51,7 +51,7 @@ const T = {
     } as Record<string, string>,
     hubs: "## 핵심 허브 (가장 많이 참조됨)",
     inbound: (n: number) => `${n} inbound`,
-    stale: "## 신선도 주의 (연결된 소스가 갱신됨 — 다음 /wiki-sync 때 검토)",
+    stale: "## 신선도 주의 (연결된 소스가 갱신됨 — 다음 /wiki-deep 때 검토)",
     open: "## 열린 항목 (0_review — 사람 확정 대기)",
   },
 };
@@ -70,7 +70,7 @@ function titleOf(d: any): string {
 // docs/wiki/0_review/*.md titles (the human-judgment queue) read straight from disk —
 // these never become content pages, so they aren't in the category lists above.
 // gap-queue.md / semantic-review-*.md are the LLM's own managed backlog (fact bookkeeping,
-// filled at /wiki-sync), not human questions — excluded so the count matches cold-start's.
+// filled at /wiki-deep), not human questions — excluded so the count matches cold-start's.
 function openReviewItems(repo: string): string[] {
   const dir = join(repo, "docs", "wiki", getConfig(repo).queueDir);
   try {
@@ -216,23 +216,23 @@ const makeT2 = (lang: "ko" | "en", cfg: WikiConfig) =>
   ({
     en: {
       head: (n: string) => `===== [llmwiki] ${n} — topic view (auto·regenerable, LLM-0) =====`,
-      note: `> Deterministic view of the topic layer — materialized ${cfg.topicDir} pages + emergent clusters by shared tag. No new claims; rebuild anytime. (Generative topic merge is /wiki-update·/wiki-sync.)`,
-      empty: "\nNo topic pages or taggable wiki pages yet — consolidate with /wiki-update.",
+      note: `> Deterministic view of the topic layer — materialized ${cfg.topicDir} pages + emergent clusters by shared tag. No new claims; rebuild anytime. (Generative topic merge is /wiki-fast·/wiki-deep.)`,
+      empty: "\nNo topic pages or taggable wiki pages yet — consolidate with /wiki-fast.",
       materialized: `## Topic pages (${cfg.topicDir} — most-referenced first)`,
       clusters: "## Emergent clusters (pages sharing a tag — consolidation candidates)",
       inbound: (n: number) => `${n} inbound`,
       gapMark: "  ◇ no topic page yet",
-      gapSummary: (n: number) => `→ ${n} recurring concept(s) have no topic page yet — /wiki-sync to consolidate.`,
+      gapSummary: (n: number) => `→ ${n} recurring concept(s) have no topic page yet — /wiki-deep to consolidate.`,
     },
     ko: {
       head: (n: string) => `===== [llmwiki] ${n} — 주제 뷰 (auto·재생성, LLM-0) =====`,
-      note: `> 주제층의 결정적 뷰 — 실체화된 ${cfg.topicDir} 페이지 + 공유 태그로 묶인 잠재 클러스터. 새 주장 0, 언제든 재생성. (생성형 주제 병합은 /wiki-update·/wiki-sync.)`,
-      empty: "\n아직 주제 페이지나 태그된 위키 페이지가 없음 — /wiki-update 로 통합하세요.",
+      note: `> 주제층의 결정적 뷰 — 실체화된 ${cfg.topicDir} 페이지 + 공유 태그로 묶인 잠재 클러스터. 새 주장 0, 언제든 재생성. (생성형 주제 병합은 /wiki-fast·/wiki-deep.)`,
+      empty: "\n아직 주제 페이지나 태그된 위키 페이지가 없음 — /wiki-fast 로 통합하세요.",
       materialized: `## 주제 페이지 (${cfg.topicDir} — 참조 많은 순)`,
       clusters: "## 잠재 클러스터 (같은 태그를 공유하는 페이지 — 통합 후보)",
       inbound: (n: number) => `${n} inbound`,
       gapMark: "  ◇ 주제 페이지 없음",
-      gapSummary: (n: number) => `→ 재발 개념 ${n}건이 주제 페이지 없음 — /wiki-sync 로 통합 권장.`,
+      gapSummary: (n: number) => `→ 재발 개념 ${n}건이 주제 페이지 없음 — /wiki-deep 로 통합 권장.`,
     },
   })[lang];
 
@@ -340,7 +340,7 @@ export function buildTopicView(repo: string, opts: TopicViewOptions = {}): strin
   // (b) emergent clusters from shared tags across ALL wiki pages (the consolidation signal).
   // `covered` = tags that already have a materialized 5_topic page; a cluster whose tag is NOT
   // covered is a GAP — a concept that recurs across log pages but has no living topic page yet,
-  // i.e. the next thing /wiki-sync should consolidate. Deterministic, no LLM.
+  // i.e. the next thing /wiki-deep should consolidate. Deterministic, no LLM.
   const covered = new Set<string>();
   const byTag = new Map<string, { title: string; rel: string }[]>();
   for (const d of pages) {

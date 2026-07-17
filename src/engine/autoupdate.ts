@@ -199,7 +199,7 @@ export function _reviewWrapper(o: {
     `source: ${o.source}\n` +
     `---\n\n` +
     `Q. ${o.question}\n\n` +
-    `A. (write your decision below; on the next /wiki-update or /wiki-sync the LLM applies it and deletes this file)\n\n\n` +
+    `A. (write your decision below; on the next /wiki-fast or /wiki-deep the LLM applies it and deletes this file)\n\n\n` +
     `Draft (candidate page; moved into the chosen N_category once confirmed):\n${o.candidate}\n`
   );
 }
@@ -208,11 +208,15 @@ export async function updateOne(
   ws: string,
   transcriptPath: string,
   commit: boolean,
-  writeModel: string = WRITE_MODEL,
-  verifyModel: string = VERIFY_MODEL,
+  writeModel?: string,
+  verifyModel?: string,
 ): Promise<Record<string, any>> {
   const root = resolve(ws);
   const cfg = getConfig(root); // per-repo conventions (configs/ → root file → defaults)
+  // An explicitly-passed model wins; otherwise fall back to the config-resolved tier
+  // (env > toml [models] > builtin). Keeps default behavior byte-identical.
+  const wm = writeModel ?? cfg.models.light;
+  const vm = verifyModel ?? cfg.models.heavy;
   const ko = effectiveKo(cfg);
   const name = basename(root);
   const fn = basename(transcriptPath);
@@ -244,7 +248,7 @@ export async function updateOne(
       repo_name: name,
       extract: extractTxt,
     }),
-    writeModel,
+    wm,
   );
   let page = _extractPage(raw);
   if (raw.startsWith("__ERROR__") || !page.startsWith("---")) {
@@ -260,7 +264,7 @@ export async function updateOne(
   // 2) VERIFY (independent second model, adversarial)
   const verdict = await claude(
     formatPrompt(VERIFY_PROMPT, { extract: extractTxt, page }),
-    verifyModel,
+    vm,
   );
   // The prompt's contract: a fully-grounded page yields *exactly* the token VERIFIED and
   // nothing else; any unsupported claim is returned as bullets. So a reply that merely
@@ -415,20 +419,25 @@ export async function run(
   ws: string,
   commit = false,
   limit = 0,
-  writeModel: string = WRITE_MODEL,
-  verifyModel: string = VERIFY_MODEL,
+  writeModel?: string,
+  verifyModel?: string,
 ): Promise<Record<string, any>[]> {
-  const ko = effectiveKo(getConfig(ws));
+  const cfg = getConfig(ws);
+  const ko = effectiveKo(cfg);
+  // An explicitly-passed model wins; otherwise use the config-resolved tier
+  // (env > toml [models] > builtin).
+  const wm = writeModel ?? cfg.models.light;
+  const vm = verifyModel ?? cfg.models.heavy;
   // The adversarial gate's whole premise is that VERIFY is an *independent* second model.
   // If both tiers resolve to the same model, WRITE is grading its own work and
   // the gate adds no independent check. We don't hard-fail (a single capable model is a legitimate budget
   // setup), but we surface it so the operator knows the independence guarantee is void.
-  if (writeModel === verifyModel) {
+  if (wm === vm) {
     process.stderr.write(
       (ko
-        ? `⚠️  WRITE·VERIFY 모델이 동일(${writeModel}) — 2차검증이 자기 채점이 됨(독립성 상실). ` +
+        ? `⚠️  WRITE·VERIFY 모델이 동일(${wm}) — 2차검증이 자기 채점이 됨(독립성 상실). ` +
           `LLMWIKI_MODEL_HEAVY 를 다른 tier 로 두는 것을 권장.\n`
-        : `⚠️  WRITE and VERIFY resolve to the same model (${writeModel}) — the 2nd-pass verify is ` +
+        : `⚠️  WRITE and VERIFY resolve to the same model (${wm}) — the 2nd-pass verify is ` +
           `self-grading (independence lost). Point LLMWIKI_MODEL_HEAVY at a different tier.\n`),
     );
   }
@@ -438,7 +447,7 @@ export async function run(
   }
   const out: Record<string, any>[] = [];
   for (const r of pend) {
-    out.push(await updateOne(ws, r.transcript_path, commit, writeModel, verifyModel));
+    out.push(await updateOne(ws, r.transcript_path, commit, wm, vm));
   }
   return out;
 }

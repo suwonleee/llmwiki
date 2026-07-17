@@ -3,7 +3,7 @@
 복리 사이클의 **캡처(write) 고리**. `src/daemon/watch.ts` 가 모든 Claude 프로필의 transcript
 디렉터리(`~/.claude*/projects/**/*.jsonl`)를 감시하다가, 새 세션이 끝나면 그 "업데이트 대기
 (pending update)"를 중앙 캡처 큐(`<clone>/.state/capture.db`)에 기록한다. **LLM은 호출하지
-않는다** — 단지 대기 목록만 적는다. 실제 업데이트는 `/wiki-update` 로 한다.
+않는다** — 단지 대기 목록만 적는다. 실제 업데이트는 `/wiki-fast` 로 한다.
 
 어느 터미널(기본/tmux/iTerm2)·폴더에서 작업하든 transcript는 이 경로로 떨어지므로, 클라이언트별
 훅 없이도 캡처가 된다. 50줄 미만의 짧은 Q&A 세션은 작업량 신호로 보아 건너뛴다(`src/daemon/watch.ts`).

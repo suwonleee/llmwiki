@@ -31,12 +31,12 @@ const CORE = [
   "hooks/sessionstart-inject.sh",
   "hooks/userpromptsubmit-inject.sh",
   "setup.sh",
-  "skill/wiki-update.md",
+  "skill/wiki-fast.md",
   "skill/wiki-ask.md",
-  "skill/wiki-sync.md",
+  "skill/wiki-deep.md",
 ];
 // slash commands that must be present in every profile's commands/ dir
-const COMMANDS = ["wiki-update.md", "wiki-ask.md", "wiki-sync.md"] as const;
+const COMMANDS = ["wiki-fast.md", "wiki-ask.md", "wiki-deep.md"] as const;
 const PLIST = join(HOME, "Library", "LaunchAgents", "com.llmwiki.daemon.plist");
 const LABEL = "com.llmwiki.daemon";
 // canonical SessionStart read-injection hook — what --fix re-registers if a profile lost it

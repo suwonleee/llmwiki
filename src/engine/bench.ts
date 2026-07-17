@@ -14,7 +14,7 @@
 // deterministic tune/sealed split (tune = look freely while iterating; sealed = final-check only — every look weakens it) + subset-tagged result files + discipline (the CLI
 // warns when the sealed subset is opened) rather than a hard lock.
 //
-// This is an ENGINE-DEV tool: never wired into wiki-update/sync loops (zero per-session
+// This is an ENGINE-DEV tool: never wired into wiki-fast/sync loops (zero per-session
 // cost). Run it when search/turn-context/prompt logic changes.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";

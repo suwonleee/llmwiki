@@ -70,12 +70,12 @@ describe("deterministic synthesis", () => {
     expect(buildSpine(root).join("\n")).toContain("0_review: 1 open");
   });
 
-  test("empty wiki → spine empty, digest points to /wiki-update", () => {
+  test("empty wiki → spine empty, digest points to /wiki-fast", () => {
     const empty = mkdtempSync(join(tmpdir(), "llmwiki-syn0-"));
     mkdirSync(join(empty, "docs", "wiki", "2_milestone"), { recursive: true });
     expect(buildSpine(empty)).toEqual([]);
-    // language-neutral: both en/ko empty messages point to /wiki-update
-    expect(buildDigest(empty)).toContain("/wiki-update");
+    // language-neutral: both en/ko empty messages point to /wiki-fast
+    expect(buildDigest(empty)).toContain("/wiki-fast");
     rmSync(empty, { recursive: true, force: true });
   });
 });

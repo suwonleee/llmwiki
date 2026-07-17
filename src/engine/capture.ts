@@ -145,7 +145,7 @@ export function mark(transcriptPath: string, byteOffset: number, status = "disti
 }
 
 // All transcripts the central queue has seen for a repo (any status). Used by
-// `register-transcript` to make a warm /wiki-update session's transcripts citable sources so
+// `register-transcript` to make a warm /wiki-fast session's transcripts citable sources so
 // decision/insight pages can cite the real session (not a repointed code file).
 export function transcriptsForRepo(repo: string): { path: string; session: string | null }[] {
   const db = connect();

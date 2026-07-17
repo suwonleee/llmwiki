@@ -216,7 +216,7 @@ export interface Candidate {
   matchedTopics: string[]; // existing topic pages whose title appears in the session text
 }
 
-// Warm /wiki-update calls this to SEE what to consolidate. Pure deterministic: lists pending
+// Warm /wiki-fast calls this to SEE what to consolidate. Pure deterministic: lists pending
 // sessions and which existing topic pages their text already mentions (substring on titles).
 // The actual concept selection/merge is the strong model's job (warm: the in-session agent).
 export function surfaceCandidates(ws: string): Candidate[] {

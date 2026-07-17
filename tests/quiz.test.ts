@@ -236,24 +236,24 @@ describe("quiz", () => {
 
   // ---- the exclusion contract (quiz layer never enters the index) ----------------------------
 
-  test("indexAll never indexes docs/wiki/7_quiz and self-heals previously indexed rows", () => {
+  test("indexAll never indexes docs/wiki/6_quiz and self-heals previously indexed rows", () => {
     recordResult(root, { page: "3_decision/dec-b.md", result: "correct", date: D0 });
-    writeFileSync(join(wiki, "7_quiz", `${D0}-quiz.md`), page({ title: "quiz", date: D0, domain: "quiz" }, "세션 기록"));
+    writeFileSync(join(wiki, "6_quiz", `${D0}-quiz.md`), page({ title: "quiz", date: D0, domain: "quiz" }, "세션 기록"));
     const idx = new WikiIndex(root);
     const conn = idx.connect();
     idx.indexAll(conn);
     const quizRows = conn
-      .query("SELECT COUNT(*) n FROM documents WHERE relative_path LIKE 'docs/wiki/7_quiz/%'")
+      .query("SELECT COUNT(*) n FROM documents WHERE relative_path LIKE 'docs/wiki/6_quiz/%'")
       .get() as { n: number };
     expect(quizRows.n).toBe(0);
     // self-heal: a row indexed before the guard existed is pruned by the next indexAll
     conn.run(
       "INSERT INTO documents (filename, relative_path, source_kind, file_type) VALUES (?, ?, ?, ?)",
-      ["legacy.md", "docs/wiki/7_quiz/legacy.md", "wiki", "md"],
+      ["legacy.md", "docs/wiki/6_quiz/legacy.md", "wiki", "md"],
     );
     idx.indexAll(conn);
     const healed = conn
-      .query("SELECT COUNT(*) n FROM documents WHERE relative_path LIKE 'docs/wiki/7_quiz/%'")
+      .query("SELECT COUNT(*) n FROM documents WHERE relative_path LIKE 'docs/wiki/6_quiz/%'")
       .get() as { n: number };
     expect(healed.n).toBe(0);
     conn.close();
@@ -289,7 +289,7 @@ describe("quiz", () => {
       writeFileSync(toml, `config_version = 1\n\n[quiz]\ndir = "3_decision"\n`);
       const cfg = loadFrom(toml);
       expect(cfg.error ?? "").toContain("quizDir collides");
-      expect(cfg.quizDir).toBe("7_quiz"); // fail-safe fallback to defaults
+      expect(cfg.quizDir).toBe("6_quiz"); // fail-safe fallback to defaults
     } finally {
       rmSync(clone, { recursive: true, force: true });
     }
@@ -297,9 +297,9 @@ describe("quiz", () => {
 
   test("reconcile's citation scan never harvests transcripts cited inside the quiz layer", () => {
     put("2_milestone/cited.md", { title: "cited", date: D0, domain: "milestone", status: "ready", source: "real.jsonl" });
-    recordResult(root, { page: "3_decision/dec-b.md", result: "correct", date: D0 }); // creates 7_quiz/
+    recordResult(root, { page: "3_decision/dec-b.md", result: "correct", date: D0 }); // creates 6_quiz/
     writeFileSync(
-      join(wiki, "7_quiz", `${D0}-quiz.md`),
+      join(wiki, "6_quiz", `${D0}-quiz.md`),
       page({ title: "quiz", date: D0, domain: "quiz", source: "sneaky.jsonl" }, "note\n\n[^1]: sneaky2.jsonl"),
     );
     const cited = citedTranscripts(root);
@@ -346,7 +346,7 @@ describe("quiz", () => {
     expect(() => recordResult(root, { page: "0_review/q.md", result: "correct", date: D0 })).toThrow();
     expect(() => recordResult(root, { page: "current-state.md", result: "correct", date: D0 })).toThrow();
     recordResult(root, { page: "3_decision/dec-b.md", result: "wrong", date: D0 }); // creates the ledger
-    expect(() => recordResult(root, { page: "7_quiz/quiz-ledger.md", result: "correct", date: D0 })).toThrow();
+    expect(() => recordResult(root, { page: "6_quiz/quiz-ledger.md", result: "correct", date: D0 })).toThrow();
   });
 
   test("parseLedger drops non-canonical page identities (traversal guard)", () => {
@@ -357,7 +357,7 @@ describe("quiz", () => {
   });
 
   test("migrate never treats the quiz dir as a stray/renamable numbered dir", () => {
-    // Regression: a config category numbered 7 (7_adr) + on-disk 7_quiz used to pair by
+    // Regression: a config category numbered 7 (7_adr) + on-disk 6_quiz used to pair by
     // leading number — migrate would RENAME the quiz layer into a content category.
     const clone = mkdtempSync(join(tmpdir(), "llmwiki-quizmig-"));
     try {
@@ -366,21 +366,21 @@ describe("quiz", () => {
         `config_version = 1\n\n[[category]]\ndir = "7_adr"\ndomain = "adr"\nreview = "model"\nguide = "adr"\n`,
       );
       _resetForTests(clone);
-      mkdirSync(join(wiki, "7_quiz"), { recursive: true });
+      mkdirSync(join(wiki, "6_quiz"), { recursive: true });
       const r = migrate(root, {});
-      expect(r.verdict).toBe("conforms"); // no rename pairs — 7_quiz is expected structure
-      expect(r.strays ?? []).not.toContain("7_quiz");
+      expect(r.verdict).toBe("conforms"); // no rename pairs — 6_quiz is expected structure
+      expect(r.strays ?? []).not.toContain("6_quiz");
     } finally {
       rmSync(clone, { recursive: true, force: true });
     }
   });
 
   test("scanCandidates ignores the quiz layer itself and the 0_review queue", () => {
-    recordResult(root, { page: "3_decision/dec-b.md", result: "correct", date: D0 }); // creates 7_quiz/
-    writeFileSync(join(wiki, "7_quiz", `${D0}-quiz.md`), page({ title: "q", date: D0, domain: "quiz" }));
+    recordResult(root, { page: "3_decision/dec-b.md", result: "correct", date: D0 }); // creates 6_quiz/
+    writeFileSync(join(wiki, "6_quiz", `${D0}-quiz.md`), page({ title: "q", date: D0, domain: "quiz" }));
     mkdirSync(join(wiki, "0_review"), { recursive: true });
     writeFileSync(join(wiki, "0_review", "question.md"), page({ title: "review Q", date: D0 }));
     const pages = scanCandidates(root).map((c) => c.page);
-    expect(pages.some((p) => p.startsWith("7_quiz/") || p.startsWith("0_review/"))).toBe(false);
+    expect(pages.some((p) => p.startsWith("6_quiz/") || p.startsWith("0_review/"))).toBe(false);
   });
 });

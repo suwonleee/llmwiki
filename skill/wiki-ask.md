@@ -37,7 +37,7 @@ $ARGUMENTS
 ## Procedure
 
 1. **Decide REPO**: with no argument beyond the question, use `$CLAUDE_PROJECT_DIR` (current repo).
-   - If `docs/wiki/` is missing → tell the user "this repo has no wiki yet; build it first with `/wiki-update`" and stop.
+   - If `docs/wiki/` is missing → tell the user "this repo has no wiki yet; build it first with `/wiki-fast`" and stop.
    - If cwd is home (`~`, = `_home`) → tell the user "run inside a project folder" and stop (questions are repo-scoped).
 
 2. **Search**: `llmwiki index <repo>` (incremental) → `llmwiki search <repo> "<keywords>" --kind wiki`.

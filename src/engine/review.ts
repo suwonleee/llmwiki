@@ -254,9 +254,12 @@ export interface ReviewOpts {
 }
 
 export async function review(ws: string, opts: ReviewOpts): Promise<Record<string, any>> {
-  const { commit = false, minPages = 2, maxPages = MAX_REVIEW_PAGES, force = false, ifDue = false, model = MODEL, date } = opts;
+  const { commit = false, minPages = 2, maxPages = MAX_REVIEW_PAGES, force = false, ifDue = false, date } = opts;
   const root = resolve(ws);
   const name = basename(root);
+  // Heavy tier for the judgment pass: explicit opts.model wins, else config-resolved
+  // (env LLMWIKI_MODEL_HEAVY > toml [models].heavy > builtin).
+  const model = opts.model ?? getConfig(root).models.heavy;
 
   // Cadence gate first — cheaper than building briefs (which reindexes). Only committed runs
   // stamp the state, so the gate keys off the last *committed* review, matching the close-out

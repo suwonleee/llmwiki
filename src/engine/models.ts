@@ -9,7 +9,21 @@
 //
 //   LLMWIKI_MODEL_HEAVY=…   LLMWIKI_MODEL_LIGHT=…
 //
-// Defaults are the current top Claude models per tier; bump them (or env-override)
-// as newer models launch.
-export const MODEL_HEAVY = process.env.LLMWIKI_MODEL_HEAVY?.trim() || "claude-opus-4-8";
-export const MODEL_LIGHT = process.env.LLMWIKI_MODEL_LIGHT?.trim() || "claude-sonnet-5";
+// Resolution order (mirrors `lang`): env > llmwiki.config.toml [models] > built-in default.
+// Env is a per-session override and always wins; the toml `[models]` block lets a team
+// pin per-tier models in-repo; the DEFAULT_* constants are the last-resort built-ins.
+// Config-less callers use MODEL_LIGHT/MODEL_HEAVY (env-or-builtin); config-aware callers
+// go through resolveModels(toml) so the toml tier can participate.
+export const DEFAULT_LIGHT = "claude-sonnet-5";
+export const DEFAULT_HEAVY = "claude-opus-4-8";
+
+export const MODEL_HEAVY = process.env.LLMWIKI_MODEL_HEAVY?.trim() || DEFAULT_HEAVY;
+export const MODEL_LIGHT = process.env.LLMWIKI_MODEL_LIGHT?.trim() || DEFAULT_LIGHT;
+
+// Config-aware tier resolution: env > toml [models] > builtin default (per tier).
+export function resolveModels(toml?: { light?: string; heavy?: string }): { light: string; heavy: string } {
+  return {
+    light: process.env.LLMWIKI_MODEL_LIGHT?.trim() || toml?.light?.trim() || DEFAULT_LIGHT,
+    heavy: process.env.LLMWIKI_MODEL_HEAVY?.trim() || toml?.heavy?.trim() || DEFAULT_HEAVY,
+  };
+}
