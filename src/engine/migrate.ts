@@ -15,7 +15,8 @@
 // explicit pairs via `--map old=new[,old=new…]` win over the heuristic.
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { getConfig, type WikiConfig } from "./config.ts";
+import { effectiveKo, getConfig, type WikiConfig } from "./config.ts";
+import { LEDGER_BASENAME, parseLedger, renderLedger, type QuizEntry } from "./quiz.ts";
 import { WikiIndex } from "./db.ts";
 import { updateReferences, autoRegisterCitedTranscripts } from "./refs.ts";
 import { Linter, type WikiIndexLike } from "./lint.ts";
@@ -34,6 +35,7 @@ export interface MigrateResult {
   strays?: string[]; // on-disk numbered dirs with no config counterpart (left untouched)
   linksRewritten?: number;
   domainsRewritten?: number;
+  quizLedgerRemapped?: number; // ledger page identities moved to renamed category dirs
   lintErrors?: number;
   reason?: string;
 }
@@ -89,7 +91,11 @@ function allPages(wiki: string, dir = wiki, out: string[] = []): string[] {
 }
 
 function planPairs(wiki: string, cfg: WikiConfig, explicit: Record<string, string>): { pairs: Pair[]; strays: string[] } {
-  const expected = new Set([...cfg.categories.map((c) => c.dir), cfg.topicDir, cfg.queueDir]);
+  // quizDir is expected structure too (never a stray): without it, a numbered quiz folder
+  // could pair-by-leading-number with a missing category and get RENAMED into content.
+  // (It stays out of schemaSnapshot deliberately — adding it would flag reverse-drift on
+  // every wiki whose .schema-version predates the quiz layer.)
+  const expected = new Set([...cfg.categories.map((c) => c.dir), cfg.topicDir, cfg.queueDir, cfg.quizDir]);
   const onDisk = numberedDirsOnDisk(wiki);
   const strayDirs = onDisk.filter((d) => !expected.has(d));
   const missing = [...expected].filter((d) => !onDisk.includes(d));
@@ -168,8 +174,32 @@ export function migrate(
     if (touched) pageEdits.push({ path: p, content });
   }
 
+  // The quiz ledger stores page identities as BARE wiki-relative paths — none of rewriteLinks'
+  // three token forms. Without a remap, every renamed category's entries turn "missing", get
+  // pruned, and restart as new: silent loss of the box/due history the quiz layer exists to
+  // accumulate (quiz.ts). Planned here, written after the dir renames.
+  const ledgerFile = join(wiki, cfg.quizDir, LEDGER_BASENAME);
+  let ledgerEntries: QuizEntry[] = [];
+  let ledgerRemapped = 0;
+  if (existsSync(ledgerFile)) {
+    try {
+      ledgerEntries = parseLedger(readFileSync(ledgerFile, "utf-8"));
+      for (const e of ledgerEntries) {
+        const owner = pairs.find((pair) => e.page.startsWith(pair.from + "/"));
+        if (owner) {
+          e.page = owner.to + e.page.slice(owner.from.length);
+          ledgerRemapped += 1;
+        }
+      }
+    } catch {
+      // fail-safe: an unparsable ledger never aborts a migrate; entries stay untouched
+      ledgerEntries = [];
+      ledgerRemapped = 0;
+    }
+  }
+
   if (!opts.commit) {
-    return { verdict: "planned", pairs, strays, linksRewritten: links, domainsRewritten: domains };
+    return { verdict: "planned", pairs, strays, linksRewritten: links, domainsRewritten: domains, quizLedgerRemapped: ledgerRemapped };
   }
 
   // apply: page rewrites first (paths still old), then dir renames, then snapshot + reindex + lint
@@ -183,6 +213,9 @@ export function migrate(
     } else {
       renameSync(from, to);
     }
+  }
+  if (ledgerRemapped) {
+    writeFileSync(ledgerFile, renderLedger(ledgerEntries, new Date().toISOString().slice(0, 10), effectiveKo(cfg)), "utf-8");
   }
   writeFileSync(join(wiki, SCHEMA_VERSION_FILE), schemaSnapshot(cfg) + "\n", "utf-8");
 
@@ -201,6 +234,7 @@ export function migrate(
     strays,
     linksRewritten: links,
     domainsRewritten: domains,
+    quizLedgerRemapped: ledgerRemapped,
     lintErrors: issues.filter((i) => i.severity === "error").length,
   };
 }

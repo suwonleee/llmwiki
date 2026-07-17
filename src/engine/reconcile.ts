@@ -11,8 +11,9 @@
 // wiki page CITES its transcript (footnote `[^n]: <name>.jsonl` or frontmatter `source:`). Cited
 // pending rows are advanced to distilled; only genuinely un-cited sessions remain pending. No LLM.
 import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, sep } from "node:path";
 import * as capture from "./capture.ts";
+import { getConfig } from "./config.ts";
 
 function walkMarkdown(dir: string, out: string[]): void {
   let entries;
@@ -35,8 +36,13 @@ function walkMarkdown(dir: string, out: string[]): void {
 export function citedTranscripts(repo: string): Set<string> {
   const files: string[] = [];
   walkMarkdown(join(repo, "docs", "wiki"), files);
+  // The quiz layer is the HUMAN's notebook, not wiki coverage: a transcript cited inside a
+  // quiz record must never mark that session as reflected — it would advance the capture
+  // watermark and silently suppress the backlog nag (quiz.ts one-directional contract).
+  const quizRoot = join(repo, "docs", "wiki", getConfig(repo).quizDir) + sep;
   const cited = new Set<string>();
   for (const f of files) {
+    if (f.startsWith(quizRoot)) continue;
     let text: string;
     try {
       text = readFileSync(f, "utf-8");

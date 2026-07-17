@@ -35,6 +35,7 @@ export interface WikiConfig {
   categories: CategoryDef[];
   topicDir: string; // per-concept living encyclopedia (consolidate target)
   queueDir: string; // human-judgment queue
+  quizDir: string; // human memory loop (quiz ledger + session records) — never indexed/searched
   files: { l0: string; overview: string; log: string };
   legacyDirs: string[]; // old flat category names still scanned for staleness/index
   bannedTerms: [string, string][]; // [banned, preferred]
@@ -72,6 +73,7 @@ export function defaults(): WikiConfig {
     ],
     topicDir: "5_topic",
     queueDir: "0_review",
+    quizDir: "7_quiz",
     files: { l0: "current-state.md", overview: "overview.md", log: "log.md" },
     legacyDirs: ["milestones", "insights", "decisions", "directions"],
     bannedTerms: [
@@ -99,9 +101,13 @@ function _validate(c: WikiConfig): string | null {
     domains.add(cat.domain);
   }
   if (!c.categories.some((cat) => cat.review === "model")) return 'at least one category needs review = "model" (the routing fallback)';
-  for (const k of ["topicDir", "queueDir"] as const) {
+  for (const k of ["topicDir", "queueDir", "quizDir"] as const) {
     if (!c[k] || /[\\/]/.test(c[k])) return `${k} invalid`;
   }
+  // quizDir's subtree is hard-excluded from indexing (db.ts) — colliding with a content dir
+  // would silently unindex that whole category (0 pages in search/lint/review/cold-start).
+  if (c.quizDir === c.topicDir || c.quizDir === c.queueDir || c.categories.some((cat) => cat.dir === c.quizDir))
+    return `quizDir collides with a content dir: ${JSON.stringify(c.quizDir)} (the quiz subtree is never indexed)`;
   return null;
 }
 
@@ -126,6 +132,7 @@ export function loadFrom(path: string): WikiConfig {
     }
     if (raw.topic?.dir !== undefined) cfg.topicDir = String(raw.topic.dir);
     if (raw.queue?.dir !== undefined) cfg.queueDir = String(raw.queue.dir);
+    if (raw.quiz?.dir !== undefined) cfg.quizDir = String(raw.quiz.dir);
     for (const k of ["l0", "overview", "log"] as const) {
       if (raw.files?.[k] !== undefined) cfg.files[k] = String(raw.files[k]);
     }

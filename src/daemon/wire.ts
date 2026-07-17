@@ -27,7 +27,7 @@ const HOME = homedir();
 const ROOT = CLONE_ROOT; // resolved from this file's location — path/name-agnostic
 const INJECT = `bash ${ROOT}/hooks/sessionstart-inject.sh`;
 const TURN_INJECT = `bash ${ROOT}/hooks/userpromptsubmit-inject.sh`;
-const SKILLS = ["wiki-update.md", "wiki-ask.md", "wiki-sync.md"];
+const SKILLS = ["wiki-update.md", "wiki-ask.md", "wiki-sync.md", "wiki-quiz.md"];
 // When the clone IS ~/llmwiki, the skills' `~/llmwiki` references resolve correctly at runtime
 // (shell ~-expansion), so we can SYMLINK the installed commands to the repo skills instead of
 // copying. That eliminates installed-vs-repo drift (an edit to skill/*.md is immediately live, no

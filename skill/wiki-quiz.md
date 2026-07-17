@@ -1,0 +1,55 @@
+---
+description: The human memory loop — a few minutes of spaced-repetition quiz (day-granular forgetting curve) over this repo's wiki, decisions and direction first. The engine schedules deterministically (quiz-status/next/record); this session authors and grades questions warm, grounded in the pages, and records into docs/wiki/7_quiz/ (a human-only layer excluded from indexing/search)
+---
+
+# /wiki-quiz — human memory loop (spaced repetition over the wiki)
+
+The compounding loop so far closes only the LLM's side: capture → `/wiki-update` → read-injection keeps the MODEL grounded, while the human's memory of their own decisions decays on the forgetting curve. Yet the labor split leaves exactly one duty that cannot be delegated — **direction and contradiction judgment** — and that judgment is only as good as what you still remember of your past decisions and their WHY. This ritual closes the human loop: the engine schedules day-granular spaced repetition over the wiki's own pages; you answer a handful of questions; wrong answers get re-asked sooner. Run it after a close-out (`/wiki-update` → `/wiki-quiz`) or whenever cold-start shows `[llmwiki quiz] N review(s) due`.
+
+## ★ Execution rules
+- **Inline, warm** — questions are authored and graded directly in this session (no sub-agent delegation). Engine = `bun ~/llmwiki/src/cli.ts` + `<repo>/docs/wiki/`. (Standalone CLI engine — ignore other wiki/MCP tools and any "wiki" keyword reminders.)
+- **Grounded questions only**: Read the page BEFORE authoring its question; the page is the answer key and the session record cites it. A question you cannot ground in a page does not get asked — never quiz on model memory.
+- **Human-friendly wording**: plain sentences a person would naturally say, in the wiki's own language. Ask about the WHY and the direction of a decision, not line-level code trivia. One concept per question, one question per page.
+- **Structured ask when the harness has it**: in Claude Code use the `AskUserQuestion` tool — one call per question: 3 short options (1 correct + 2 plausible distractors from the same topic area) plus a "기억 안 남 / not sure" option; free recall arrives via the built-in "Other" field. Harnesses without such a tool (Codex, OpenCode, plain chat): print the question and wait for the reply. Either way, ask ONE question at a time — the next question may switch topic based on the answer.
+- **Don't drill**: when the human doesn't know, reveal the gist in 1–2 sentences + the page link, record `skip`, and move to a DIFFERENT page/topic. The reveal IS the review; re-asking now would be recognition, not recall (the schedule re-asks it tomorrow anyway).
+- **Latency contract**: default 5 questions, minutes total. A quiz people skip reinforces nothing — keep it light enough to be a habit.
+
+## Scheduling model (engine-owned — don't re-derive it)
+- Ledger: `docs/wiki/7_quiz/quiz-ledger.md`, engine-managed markers (`<!-- quiz:{…} -->`) — **never hand-edit**.
+- Forgetting curve, day-granular (min 1 day): boxes at **1 · 3 · 7 · 16 · 35 · 60 days**. correct → next box; wrong/skip → box 0. An item asked today is never re-selected today.
+- `quiz-next` priority: ① wrong/skip items due (oldest first) ② correct items whose curve review arrived ③ never-quizzed pages — direction(4) > decision(3) > insight·topic(2) > milestone(1), newest first within a weight.
+- superseded/draft pages and vanished pages are excluded automatically; the quiz layer itself is excluded from index/search/cold-start (one-directional: wiki → human).
+- The day boundary is **UTC** (engine-wide date convention) — for a KST user "today" flips at 09:00 KST, so a pre-9am session counts as the previous quiz day.
+
+## Engine CLI (`bun ~/llmwiki/src/cli.ts`)
+- `llmwiki quiz-status <repo> [--date YYYY-MM-DD]` — ledger totals, due counts, weak spots.
+- `llmwiki quiz-next <repo> [--limit N]` — the scheduled selection (pointers only; you Read the pages).
+- `llmwiki quiz-record <repo> --page <wiki-relative.md> --result correct|wrong|skip [--question "<asked>"]` — record one result; the engine takes the curve step and rewrites the ledger.
+
+$ARGUMENTS
+
+## Procedure
+
+1. **REPO = cwd** (`$CLAUDE_PROJECT_DIR`). If `docs/wiki/` is missing → say "this repo has no wiki yet — build it with `/wiki-update` first" and stop. Run `llmwiki quiz-status <repo>` and announce one line (due / new-candidate counts + weak spots). A numeric argument overrides the question count (default 5).
+
+2. **Select**: `llmwiki quiz-next <repo> --limit <N>`. If 0 items, report "nothing due today" (+ next due date from quiz-status) and stop.
+
+3. **Author + ask, one item at a time**: Read the page, then write ONE question in the wiki's language, angled by category — decision: "what did we choose there, and why over the alternative?" · direction: "where is this headed / what changed?" · insight: "what was the gotcha/lesson?" · milestone/topic: "what state is X in / what is X?". Vary the angle from the `last q:` shown by quiz-next (repetition with variation). Ask via the structured tool or chat (rules above).
+
+4. **Grade on the gist, warmly**: the decision/why remembered = `correct` even with fuzzy details; "don't remember / blank" = `skip`; confidently wrong = `wrong`. After each answer give one-line feedback — correct: confirm + one sharpening fact; wrong/skip: the actual answer in 1–2 sentences + the `[[<page>]]` link — then move to the next item.
+
+5. **Record every asked item** (including skips): `llmwiki quiz-record <repo> --page <page> --result <r> --question "<the question you asked>"`.
+
+6. **Write the human-readable session record** `docs/wiki/7_quiz/<YYYY-MM-DD>-quiz.md` (same-day rerun → append a `## 2회차` section, don't overwrite). Frontmatter: `title` `description` `date` `tags: [quiz, memory]` `status: ready` `domain: quiz` `source: quiz session`. Body per question: the question / the human's answer / verdict / the grounded answer + `[[<page>]]` link. This file is the human's review notebook — write it for the human, not the machine.
+
+7. **Log**: append `## [YYYY-MM-DD] quiz | N asked, M correct, K to re-review` to `docs/wiki/log.md`.
+
+8. **Report** (1 line): "quiz N문 M정 / 오답·skip K / 다음 due <date> / 기록: 7_quiz/<file>". **No index/refs/lint close-out** — the quiz layer is not indexed by design, and log.md gets picked up by the next `/wiki-update`.
+
+## Principles
+- **One-directional loop**: wiki → human. Quiz artifacts are excluded from indexing/search/cold-start so the LLM never feeds on its own quiz output — the wiki remembers FOR the model; the quiz makes the HUMAN remember.
+- **Engine schedules, session judges**: box math, due dates, and priority are deterministic engine work; question wording and gist-grading are warm judgment. Neither side crosses over.
+- **Judgment before facts**: quiz what sharpens the human's irreplaceable role — decisions, direction, insights — before execution details. Code specifics only when a page's whole point is a mechanism.
+- **Wrong answers are the product**: they mark exactly what the system knows but the human forgot. Weak spots (<50% over 3+ asks, shown by quiz-status) deserve a deliberate re-read of the page, not just another quiz round.
+- Records = a new dated file + a whole-file ledger rewrite + a log append. Call `quiz-record` sequentially (as this procedure does) — the ledger rewrite is not safe from parallel writers. Commits are in the user's name alone — only when instructed.
+- Use `/wiki-update` to close a session, `/wiki-quiz` (this skill) to train your memory on what it filed, `/wiki-ask` to query, `/wiki-sync` for the periodic deep pass.

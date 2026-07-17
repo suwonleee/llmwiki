@@ -29,7 +29,11 @@
 | **업데이트(update)** | 큐 → 그 레포 `docs/wiki/` **로그층**(증분 append) | 1커맨드 | `/wiki-update`(이 세션, fast)·`/wiki-sync`(백로그, deep) + `src/engine/update.ts` |
 | **통합(consolidate)** | 로그 → 개념별 **주제 백과** `5_topic/`(in-place 병합·raw 재-grounding) | 1커맨드 | `/wiki-update`(이 세션)·`/wiki-sync`(갭·비대 토픽 재작성) + `src/engine/consolidate.ts` |
 | **읽기** | cold-start 주입 + 턴별 관련 페이지 포인터 | ✔ | `hooks/sessionstart-inject.sh` · `hooks/userpromptsubmit-inject.sh` (Claude Code; Codex/OpenCode 는 `adapters/`) |
+| **퀴즈(사람 기억)** | 위키의 판단층 → **사람을 위한** 망각곡선(일 단위) 간격반복 퀴즈 (`7_quiz/` 기록 — 인덱스·검색 제외; cold-start 에 due 카운트 1줄) | 1커맨드 | `/wiki-quiz` + `src/engine/quiz.ts` (`quiz-status`·`quiz-next`·`quiz-record`) |
 | **자가치유** | 구조(orphan·stale·dangling)=결정적 `lint` / 의미(모순·낡은주장·개념누락)=생성적 `review`(sync 자동 — 주기 게이트 `--if-due` 기본 7일·범위한정+캐시) → 갭은 `gaps` 자가종료 큐(`0_review/gap-queue.md`) | 1커맨드 → 자동 | `lint`·`review`·`gaps` (`src/engine/{lint,review,gaps}.ts`) |
+
+### 사람 기억 루프 (`/wiki-quiz`)
+다른 고리는 전부 **모델**을 grounded 하게 만들고, 이 고리만 **사람**을 벼린다. 노동 분담이 사람에게 남긴 위임 불가능한 단 하나의 일 — 방향성·모순 판단 — 은 자기 과거 결정에 대한 기억과 함께 무뎌진다. `/wiki-quiz` 는 위키의 판단층(방향성 > 결정 > 인사이트·주제 > 마일스톤, 같은 급이면 최신 우선)에 대해 몇 분짜리 능동 회상을 돌린다: 스케줄은 엔진이 일 단위 망각곡선으로 결정적으로 잡고(박스 1·3·7·16·35·60일, 오답·모름 → 1일로 리셋, 하루에 같은 항목 재출제 없음), 출제와 요지 채점은 세션이 페이지에 근거해 웜으로 한다. 틀린 것은 다음 날 가장 먼저 돌아온다. 기록은 `docs/wiki/7_quiz/`(장부 + 날짜별 세션 노트) — **인덱스·검색·cold-start 에서 제외되는 사람 전용 레이어**라 LLM 이 자기 퀴즈 산출물을 되먹지 않는다: 위키 → 사람, 엄격한 단방향.
 
 ### 자가치유 흐름 (사람은 채우기만)
 마감(`/wiki-update`)·deep 패스(`/wiki-sync`) 때: ① 결정적 `lint`(구조) → ② 생성적 `review`(의미 — 마감에서 `--if-due`로 자동 실행하되 **엔진이 주기를 강제**(기본 7일, `LLMWIKI_REVIEW_INTERVAL_DAYS`), 입력은 최근+태그 이웃 한정·무변경 스킵; deep은 강제 실행) → ③ `review`가 찾은 *개념 누락·다음 질문* 을 `gaps` 가 **추적 큐**로 쌓음. 갭은 **해당 주제로 한 번 작업하거나 `/wiki-sync`(deep)** 가 채우고, `review`가 2회 연속 안 띄우면 큐에서 **자동 close**. 즉 위키가 *무엇이 빠졌는지* 를 스스로 알려주고, 채우는 판단만 사람이 한다. 갭을 **자동 생성**하지 않는 건 의도 — 빈약한 근거로 페이지를 지어내지 않기 위함.
@@ -39,13 +43,14 @@
 ```
 setup.sh       원클릭 온보딩 (경로 무관: doctor→데몬→훅·커맨드→인덱스)
 src/           TypeScript 엔진 (Bun 런타임, bun:sqlite 내장 — node_modules·빌드 0)
-  cli.ts       CLI 디스패처: init·index·reindex·refs·lint·search·update-*·skeleton·autoupdate·consolidate·topics·ingest·register-transcript·review·gaps·distill-verify·git-rules·overview·reconcile·doctor·context·digest·context-audit·config·conventions·migrate·bench·compare-arm·compare-verdict
+  cli.ts       CLI 디스패처: init·index·reindex·refs·lint·search·update-*·skeleton·autoupdate·consolidate·topics·ingest·register-transcript·review·gaps·distill-verify·git-rules·overview·reconcile·doctor·context·digest·context-audit·config·conventions·migrate·quiz-*·bench·compare-arm·compare-verdict
   engine/
     schema.sql   per-repo 인덱스 스키마 (documents·chunks·FTS5·references)
     db.ts        WikiIndex: 인덱싱(content_hash 증분)·검색·그래프·staleness
     chunker.ts   FTS 청킹 (~512토큰)         refs.ts    인용·링크 → 그래프 엣지
     lint.ts      구조 위생검사 (결정적)      review.ts  의미 lint (생성적·sync 자동·범위한정+무변경 스킵 캐시)
     gaps.ts      review 갭(개념누락·다음질문) → 자가종료 큐 0_review/gap-queue.md (LLM 0; 2회 부재 시 close)
+    quiz.ts      사람 기억 루프 — 망각곡선(일 단위) 스케줄링 + 우선순위 선별 + 7_quiz/quiz-ledger.md (LLM 0; 출제·채점은 /wiki-quiz 가 웜으로)
     overview.ts  overview 엔트리포인트 정규화 (Recent Updates→log 포인터·예산경고, LLM 0·멱등)
     synthesis.ts 결정적 관계형 종합 + 주제 뷰(태그 클러스터·통합 갭, `topics`) — LLM 0·재생성 (`digest`/`topics`+cold-start spine)
     extract.ts   transcript 증분 추출 (watermark)   update.ts  로그층 오케스트레이션
@@ -64,9 +69,9 @@ src/           TypeScript 엔진 (Bun 런타임, bun:sqlite 내장 — node_modu
 daemon/        install.sh (launchd/systemd/cron 자동감지) + autoupdate-*.sh (무인 사실 패스)
 hooks/         sessionstart-inject.sh (cold-start 주입) · userpromptsubmit-inject.sh (턴별 포인터 주입)
 adapters/      codex/ (네이티브 훅 hooks.json 템플릿) · opencode/ (플러그인 1파일)
-skill/         wiki-update(fast 세션 마감)·wiki-sync(deep 주기 패스)·wiki-ask (/커맨드)
+skill/         wiki-update(fast 세션 마감)·wiki-sync(deep 주기 패스)·wiki-ask·wiki-quiz(사람 기억) (/커맨드)
 examples/      sample-wiki/ — 완성된 위키 예시(읽기 전용). 엔진이 인덱싱 안 함(IGNORE_DIRS). **복사하지 말 것** — 실제 위키는 각 프로젝트 docs/wiki에 자동 생성. examples/README.md 참조
-tests/         bun:test 스위트 (chunker·refs·lint·extract·capture·db·source·review-scope·overview·gaps·마이그레이션) — `bun test`
+tests/         bun:test 스위트 (chunker·refs·lint·extract·capture·db·source·review-scope·overview·gaps·quiz·마이그레이션) — `bun test`
 package.json·tsconfig.json   Bun 메타(typecheck용; 런타임은 .ts 직접 실행)
 ```
 
@@ -108,6 +113,7 @@ cd llmwiki
 # 3) 세션 마감/정리 (그 레포에서)
 /wiki-update                             # fast 마감(세션 끝마다): 이 세션만 반영 + 5_topic 통합 + L0 신선도 + lint — 분 단위, O(세션) (웜·사람동석)
 /wiki-sync                               # deep 주기 패스(하루 마무리/주 1회쯤): 백로그 소진 + 의미 review + 갭 큐 + 비대 토픽 재작성. 미루기=무손실(transcript 불변·워터마크/큐 영속)
+/wiki-quiz                               # 사람 기억 루프(마감 후 / cold-start 가 복습 due 알릴 때): 내 결정·방향성에 대한 간격반복 ~5문항 — 틀린 건 다음 날 다시
 ```
 
 > 개별 단계로 돌리려면: `bun <clone>/src/cli.ts doctor` · `bash <clone>/daemon/install.sh` ·

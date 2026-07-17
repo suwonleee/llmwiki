@@ -15,6 +15,7 @@ import { sourceForKind } from "./source.ts";
 import { buildSpine, topicGaps } from "./synthesis.ts";
 import { auditNudge } from "./context-audit.ts";
 import { parseQueue } from "./gaps.ts";
+import { dueCount } from "./quiz.ts";
 import { effectiveKo, getConfig, renderRuleCategories, renderRuleHumanQueue, scanDirs, type WikiConfig } from "./config.ts";
 import { detectConfigDrift } from "./migrate.ts";
 
@@ -60,6 +61,7 @@ const makeT = (lang: "ko" | "en", cfg: WikiConfig) =>
     indexHead: "----- [llmwiki index] recent pages in this repo's wiki (Read as needed) -----",
     spineHead: "----- [llmwiki synthesis] conceptual spine — most-referenced pages (the wiki's hubs; full view: llmwiki digest) -----",
     pending: (n: number) => `[llmwiki] ${n} un-updated session(s) in this repo → drain the backlog with the deep pass:  /wiki-sync`,
+    quizDue: (n: number) => `[llmwiki quiz] ${n} review(s) due (day-granular forgetting curve) → reinforce YOUR memory with  /wiki-quiz`,
     l0Over: (n: number) =>
       `----- [llmwiki] L0 is ${n} chars — over the ~${L0_BUDGET}-char standard; injected whole (nothing cut). Trim back at /wiki-update -----`,
     gapBacklog: (n: number) =>
@@ -84,6 +86,7 @@ const makeT = (lang: "ko" | "en", cfg: WikiConfig) =>
     indexHead: "----- [llmwiki 인덱스] 이 레포 위키 최근 페이지 (필요 시 Read) -----",
     spineHead: "----- [llmwiki 종합] 개념 spine — 가장 많이 참조된 페이지(위키 허브; 전체: llmwiki digest) -----",
     pending: (n: number) => `[llmwiki] 이 레포 미update 세션 ${n}건 → deep 패스로 백로그 소진 권장:  /wiki-sync`,
+    quizDue: (n: number) => `[llmwiki quiz] 복습 due ${n}건 (망각곡선·일 단위) → /wiki-quiz 로 '사람 기억' 강화`,
     l0Over: (n: number) =>
       `----- [llmwiki] L0 가 ${n}자 — 기준(~${L0_BUDGET}자) 초과; 전량 주입(자르지 않음). /wiki-update 에서 기준 이하로 트리밍 권장 -----`,
     gapBacklog: (n: number) =>
@@ -356,6 +359,14 @@ export function buildContext(repo: string): string {
     } catch {
       /* fail-safe: recap must never break cold-start; the count line above still stands */
     }
+  }
+
+  // (C2) human memory loop — one bounded line when spaced-repetition reviews are due.
+  // Ledger-only read (no page walk): cold-start must stay cheap; /wiki-quiz does the real scan.
+  // Quiz CONTENT never enters this blob (the quiz layer is unindexed by design) — only the count.
+  {
+    const due = dueCount(proj);
+    if (due > 0) L.push(T.quizDue(due));
   }
 
   // (D) one-line nudge if agent-config files (CLAUDE.md/AGENTS.md/MEMORY.md) carry discoverable bloat.

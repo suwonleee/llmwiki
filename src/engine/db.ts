@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node
 import { homedir } from "node:os";
 import { join, relative as relpath, resolve } from "node:path";
 import { storeChunks, chunkText } from "./chunker.ts";
+import { getConfig } from "./config.ts";
 
 const SCHEMA_PATH = join(import.meta.dir, "schema.sql");
 const SCHEMA = readFileSync(SCHEMA_PATH, "utf-8");
@@ -215,10 +216,17 @@ export class WikiIndex {
     let sourceCount = 0;
     let sourceCapped = false;
 
+    // The quiz layer (docs/wiki/<quizDir>/) is the HUMAN's memory loop, not LLM knowledge:
+    // never index it, so search/lint/review/synthesis/cold-start can't re-ingest it (the
+    // one-directional wiki→human contract — see quiz.ts). The prune loop below also
+    // self-heals rows indexed before this guard existed.
+    const quizPrefix = WIKI_DIR + "/" + getConfig(this.root).quizDir + "/";
+
     for (const full of walkFiles(walkRoot)) {
       // posix-normalize the stored relative_path so downstream `docs/wiki/` matching
       // (sourceKind, lint, cold-start) holds on Windows, where relpath yields backslashes.
       const relative = relpath(this.root, full).replace(/\\/g, "/");
+      if (relative.startsWith(quizPrefix)) continue;
       if (!relative.startsWith(WIKI_DIR + "/")) {
         if (sourceCount >= WikiIndex.SOURCE_FILE_CAP) {
           sourceCapped = true;

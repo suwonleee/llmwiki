@@ -74,6 +74,9 @@ export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(w
   // The topic encyclopedia (5_topic): per-concept living pages built by consolidate.ts.
   // A different axis from the numbered log categories — created here so a fresh wiki is ready.
   mkdirSync(join(wiki, cfg.topicDir), { recursive: true });
+  // The quiz layer (7_quiz): the HUMAN-side memory loop (ledger + session records, written by
+  // /wiki-quiz + quiz-record). Deliberately excluded from index/search/cold-start — see quiz.ts.
+  mkdirSync(join(wiki, cfg.quizDir), { recursive: true });
   const name = basename(root);
   const today = new Date().toISOString().slice(0, 10);
   const overview = join(wiki, cfg.files.overview);

@@ -22,6 +22,7 @@ import { ingest } from "./engine/ingest.ts";
 import * as capture from "./engine/capture.ts";
 import * as consolidate from "./engine/consolidate.ts";
 import { reconcileReflected } from "./engine/reconcile.ts";
+import * as quiz from "./engine/quiz.ts";
 import { runBench, writeResults } from "./engine/bench.ts";
 import { verifyDistillFiles } from "./engine/distill.ts";
 import { runArm, loadArm, judgeArms } from "./engine/compare.ts";
@@ -51,6 +52,7 @@ function parseArgs(argv: string[]): Parsed {
     "--path", "--scope", "--limit", "--kind", "--session",
     "--write-model", "--verify-model", "--source", "--dest", "--model", "--date", "--min-pages",
     "--repo", "--max-pages", "--prompt", "--corpus", "--label",
+    "--page", "--result", "--question",
   ]);
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i]!;
@@ -669,7 +671,7 @@ function cmdConfig(p: Parsed) {
   for (const cat of c.categories) {
     console.log(`  ${cat.dir}  domain=${cat.domain}  review=${cat.review}${cat.aliases?.length ? `  aliases=${cat.aliases.join(",")}` : ""}  — ${cat.guide}`);
   }
-  console.log(`topic: ${c.topicDir}   queue: ${c.queueDir}`);
+  console.log(`topic: ${c.topicDir}   queue: ${c.queueDir}   quiz: ${c.quizDir}`);
   console.log(`files: l0=${c.files.l0}  overview=${c.files.overview}  log=${c.files.log}`);
   console.log(`legacy scan dirs: ${c.legacyDirs.join(", ") || "(none)"}`);
   console.log(`banned terms: ${c.bannedTerms.map(([a, b]) => `${a}→${b}`).join(" · ")}`);
@@ -691,6 +693,7 @@ function cmdConventions(p: Parsed) {
   }
   console.log(`- ${c.topicDir} | topic encyclopedia (per-concept, create-or-update, consolidation only)`);
   console.log(`- ${c.queueDir} | human-judgment queue (Q./A. items; empty when idle)`);
+  console.log(`- ${c.quizDir} | quiz layer — the HUMAN's memory loop (never indexed/searched; engine quiz-status/next/record + /wiki-quiz)`);
   console.log(`special files: L0=${c.files.l0} (human-owned) · ${c.files.overview} (entry point) · ${c.files.log} (append-only ledger)`);
   console.log("frontmatter (required): title · description · date · tags(≥2) · status(ready|draft) · domain · source; queue items also stamp owner(github login); optional: author, updated");
   if (c.bannedTerms.length) console.log(`banned terms: ${c.bannedTerms.map(([a, b]) => `${a}→${b}`).join(" · ")}`);
@@ -717,8 +720,96 @@ function cmdMigrate(p: Parsed) {
   for (const pair of r.pairs ?? []) console.log(`  ${pair.from} → ${pair.to}${pair.domain ? `  (domain → ${pair.domain})` : ""}`);
   if (r.strays?.length) console.log(`  ⚠ unmapped: ${r.strays.join(", ")} (use --map old=new)`);
   console.log(`  links rewritten: ${r.linksRewritten}   frontmatter domains: ${r.domainsRewritten}`);
+  if (r.quizLedgerRemapped) console.log(`  quiz ledger identities remapped: ${r.quizLedgerRemapped}`);
   if (r.verdict === "migrated") console.log(`  reindexed · lint errors: ${r.lintErrors}`);
   else console.log(`  (dry-run — apply with --commit)`);
+}
+
+// ---- quiz (the human memory loop; scheduling = engine, authoring/grading = /wiki-quiz) ----
+
+const QUIZ_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function quizDate(p: Parsed): string | undefined {
+  const d = p.flags["--date"];
+  if (typeof d !== "string" || !d) return undefined;
+  if (!QUIZ_DATE_RE.test(d)) die("--date must be YYYY-MM-DD");
+  return d;
+}
+
+// Deterministic status for the /wiki-quiz announce step (and a quick human glance).
+function cmdQuizStatus(p: Parsed) {
+  const ws = p.positionals[0] ?? die("quiz-status <workspace> [--date YYYY-MM-DD]");
+  const s = quiz.quizStatus(ws, { date: quizDate(p) });
+  const due = s.dueWrong + s.dueReview;
+  console.log(
+    ko
+      ? `quiz: 장부 ${s.total}항목 | 오늘 due ${due}건 (오답복습 ${s.dueWrong} · 주기복습 ${s.dueReview}) | 신규 후보 ${s.newCandidates} | 오늘 출제됨 ${s.askedToday}`
+      : `quiz: ledger ${s.total} item(s) | due today ${due} (wrong-review ${s.dueWrong} · curve-review ${s.dueReview}) | new candidates ${s.newCandidates} | asked today ${s.askedToday}`,
+  );
+  if (s.nextDue && due === 0) console.log(ko ? `  다음 due: ${s.nextDue}` : `  next due: ${s.nextDue}`);
+  for (const w of s.weak)
+    console.log((ko ? "  약점(페이지 재독 권장): " : "  weak spot (re-read the page): ") + `${w.page} — ${w.correct}/${w.asked}`);
+  if (s.missing.length)
+    console.log(
+      (ko ? "  ⚠ 사라진 페이지(다음 quiz-record 때 자동 정리): " : "  ⚠ vanished page(s) (auto-pruned on next quiz-record): ") +
+        s.missing.join(", "),
+    );
+}
+
+// The scheduled selection — pointers only; the warm session Reads each page and authors the
+// question (grounding rule: the page is the answer key).
+function cmdQuizNext(p: Parsed) {
+  const ws = p.positionals[0] ?? die("quiz-next <workspace> [--limit N] [--date YYYY-MM-DD]");
+  const limit = Math.max(1, parseInt(String(p.flags["--limit"] ?? "5"), 10) || 5);
+  const sel = quiz.selectNext(ws, { limit, date: quizDate(p) });
+  console.log(
+    ko
+      ? `quiz-next: ${sel.picks.length}문항 선택 (전체 due — 오답복습 ${sel.dueWrong} · 주기복습 ${sel.dueReview} / 신규 후보 ${sel.newCandidates})`
+      : `quiz-next: ${sel.picks.length} item(s) selected (all due — wrong-review ${sel.dueWrong} · curve-review ${sel.dueReview} / new candidates ${sel.newCandidates})`,
+  );
+  if (!sel.picks.length) {
+    console.log(
+      ko
+        ? "  오늘 낼 문항 없음 — 작업을 /wiki-update 로 쌓으면 신규 후보가 생긴다."
+        : "  nothing to ask today — file work with /wiki-update to grow new candidates.",
+    );
+    return;
+  }
+  sel.picks.forEach((pick, i) => {
+    if (pick.kind === "new") {
+      const c = pick.candidate!;
+      console.log(`${i + 1}. [new] docs/wiki/${c.page} — ${c.domain || c.dir}${c.date ? ` · ${c.date}` : ""} · "${c.title}"`);
+    } else {
+      const e = pick.entry!;
+      const lastQ = e.lastQ ? ` · last q: "${e.lastQ.slice(0, 80)}"` : "";
+      console.log(`${i + 1}. [${pick.kind}] docs/wiki/${e.page} — box ${e.box} · due ${e.due} · ${e.correct}/${e.asked}${lastQ}`);
+    }
+  });
+  if (sel.missing.length)
+    console.log((ko ? "  ⚠ 사라진 페이지 제외됨: " : "  ⚠ vanished page(s) excluded: ") + sel.missing.join(", "));
+}
+
+// Record ONE result; the engine takes the forgetting-curve step (correct → next box,
+// wrong/skip → box 0) and rewrites the ledger. One call per asked item (update-done style).
+function cmdQuizRecord(p: Parsed) {
+  const ws =
+    p.positionals[0] ??
+    die('quiz-record <workspace> --page <wiki-relative.md> --result correct|wrong|skip [--question "<asked>"] [--date YYYY-MM-DD]');
+  const page = String(p.flags["--page"] ?? "");
+  if (!page) die("--page <wiki-relative .md path> required");
+  const result = String(p.flags["--result"] ?? "");
+  if (result !== "correct" && result !== "wrong" && result !== "skip") die("--result must be correct|wrong|skip");
+  const question = typeof p.flags["--question"] === "string" ? p.flags["--question"] : undefined;
+  try {
+    const r = quiz.recordResult(ws, { page, result, question, date: quizDate(p) });
+    const e = r.entry;
+    console.log(
+      `✓ ${e.page}: ${result} → box ${e.box} · ${ko ? "다음 due" : "next due"} ${e.due} · ${e.correct}/${e.asked}` +
+        (r.isNew ? (ko ? " · 신규 항목" : " · new item") : ""),
+    );
+    if (r.pruned.length) console.log((ko ? "  사라진 페이지 정리됨: " : "  pruned vanished: ") + r.pruned.join(", "));
+  } catch (e) {
+    die(e instanceof Error ? e.message : String(e));
+  }
 }
 
 const HANDLERS: Record<string, (p: Parsed) => void | Promise<void>> = {
@@ -755,6 +846,9 @@ const HANDLERS: Record<string, (p: Parsed) => void | Promise<void>> = {
   digest: cmdDigest,
   "context-audit": cmdContextAudit,
   reconcile: cmdReconcile,
+  "quiz-status": cmdQuizStatus,
+  "quiz-next": cmdQuizNext,
+  "quiz-record": cmdQuizRecord,
 };
 
 const parsed = parseArgs(process.argv.slice(2));

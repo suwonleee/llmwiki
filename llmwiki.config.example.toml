@@ -56,6 +56,9 @@ config_version = 1
 # [queue]
 # dir = "0_review"       # human-judgment queue
 
+# [quiz]
+# dir = "7_quiz"         # human memory loop (quiz ledger + session records) — never indexed/searched
+
 # [files]
 # l0 = "current-state.md"
 # overview = "overview.md"

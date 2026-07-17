@@ -29,7 +29,11 @@ The core idea — a project wiki that the LLM maintains and the human only steer
 | **Condense (update)** | Queue → that repo's `docs/wiki/` **log layer** (incremental append) | 1 command | `/wiki-update` (this session, fast) · `/wiki-sync` (backlog, deep) + `src/engine/update.ts` |
 | **Consolidate** | Log → per-concept **topic encyclopedia** `5_topic/` (in-place merge·raw re-grounding) | 1 command | `/wiki-update` (this session) · `/wiki-sync` (gaps·re-condense) + `src/engine/consolidate.ts` |
 | **Read** | Cold-start injection + per-turn related-page pointers | ✔ | `hooks/sessionstart-inject.sh` · `hooks/userpromptsubmit-inject.sh` (Claude Code; Codex/OpenCode → `adapters/`) |
+| **Quiz (human memory)** | Wiki's judgment layer → day-granular spaced-repetition quiz **for the human** (`7_quiz/` records — never indexed/searched; cold-start shows a due-count line) | 1 command | `/wiki-quiz` + `src/engine/quiz.ts` (`quiz-status`·`quiz-next`·`quiz-record`) |
 | **Self-healing** | Structural (orphan·stale·dangling) = deterministic `lint` / semantic (contradiction·stale claim·missing concept) = generative `review` (auto on sync — engine-gated cadence `--if-due`, default 7d·scoped+cached) → gaps land in `gaps`'s self-closing queue (`0_review/gap-queue.md`) | 1 command → auto | `lint`·`review`·`gaps` (`src/engine/{lint,review,gaps}.ts`) |
+
+### The human memory loop (`/wiki-quiz`)
+Every other stage keeps the **model** grounded; this one keeps the **human** sharp. The labor split leaves exactly one non-delegable duty — direction + contradiction judgment — and that judgment decays with the human's memory of their own past decisions. `/wiki-quiz` runs a few minutes of active recall over the wiki's judgment layer (direction > decision > insight·topic > milestone, newest first): the engine schedules deterministically on a day-granular forgetting curve (boxes 1·3·7·16·35·60 days; wrong/skip → back to 1 day; an item is never asked twice in one day), the session authors and gist-grades the questions warm, grounded in the pages. Wrong answers come back first the next day. Records live in `docs/wiki/7_quiz/` (ledger + per-day session notes) — a **human-only layer excluded from indexing/search/cold-start**, so the LLM never feeds on its own quiz output: strictly one-directional, wiki → human.
 
 ### Self-healing flow (the human only fills in)
 At close-out (`/wiki-update`) and on the deep pass (`/wiki-sync`): ① deterministic `lint` (structure) → ② generative `review` (semantics — auto-run via `--if-due`, but the **engine enforces the cadence** (default 7 days, `LLMWIKI_REVIEW_INTERVAL_DAYS`); input is scoped to recent+tag-neighbor pages and skipped if nothing changed; the deep pass runs it unconditionally) → ③ the *missing concepts·follow-up questions* `review` surfaces get stacked by `gaps` into a **tracking queue**. A gap gets filled once someone **works that topic once, or the `/wiki-sync` deep pass fills it**, and **auto-closes** from the queue if `review` fails to surface it twice in a row. In other words, the wiki tells you *what's missing* on its own — the human only supplies the judgment to fill it in. Gaps are deliberately **not auto-generated** — so pages don't get invented from thin evidence.
@@ -39,13 +43,14 @@ At close-out (`/wiki-update`) and on the deep pass (`/wiki-sync`): ① determini
 ```
 setup.sh       one-click onboarding (path-agnostic: doctor→daemon→hooks·commands→index)
 src/           TypeScript engine (Bun runtime, bun:sqlite built in — zero node_modules·build)
-  cli.ts       CLI dispatcher: init·index·reindex·refs·lint·search·update-*·skeleton·autoupdate·consolidate·topics·ingest·register-transcript·review·gaps·distill-verify·git-rules·overview·reconcile·doctor·context·digest·context-audit·config·conventions·migrate·bench·compare-arm·compare-verdict
+  cli.ts       CLI dispatcher: init·index·reindex·refs·lint·search·update-*·skeleton·autoupdate·consolidate·topics·ingest·register-transcript·review·gaps·distill-verify·git-rules·overview·reconcile·doctor·context·digest·context-audit·config·conventions·migrate·quiz-*·bench·compare-arm·compare-verdict
   engine/
     schema.sql   per-repo index schema (documents·chunks·FTS5·references)
     db.ts        WikiIndex: indexing(content_hash incremental)·search·graph·staleness
     chunker.ts   FTS chunking (~512 tokens)         refs.ts    citations·links → graph edges
     lint.ts      structural hygiene check (deterministic)      review.ts  semantic lint (generative·auto on sync·scoped+unchanged-skip cache)
     gaps.ts      review gaps (missing concepts·follow-up questions) → self-closing queue 0_review/gap-queue.md (LLM-free; closes after 2 absences)
+    quiz.ts      human memory loop — forgetting-curve scheduling + priority selection + 7_quiz/quiz-ledger.md (LLM-free; /wiki-quiz authors·grades warm)
     overview.ts  overview entry-point normalization (Recent Updates→log pointer·budget warning, LLM-free·idempotent)
     synthesis.ts deterministic relational synthesis + topic view (tag clusters·consolidation gaps, `topics`) — LLM-free·regenerable (`digest`/`topics`+cold-start spine)
     extract.ts   transcript incremental extraction (watermark)   update.ts  log-layer orchestration
@@ -64,9 +69,9 @@ src/           TypeScript engine (Bun runtime, bun:sqlite built in — zero node
 daemon/        install.sh (launchd/systemd/cron auto-detect) + autoupdate-*.sh (unattended fact pass)
 hooks/         sessionstart-inject.sh (cold-start) · userpromptsubmit-inject.sh (per-turn pointers)
 adapters/      codex/ (native-hook hooks.json template) · opencode/ (single-file plugin)
-skill/         wiki-update(fast session close-out)·wiki-sync(periodic deep pass)·wiki-ask (/commands)
+skill/         wiki-update(fast session close-out)·wiki-sync(periodic deep pass)·wiki-ask·wiki-quiz(human memory) (/commands)
 examples/      sample-wiki/ — a finished wiki example (read-only illustration). Not indexed by the engine (IGNORE_DIRS). **Do not copy** — real wikis are auto-generated under each project's docs/wiki. See examples/README.md
-tests/         bun:test suite (chunker·refs·lint·extract·capture·db·source·review-scope·overview·gaps·migrations) — `bun test`
+tests/         bun:test suite (chunker·refs·lint·extract·capture·db·source·review-scope·overview·gaps·quiz·migrations) — `bun test`
 package.json·tsconfig.json   Bun metadata (for typecheck; the runtime executes .ts directly)
 ```
 
@@ -108,6 +113,7 @@ cd llmwiki
 # 3) close out/tidy up the session (in that repo)
 /wiki-update                             # FAST close-out (every session): this session only + 5_topic + L0 + lint — minutes, O(session) (warm, human-present)
 /wiki-sync                               # periodic DEEP pass (day end/~weekly): drain the backlog + semantic review + gap queue + re-condense oversized topic pages. Deferral is lossless (immutable transcripts·durable watermarks/queues)
+/wiki-quiz                               # HUMAN memory loop (after a close-out / when cold-start says reviews are due): ~5 spaced-repetition questions on your own decisions·direction — wrong answers return the next day
 ```
 
 > To run individual steps: `bun <clone>/src/cli.ts doctor` · `bash <clone>/daemon/install.sh` ·
