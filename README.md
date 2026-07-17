@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.png">
-    <img src="assets/banner.png" alt="suwon_wiki" width="100%">
+    <img src="assets/banner.png" alt="quiz_wiki" width="100%">
   </picture>
 </p>
 
@@ -13,11 +13,11 @@
 > project-specific LLM knowledge **compounds**.
 > An LLM-maintained project wiki for agentic environments —
 > it sources from work transcripts and splits labor into **fact = unattended / judgment = human-present**.
+> And the loop closes on the human too — a daily forgetting-curve quiz (`/wiki-quiz`) keeps your memory of your own decisions as sharp as the model's context.
 > The structure is **two layers** — a per-session *logbook* (time axis: `2_milestone`·`3_decision`·`4_insight`) + a per-concept *topic encyclopedia* (`5_topic`, topic axis·in-place consolidation). Both are re-derived only from raw transcripts (no wiki→wiki).
 
 The engine is a **local library** — SQLite index·deterministic lint·citation/cross-reference graph·content-hash
-increments — with **an automatic capture daemon + transcript compounding + labor split (fact = AI / judgment = human)**
-on top. **No MCP registration required.**
+increments — with **an automatic capture daemon + transcript compounding + labor split (fact = AI / judgment = human) + a human-side memory quiz (`/wiki-quiz`)** on top. **No MCP registration required.**
 
 The core idea — a project wiki that the LLM maintains and the human only steers — comes from [Andrej Karpathy's LLM-wiki note](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). That note is the only outside reference: the design and code here are original.
 

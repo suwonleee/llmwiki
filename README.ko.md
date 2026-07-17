@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.png">
-    <img src="assets/banner.png" alt="suwon_wiki" width="100%">
+    <img src="assets/banner.png" alt="quiz_wiki" width="100%">
   </picture>
 </p>
 
@@ -13,10 +13,11 @@
 > 그 프로젝트에 특화된 LLM 지식이 **복리로 누적**되게 한다.
 > 에이전트 환경을 위한 LLM 유지 프로젝트 위키 —
 > 소스를 작업 transcript로 삼고, 노동을 **사실=무인 / 판단=사람 동석**으로 분리한다.
+> 그리고 루프는 사람 쪽에서도 닫힌다 — 일 단위 망각곡선 퀴즈(`/wiki-quiz`)가 모델의 컨텍스트만큼 내 결정에 대한 내 기억도 벼려 둔다.
 > 구조는 **2계층** — 세션별 *로그북*(시간축: `2_milestone`·`3_decision`·`4_insight`) + 개념별 *주제 백과*(`5_topic`, 주제축·in-place 통합). 둘 다 raw transcript에서만 재유도(위키→위키 금지).
 
 엔진은 **로컬 라이브러리** — SQLite 인덱스·결정적 lint·인용/교차참조 그래프·content-hash 증분 —
-이고, 그 위에 **자동 캡처 데몬 + transcript 복리 + 노동분담(사실=AI/판단=사람)** 을 얹었다.
+이고, 그 위에 **자동 캡처 데몬 + transcript 복리 + 노동분담(사실=AI/판단=사람) + 사람 기억 퀴즈(`/wiki-quiz`)** 를 얹었다.
 **MCP 등록 불필요.**
 
 핵심 아이디어 — LLM이 유지하고 사람은 방향만 잡는 프로젝트 위키 — 는 [Andrej Karpathy의 LLM-wiki 노트](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)에서 왔다. 참고한 외부 자료는 그 노트 하나뿐이며, 설계와 코드는 자체 구현이다.
