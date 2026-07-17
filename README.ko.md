@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.png">
-    <img src="assets/banner.png" alt="quiz_wiki" width="100%">
+    <img src="assets/banner.png" alt="Quiz_wiki" width="100%">
   </picture>
 </p>
 
@@ -10,17 +10,17 @@
 [English](README.md) · **한국어**
 
 > 어떤 프로젝트든, 어떤 터미널(기본/tmux/iTerm2)·코딩 에이전트(Claude Code·Codex·OpenCode)를 쓰든,
-> 그 프로젝트에 특화된 LLM 지식이 **복리로 누적**되게 한다.
+> 그 프로젝트에 특화된 LLM 지식이 **복리로 누적**되게 합니다.
 > 에이전트 환경을 위한 LLM 유지 프로젝트 위키 —
-> 소스를 작업 transcript로 삼고, 노동을 **사실=무인 / 판단=사람 동석**으로 분리한다.
-> 그리고 루프는 사람 쪽에서도 닫힌다 — 일 단위 망각곡선 퀴즈(`/wiki-quiz`)가 모델의 컨텍스트만큼 내 결정에 대한 내 기억도 벼려 둔다.
-> 구조는 **2계층** — 세션별 *로그북*(시간축: `2_milestone`·`3_decision`·`4_insight`) + 개념별 *주제 백과*(`5_topic`, 주제축·in-place 통합). 둘 다 raw transcript에서만 재유도(위키→위키 금지).
+> 소스를 작업 transcript로 삼고, 노동을 **사실=무인 / 판단=사람 동석**으로 분리합니다.
+> 그리고 루프는 사람 쪽에서도 닫힙니다 — 일 단위 망각곡선 퀴즈(`/wiki-quiz`)가 모델의 컨텍스트만큼 내 결정에 대한 내 기억도 벼려 둡니다.
+> 구조는 **2계층**입니다 — 세션별 *로그북*(시간축: `2_milestone`·`3_decision`·`4_insight`) + 개념별 *주제 백과*(`5_topic`, 주제축·in-place 통합). 둘 다 raw transcript 에서만 재유도합니다(위키→위키 금지).
 
 엔진은 **로컬 라이브러리** — SQLite 인덱스·결정적 lint·인용/교차참조 그래프·content-hash 증분 —
-이고, 그 위에 **자동 캡처 데몬 + transcript 복리 + 노동분담(사실=AI/판단=사람) + 사람 기억 퀴즈(`/wiki-quiz`)** 를 얹었다.
+이고, 그 위에 **자동 캡처 데몬 + transcript 복리 + 노동분담(사실=AI/판단=사람) + 사람 기억 퀴즈(`/wiki-quiz`)** 를 얹었습니다.
 **MCP 등록 불필요.**
 
-핵심 아이디어 — LLM이 유지하고 사람은 방향만 잡는 프로젝트 위키 — 는 [Andrej Karpathy의 LLM-wiki 노트](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)에서 왔다. 참고한 외부 자료는 그 노트 하나뿐이며, 설계와 코드는 자체 구현이다.
+핵심 아이디어 — LLM이 유지하고 사람은 방향만 잡는 프로젝트 위키 — 는 [Andrej Karpathy의 LLM-wiki 노트](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)에서 왔습니다. 참고한 외부 자료는 그 노트 하나뿐이며, 설계와 코드는 자체 구현입니다.
 
 ## 선순환 루프
 
@@ -34,10 +34,10 @@
 | **자가치유** | 구조(orphan·stale·dangling)=결정적 `lint` / 의미(모순·낡은주장·개념누락)=생성적 `review`(sync 자동 — 주기 게이트 `--if-due` 기본 7일·범위한정+캐시) → 갭은 `gaps` 자가종료 큐(`0_review/gap-queue.md`) | 1커맨드 → 자동 | `lint`·`review`·`gaps` (`src/engine/{lint,review,gaps}.ts`) |
 
 ### 사람 기억 루프 (`/wiki-quiz`)
-다른 고리는 전부 **모델**을 grounded 하게 만들고, 이 고리만 **사람**을 벼린다. 노동 분담이 사람에게 남긴 위임 불가능한 단 하나의 일 — 방향성·모순 판단 — 은 자기 과거 결정에 대한 기억과 함께 무뎌진다. `/wiki-quiz` 는 위키의 판단층(방향성 > 결정 > 인사이트·주제 > 마일스톤, 같은 급이면 최신 우선)에 대해 몇 분짜리 능동 회상을 돌린다: 스케줄은 엔진이 일 단위 망각곡선으로 결정적으로 잡고(박스 1·3·7·16·35·60일, 오답·모름 → 1일로 리셋, 하루에 같은 항목 재출제 없음), 출제와 요지 채점은 세션이 페이지에 근거해 웜으로 한다. 틀린 것은 다음 날 가장 먼저 돌아온다. 기록은 `docs/wiki/6_quiz/`(장부 + 날짜별 세션 노트) — **인덱스·검색·cold-start 에서 제외되는 사람 전용 레이어**라 LLM 이 자기 퀴즈 산출물을 되먹지 않는다: 위키 → 사람, 엄격한 단방향.
+다른 고리는 전부 **모델**을 grounded 하게 만들고, 이 고리만 **사람**을 벼립니다. 노동 분담이 사람에게 남긴 위임 불가능한 단 하나의 일 — 방향성·모순 판단 — 은 자기 과거 결정에 대한 기억과 함께 무뎌집니다. `/wiki-quiz` 는 위키의 판단층(방향성 > 결정 > 인사이트·주제 > 마일스톤, 같은 급이면 최신 우선)에 대해 몇 분짜리 능동 회상을 돌립니다: 스케줄은 엔진이 일 단위 망각곡선으로 결정적으로 잡고(박스 1·3·7·16·35·60일, 오답·모름 → 1일로 리셋, 하루에 같은 항목 재출제 없음), 출제와 요지 채점은 세션이 페이지에 근거해 웜으로 합니다. 틀린 것은 다음 날 가장 먼저 돌아옵니다. 기록은 `docs/wiki/6_quiz/`(장부 + 날짜별 세션 노트) — **인덱스·검색·cold-start 에서 제외되는 사람 전용 레이어**라 LLM 이 자기 퀴즈 산출물을 되먹지 않습니다: 위키 → 사람, 엄격한 단방향.
 
 ### 자가치유 흐름 (사람은 채우기만)
-마감(`/wiki-fast`)·deep 패스(`/wiki-deep`) 때: ① 결정적 `lint`(구조) → ② 생성적 `review`(의미 — 마감에서 `--if-due`로 자동 실행하되 **엔진이 주기를 강제**(기본 7일, `LLMWIKI_REVIEW_INTERVAL_DAYS`), 입력은 최근+태그 이웃 한정·무변경 스킵; deep은 강제 실행) → ③ `review`가 찾은 *개념 누락·다음 질문* 을 `gaps` 가 **추적 큐**로 쌓음. 갭은 **해당 주제로 한 번 작업하거나 `/wiki-deep`(deep)** 가 채우고, `review`가 2회 연속 안 띄우면 큐에서 **자동 close**. 즉 위키가 *무엇이 빠졌는지* 를 스스로 알려주고, 채우는 판단만 사람이 한다. 갭을 **자동 생성**하지 않는 건 의도 — 빈약한 근거로 페이지를 지어내지 않기 위함.
+마감(`/wiki-fast`)·deep 패스(`/wiki-deep`) 때: ① 결정적 `lint`(구조) → ② 생성적 `review`(의미 — 마감에서 `--if-due`로 자동 실행하되 **엔진이 주기를 강제**(기본 7일, `LLMWIKI_REVIEW_INTERVAL_DAYS`), 입력은 최근+태그 이웃 한정·무변경 스킵; deep은 강제 실행) → ③ `review`가 찾은 *개념 누락·다음 질문* 을 `gaps` 가 **추적 큐**로 쌓음. 갭은 **해당 주제로 한 번 작업하거나 `/wiki-deep`(deep)** 가 채우고, `review`가 2회 연속 안 띄우면 큐에서 **자동 close**. 즉 위키가 *무엇이 빠졌는지* 를 스스로 알려주고, 채우는 판단만 사람이 합니다. 갭을 **자동 생성**하지 않는 것은 의도된 선택입니다 — 빈약한 근거로 페이지를 지어내지 않기 위해서입니다.
 
 ## 구조
 
@@ -95,9 +95,9 @@ package.json·tsconfig.json   Bun 메타(typecheck용; 런타임은 .ts 직접 �
 
 ## 설치 / 사용
 
-**이 레포를 아무 데나·아무 이름으로 clone 한 뒤 `./setup.sh` 한 번** 돌리면 그 머신의 엔진이 된다.
+**이 레포를 아무 데나·아무 이름으로 clone 한 뒤 `./setup.sh` 한 번** 돌리면 그 머신의 엔진이 됩니다.
 모든 배선(데몬·훅·CLI·`/wiki-*` 커맨드)이 **clone 위치 자체에서 유도**되므로 `~/llmwiki` 같은 고정 경로가
-필요 없다 (폴더 이름은 무엇이든 OK). Bun 만 있으면 추가 의존성 없이 `bun` 으로 `.ts` 가 그대로 돈다 (번들·빌드 단계 없음).
+필요 없습니다 (폴더 이름은 무엇이든 OK). Bun 만 있으면 추가 의존성 없이 `bun` 으로 `.ts` 가 그대로 돌아갑니다 (번들·빌드 단계 없음).
 
 ```bash
 # 0) 엔진 clone (한 번, 머신당 1개) — 위치·이름 무관
@@ -122,7 +122,7 @@ cd llmwiki
 
 ## 설정 (환경 변수) — provider·모델·CLI 무관
 
-생성 패스(autoupdate/review)는 기본값으로 `claude -p` + 최신 Claude 모델을 쓰지만, 전부 env 로 바꿔 끼울 수 있다 (무설정 시 기본 동작과 동일):
+생성 패스(autoupdate/review)는 기본값으로 `claude -p` + 최신 Claude 모델을 쓰지만, 전부 env 로 바꿔 끼울 수 있습니다 (무설정 시 기본 동작과 동일):
 
 | env | 기본값 | 용도 |
 |---|---|---|
@@ -139,27 +139,27 @@ cd llmwiki
 | `LLMWIKI_OVERVIEW_BUDGET` | `8000` | `overview --normalize` 가 경고를 내는 overview.md 글자 예산(엔트리포인트 비대 감시). |
 | `LLMWIKI_L0_BUDGET` | `1600` | cold-start L0(current-state)의 글자 **기준**. 주입은 **자르지 않음** — 기준 초과 페이지도 전량 주입하고 초과 통지 1줄을 부착(다음 마감이 트리밍하도록); `oversized-l0` lint 는 1.25×부터 경고. |
 
-각 tier 를 "그때그때 출시된 최상위 모델"로 올리거나, 비-Anthropic 모델/엔드포인트로 교체하면 된다.
+각 tier 를 "그때그때 출시된 최상위 모델"로 올리거나, 비-Anthropic 모델/엔드포인트로 교체하면 됩니다.
 
-**하네스 무관 읽기**: `bun <clone>/src/cli.ts context <repo>` 가 cold-start 컨텍스트를, `... turn-context <repo>`(훅 stdin JSON 또는 `--prompt`)가 턴별 관련 페이지 포인터(≤3줄, 확신 없으면 침묵)를 출력한다. Claude Code 는 두 훅(SessionStart·UserPromptSubmit)이 자동 배선되고, 최신 Codex 는 같은 훅 스크립트를 네이티브 훅으로 실행(`adapters/codex/`), OpenCode 는 1파일 플러그인(`adapters/opencode/`)이 주입한다. 그 밖의 하네스는 AGENTS.md·시작 프롬프트에서 같은 명령을 부르면 된다. 턴별 주입은 점진적 향상 — cold-start + `search` 기준선은 어디서나 동일하다.
+**하네스 무관 읽기**: `bun <clone>/src/cli.ts context <repo>` 가 cold-start 컨텍스트를, `... turn-context <repo>`(훅 stdin JSON 또는 `--prompt`)가 턴별 관련 페이지 포인터(≤3줄, 확신 없으면 침묵)를 출력합니다. Claude Code 는 두 훅(SessionStart·UserPromptSubmit)이 자동 배선되고, 최신 Codex 는 같은 훅 스크립트를 네이티브 훅으로 실행(`adapters/codex/`), OpenCode 는 1파일 플러그인(`adapters/opencode/`)이 주입합니다. 그 밖의 하네스는 AGENTS.md·시작 프롬프트에서 같은 명령을 부르면 됩니다. 턴별 주입은 점진적 향상 — cold-start + `search` 기준선은 어디서나 동일합니다.
 
 ## 팀 사용 (한 프로젝트의 위키 공유)
 
-혼자 쓸 때는 아래 내용이 전혀 필요 없다 — 전부 추가적(additive)이고 1인 사용에서는 조용하다.
+혼자 쓸 때는 아래 내용이 전혀 필요 없습니다 — 전부 추가적(additive)이고 1인 사용에서는 조용합니다.
 
-여러 사람이 한 프로젝트에서 작업할 때는 각자 자기 로컬 엔진(자기 캡처 데몬·큐)을 돌리고 **자기 세션만** 공유 `docs/wiki/` 에 정리해 넣는다. 공유는 순수 git. 엔진이 해주는 것:
+여러 사람이 한 프로젝트에서 작업할 때는 각자 자기 로컬 엔진(자기 캡처 데몬·큐)을 돌리고 **자기 세션만** 공유 `docs/wiki/` 에 정리해 넣습니다. 공유는 순수 git. 엔진이 해주는 것:
 
 - **스캐폴드 안전장치**: skeleton 이 `.gitignore`(`.llmwiki/` — 파생 인덱스는 커밋 금지)와 `.gitattributes`(`docs/wiki/log.md merge=union` — 동시 append 가 충돌 없이 병합)를 보장.
 - **귀속**: 무인 작성 페이지에 `author:`(git `user.name`) 자동 스탬프. `0_review` 질문에 `owner: <이름>` 을 달면 cold-start 에 `[→ 이름]` 으로 표시 — 자기 것 아닌 질문은 건너뛸 수 있음.
-- **팀원 인용**: 다른 머신의 transcript 를 인용한 각주는 자가치유된다 — 정상 형식의 `.jsonl` 인용은 index 재빌드 때 가상 소스로 자동 등록되므로(transcript 는 어차피 회전·소멸) 팀원의 인용이 내 `lint` 게이트를 깨지 않는다. 형식이 깨진 인용은 여전히 error.
+- **팀원 인용**: 다른 머신의 transcript 를 인용한 각주는 자가치유됨 — 정상 형식의 `.jsonl` 인용은 index 재빌드 때 가상 소스로 자동 등록되므로(transcript 는 어차피 회전·소멸) 팀원의 인용이 내 `lint` 게이트를 깨지 않음. 형식이 깨진 인용은 여전히 error.
 - **연속성**: 클론이 origin 보다 뒤면 cold-start 가 한 줄로 알림(팀원이 병합한 맥락이 있을 수 있음 — 시작 전 pull).
-- **리뷰 흐름**: 위키 커밋을 코드처럼 취급 — 같은 브랜치, 같은 PR. **PR 리뷰가 곧 AI 작성 페이지의 사람 승인 게이트**다. `gap-queue.md`/`overview.md` 가 충돌하면 아무 쪽이나 취한 뒤 `llmwiki gaps` / `llmwiki overview --normalize` 재실행(수렴함) — 생성된 본문을 손으로 병합하지 말 것.
-- **`current-state.md`(L0) 충돌**: 아무 쪽을 취해도 안전하다 — 다음 `/wiki-fast` 의 L0 갱신 단계가 위키 상태에서 Now/Next 를 재생성해 수렴한다. 단 **Next** 불릿만은 양쪽 합집합을 권장(액션 대기를 잃지 않기).
-- **같은 `5_topic` 페이지 동시 추가 충돌**: **양쪽 불릿을 모두 보존**한다. 토픽 페이지는 포맷 규칙상 추가 전용(기존 줄 불변·병합은 추가만)이라, 합집합이 항상 옳은 병합이다.
+- **리뷰 흐름**: 위키 커밋을 코드처럼 취급 — 같은 브랜치, 같은 PR. **PR 리뷰가 곧 AI 작성 페이지의 사람 승인 게이트**임. `gap-queue.md`/`overview.md` 가 충돌하면 아무 쪽이나 취한 뒤 `llmwiki gaps` / `llmwiki overview --normalize` 재실행(수렴함) — 생성된 본문을 손으로 병합하지 말 것.
+- **`current-state.md`(L0) 충돌**: 아무 쪽을 취해도 안전함 — 다음 `/wiki-fast` 의 L0 갱신 단계가 위키 상태에서 Now/Next 를 재생성해 수렴함. 단 **Next** 불릿만은 양쪽 합집합을 권장(액션 대기를 잃지 않기).
+- **같은 `5_topic` 페이지 동시 추가 충돌**: **양쪽 불릿을 모두 보존**함. 토픽 페이지는 포맷 규칙상 추가 전용(기존 줄 불변·병합은 추가만)이라, 합집합이 항상 옳은 병합임.
 
 ## 팀 컨벤션 — `llmwiki.config.toml` (선택)
 
-기본 카테고리 구조(`0_review · 1_direction · 2_milestone · 3_decision · 4_insight · 5_topic`)가 내장 기본값이다 — **config 파일이 없으면 아무것도 바뀌지 않는다(바이트 단위 동일** — 렌더된 프롬프트/규칙이 기존 텍스트와 같음을 테스트로 고정). 다른 팀 포맷을 쓰려면 `llmwiki.config.example.toml`을 클론 루트에 `llmwiki.config.toml`로 복사해 카테고리를 선언한다:
+기본 카테고리 구조(`0_review · 1_direction · 2_milestone · 3_decision · 4_insight · 5_topic`)가 내장 기본값입니다 — **config 파일이 없으면 아무것도 바뀌지 않습니다(바이트 단위 동일** — 렌더된 프롬프트/규칙이 기존 텍스트와 같음을 테스트로 고정). 다른 팀 포맷을 쓰려면 `llmwiki.config.example.toml`을 클론 루트에 `llmwiki.config.toml`로 복사해 카테고리를 선언합니다:
 
 ```toml
 [[category]]
@@ -169,16 +169,16 @@ review = "human"   # human → 0_review 큐 · model → 강모델 확정
 guide = "분기 목표. 변경은 사람이 확정."
 ```
 
-- **단일 진실**: WRITE 프롬프트, cold-start 운영규칙, `llmwiki conventions <repo>`(`/wiki-*` 스킬이 위임하는 출력)가 전부 이 파일에서 렌더된다 — 드리프트할 산문 사본이 없다.
-- **레포별 config** (선택): `<clone>/configs/` 아래 여러 `*.toml`을 둘 수 있다. 파일 상단에 `applies_to = ["<폴더>", ...]`가 있으면 그 폴더와 하위 전체에 적용(segment-safe prefix, 가장 구체적 경로 승리, `~` 확장); `applies_to`가 없으면 전 레포 기본값(표준 이름: `configs/default.toml`). 우선순위: named 매칭 → `configs/` default → 루트 `llmwiki.config.toml` → 내장 기본값. 매칭은 세션 훅이 넘기는 경로(`CLAUDE_PROJECT_DIR`/cwd) 기준.
+- **단일 진실**: WRITE 프롬프트, cold-start 운영규칙, `llmwiki conventions <repo>`(`/wiki-*` 스킬이 위임하는 출력)가 전부 이 파일에서 렌더됨 — 드리프트할 산문 사본이 없음.
+- **레포별 config** (선택): `<clone>/configs/` 아래 여러 `*.toml`을 둘 수 있음. 파일 상단에 `applies_to = ["<폴더>", ...]`가 있으면 그 폴더와 하위 전체에 적용(segment-safe prefix, 가장 구체적 경로 승리, `~` 확장); `applies_to`가 없으면 전 레포 기본값(표준 이름: `configs/default.toml`). 우선순위: named 매칭 → `configs/` default → 루트 `llmwiki.config.toml` → 내장 기본값. 매칭은 세션 훅이 넘기는 경로(`CLAUDE_PROJECT_DIR`/cwd) 기준.
 - **확인**: `llmwiki config [workspace]` — 어느 파일이 왜 선택됐는지 표시 (검증 포함; 잘못된/못 읽는 파일은 경고와 함께 안전 폴백 — 세션을 깨지 않음).
-- **기존 위키 구조 변경**: `llmwiki migrate <repo>` (dry-run) → `--commit`: 폴더 rename + 모든 위키링크/상대링크 재작성 + frontmatter `domain:` 갱신 + `.schema-version` 스탬프. **자동 실행 없음** — cold-start 는 드리프트를 양방향(위키가 내 config 보다 새것 / config 가 위키보다 새것)으로 감지·제안만 한다.
+- **기존 위키 구조 변경**: `llmwiki migrate <repo>` (dry-run) → `--commit`: 폴더 rename + 모든 위키링크/상대링크 재작성 + frontmatter `domain:` 갱신 + `.schema-version` 스탬프. **자동 실행 없음** — cold-start 는 드리프트를 양방향(위키가 내 config 보다 새것 / config 가 위키보다 새것)으로 감지·제안만 함.
 - **팀 배포**: config를 팀 엔진 포크에 커밋 → 각자 `git pull` → 1명이 `migrate` 실행 → 결과는 여느 변경처럼 PR로 병합.
 - **호환성 규율**: config 키 제거는 폐기 유예 기간 + lint 경고 + `migrate` 스텝을 거친 뒤에만 — 조용한 제거 금지.
 
 ## 회귀 측정 (엔진 개발 도구 — 일상 루프 밖)
 
-- **`llmwiki bench <repo>`** — 결정적 검색 벤치(LLM 0, ms 단위). 골든 질의셋 `<repo>/docs/wiki/.bench/golden.toml`(레포당 ≤20, 언어 무관) → search any-hit `r@k` + turn-context 포인터 적중/침묵(refusal 질의는 turn-context가 침묵하면 정답 — 구조 판정이라 언어 무관). seed 고정 tune/sealed split(`--tune-only`=반복 조정용 / `--sealed`=최종 확인 전용 — 볼 때마다 회귀 가드 가치가 줄어든다).
+- **`llmwiki bench <repo>`** — 결정적 검색 벤치(LLM 0, ms 단위). 골든 질의셋 `<repo>/docs/wiki/.bench/golden.toml`(레포당 ≤20, 언어 무관) → search any-hit `r@k` + turn-context 포인터 적중/침묵(refusal 질의는 turn-context가 침묵하면 정답 — 구조 판정이라 언어 무관). seed 고정 tune/sealed split(`--tune-only`=반복 조정용 / `--sealed`=최종 확인 전용 — 볼 때마다 회귀 가드 가치가 줄어듦).
 - **`llmwiki compare-arm <repo> --corpus <dir> --label <name>`** → **`llmwiki compare-verdict A.json B.json`** — 동결 corpus A/B: 같은 transcript corpus로 설정/리비전별 격리 임시 위키를 빌드(arm 빌드만 LLM)한 뒤, 라벨된 결과 2개를 순차 게이트(회귀 차단 우선 → keep/adopt/undecided, LLM 0)로 판정. 프롬프트·모델 변경 시에만 실행.
 
 ## 원칙

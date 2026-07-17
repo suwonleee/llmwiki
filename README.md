@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.png">
-    <img src="assets/banner.png" alt="quiz_wiki" width="100%">
+    <img src="assets/banner.png" alt="Quiz_wiki" width="100%">
   </picture>
 </p>
 
