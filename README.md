@@ -5,7 +5,9 @@
   </picture>
 </p>
 
-# llmwiki — a local-first compounding engineering logbook + topic encyclopedia
+# llmwiki · Quiz_wiki — a local-first compounding engineering logbook + topic encyclopedia that quizzes you back
+
+*Also known as: quiz wiki · llmwiki quiz · Quiz_wiki — the spaced-repetition layer that quizzes you on your own past decisions.*
 
 **English** · [한국어](README.ko.md)
 
@@ -34,6 +36,20 @@ The core idea — a project wiki that the LLM maintains and the human only steer
 
 ### The human memory loop (`/wiki-quiz`)
 Every other stage keeps the **model** grounded; this one keeps the **human** sharp. The labor split leaves exactly one non-delegable duty — direction + contradiction judgment — and that judgment decays with the human's memory of their own past decisions. `/wiki-quiz` runs a few minutes of active recall over the wiki's judgment layer (direction > decision > insight·topic > milestone, newest first): the engine schedules deterministically on a day-granular forgetting curve (boxes 1·3·7·16·35·60 days; wrong/skip → back to 1 day; an item is never asked twice in one day), the session authors and gist-grades the questions warm, grounded in the pages. Wrong answers come back first the next day. Records live in `docs/wiki/6_quiz/` (ledger + per-day session notes) — a **human-only layer excluded from indexing/search/cold-start**, so the LLM never feeds on its own quiz output: strictly one-directional, wiki → human.
+
+A quiz session is **pre-authored in one batch**: the engine picks the due items, the session reads those pages together and writes every question up front, so answering one question shows the next immediately — no per-question wait. Session size is `[quiz] questions` in `llmwiki.config.toml` (default **3**, raise it with an argument like `/wiki-quiz 5`, capped at **7** by the engine — a quiz people skip reinforces nothing).
+
+### Evidence that travels with the page (page format v3)
+A citation like `[^s1]: <session>.jsonl` points at a transcript that lives on **one machine** — so a teammate can read your conclusion but not the grounding behind it. v3 puts 1–2 lines of the evidence itself on an indented continuation line under the footnote:
+
+```markdown
+- We kept the log layer and added the topic layer on top of it [^s1]
+
+[^s1]: 3bd9cac5-….jsonl
+    > [2026-06-29 14:02 user] "keep the log as-is and layer on top — replacing it is the risky part"
+```
+
+The footnote definition line stays byte-identical to before (four parsers read it, and one of them is what keeps a teammate's citation from erroring). Excerpts come from `llmwiki excerpt` — **verbatim, length-capped, and secret-screened**, because the raw material is a session transcript and those routinely contain credentials. Judgment claims quote the human; factual claims carry a machine tool-record. Lint verifies a quote really appears in the transcript **where that transcript is readable**, and stays silent on a clone where it isn't — "can't check" must never read as "wrong". Excerpts are excluded from the search index and from the topic-page budget, so adding evidence costs neither retrieval quality nor prose room.
 
 ### Self-healing flow (the human only fills in)
 At close-out (`/wiki-fast`) and on the deep pass (`/wiki-deep`): ① deterministic `lint` (structure) → ② generative `review` (semantics — auto-run via `--if-due`, but the **engine enforces the cadence** (default 7 days, `LLMWIKI_REVIEW_INTERVAL_DAYS`); input is scoped to recent+tag-neighbor pages and skipped if nothing changed; the deep pass runs it unconditionally) → ③ the *missing concepts·follow-up questions* `review` surfaces get stacked by `gaps` into a **tracking queue**. A gap gets filled once someone **works that topic once, or the `/wiki-deep` deep pass fills it**, and **auto-closes** from the queue if `review` fails to surface it twice in a row. In other words, the wiki tells you *what's missing* on its own — the human only supplies the judgment to fill it in. Gaps are deliberately **not auto-generated** — so pages don't get invented from thin evidence.
