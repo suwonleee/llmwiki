@@ -18,7 +18,7 @@
 // cost). Run it when search/turn-context/prompt logic changes.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { WikiIndex } from "./db.ts";
+import { WikiIndex, dedupeByPage } from "./db.ts";
 import { buildTurnContext } from "./turncontext.ts";
 
 export interface BenchQuery {
@@ -98,17 +98,10 @@ export function hitAtK(expected: string[], ranked: string[], k: number): number 
 }
 
 // Ranked unique page paths from chunk-level search rows (best-rank order preserved).
+// Chunk hits → ranked distinct page paths. Shares dedupeByPage with the `search` CLI so the
+// bench measures the same page ordering a reader actually sees.
 function rankedPages(rows: any[]): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const r of rows) {
-    const rel = String(r.relative_path ?? "");
-    if (rel && !seen.has(rel)) {
-      seen.add(rel);
-      out.push(rel);
-    }
-  }
-  return out;
+  return dedupeByPage(rows).map((r) => String(r.relative_path ?? ""));
 }
 
 // Turn-context pointer lines look like `  • Title  →  docs/wiki/...`; silence is "".

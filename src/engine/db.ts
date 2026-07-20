@@ -4,10 +4,11 @@
 // connection the caller opens/closes.
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative as relpath, resolve } from "node:path";
 import { storeChunks, chunkText } from "./chunker.ts";
+import { stripEvidence } from "./refs.ts";
 import { getConfig } from "./config.ts";
 
 const SCHEMA_PATH = join(import.meta.dir, "schema.sql");
@@ -295,7 +296,7 @@ export class WikiIndex {
           "stale_since=NULL WHERE id=?",
         [content, size, contentHash, mtimeNs, ext || "bin", existing.id],
       );
-      if (content !== null) storeChunks(db, existing.id, chunkText(content));
+      if (content !== null) storeChunks(db, existing.id, chunkText(stripEvidence(content)));
       // content became null (e.g. the file grew past SOURCE_CONTENT_CAP): drop the stale
       // chunks so the FTS no longer serves the old body (delete trigger cleans chunks_fts).
       else db.run("DELETE FROM document_chunks WHERE document_id = ?", [existing.id]);
@@ -311,7 +312,7 @@ export class WikiIndex {
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, '[]', 1, ?, ?, datetime('now'), ?)",
       [docId, name, title, dirPath, relative, sourceKind(relative), ext || "bin", size, content, contentHash, mtimeNs, n],
     );
-    if (content !== null) storeChunks(db, docId, chunkText(content));
+    if (content !== null) storeChunks(db, docId, chunkText(stripEvidence(content)));
     return "new";
   }
 
@@ -373,7 +374,9 @@ export class WikiIndex {
   listDocumentsWithContent(db: Database): DocRow[] {
     const rows = db
       .query(
-        "SELECT id, filename, title, path, relative_path, content, tags, file_type, source_kind, date, stale_since " +
+        // `metadata` carries a registered transcript's real path — lint needs it to verify v3
+        // evidence excerpts against their source (and to stay silent when that source is gone).
+        "SELECT id, filename, title, path, relative_path, content, tags, file_type, source_kind, date, stale_since, metadata " +
           "FROM documents WHERE status != 'failed' ORDER BY path, filename",
       )
       .all() as DocRow[];
@@ -523,4 +526,27 @@ export class WikiIndex {
     }
     return d;
   }
+}
+
+// Collapse chunk-level hits to one row per page, keeping each page's BEST-ranked chunk.
+//
+// `search` deliberately returns CHUNK rows: turn-context unions the matched terms across a page's
+// chunks and tie-breaks on hit count, so it needs every chunk. But a reader asking for the top-K
+// PAGES gets a worse list from the same rows — one page with several matching chunks eats several
+// slots and pushes distinct answers off the end (measured 2026-07-20: an evidence-heavy corpus put
+// the same page at ranks 4 AND 5, dropping the correct page out of the top-5).
+//
+// So dedupe belongs at the presentation edge, not in the query. Rows arrive already ordered by
+// (superseded, rank), so first-seen per page IS that page's best chunk.
+export function dedupeByPage<T extends { [k: string]: any }>(rows: T[], limit?: number): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const r of rows) {
+    const rel = String(r.relative_path ?? "");
+    if (!rel || seen.has(rel)) continue;
+    seen.add(rel);
+    out.push(r);
+    if (limit !== undefined && out.length >= limit) break;
+  }
+  return out;
 }
