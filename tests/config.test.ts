@@ -133,6 +133,26 @@ guide = ""
   expect(logDirs(g)).toEqual(logDirs(defaults()));
 });
 
+// ---- quiz session size ([quiz] questions; the ceiling is engine-fixed, not config) ---------
+
+test("[quiz] questions: stock 3, toml overrides, invalid values fail-safe", () => {
+  expect(defaults().quizQuestions).toBe(3);
+
+  const c = loadFrom(tmpToml(`
+[quiz]
+questions = 5
+`));
+  expect(c.error).toBeUndefined();
+  expect(c.quizQuestions).toBe(5);
+
+  const zero = loadFrom(tmpToml(`
+[quiz]
+questions = 0
+`));
+  expect(zero.error).toContain("quiz questions");
+  expect(zero.quizQuestions).toBe(3); // defaults in effect
+});
+
 // ---- models tier (env > toml [models] > builtin default) ----------------------------------
 // Save/restore the model env vars so these tests are independent of the ambient environment.
 function withModelEnv(light: string | undefined, heavy: string | undefined, fn: () => void): void {

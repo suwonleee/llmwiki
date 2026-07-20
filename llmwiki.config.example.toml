@@ -58,6 +58,7 @@ config_version = 1
 
 # [quiz]
 # dir = "6_quiz"         # human memory loop (quiz ledger + session records) — never indexed/searched
+# questions = 3          # default questions per /wiki-quiz session (a numeric argument raises it; engine caps at 7)
 
 # --- LLM model tiers (per generative pass) -----------------------------------------
 # light = WRITE/drafting tier (cheap, high-volume). heavy = VERIFY gate + semantic

@@ -37,6 +37,7 @@ export interface WikiConfig {
   topicDir: string; // per-concept living encyclopedia (consolidate target)
   queueDir: string; // human-judgment queue
   quizDir: string; // human memory loop (quiz ledger + session records) — never indexed/searched
+  quizQuestions: number; // default questions per /wiki-quiz session (argument can raise it; engine caps at QUIZ_MAX_QUESTIONS)
   models: { light: string; heavy: string }; // LLM tier per pass — env LLMWIKI_MODEL_LIGHT/HEAVY overrides this
   files: { l0: string; overview: string; log: string };
   legacyDirs: string[]; // old flat category names still scanned for staleness/index
@@ -76,6 +77,7 @@ export function defaults(): WikiConfig {
     topicDir: "5_topic",
     queueDir: "0_review",
     quizDir: "6_quiz",
+    quizQuestions: 3,
     models: resolveModels(), // env-or-builtin when there is no toml [models]
     files: { l0: "current-state.md", overview: "overview.md", log: "log.md" },
     legacyDirs: ["milestones", "insights", "decisions", "directions"],
@@ -111,6 +113,8 @@ function _validate(c: WikiConfig): string | null {
   // would silently unindex that whole category (0 pages in search/lint/review/cold-start).
   if (c.quizDir === c.topicDir || c.quizDir === c.queueDir || c.categories.some((cat) => cat.dir === c.quizDir))
     return `quizDir collides with a content dir: ${JSON.stringify(c.quizDir)} (the quiz subtree is never indexed)`;
+  if (!Number.isInteger(c.quizQuestions) || c.quizQuestions < 1)
+    return `quiz questions must be an integer ≥ 1: ${JSON.stringify(c.quizQuestions)}`;
   return null;
 }
 
@@ -136,6 +140,7 @@ export function loadFrom(path: string): WikiConfig {
     if (raw.topic?.dir !== undefined) cfg.topicDir = String(raw.topic.dir);
     if (raw.queue?.dir !== undefined) cfg.queueDir = String(raw.queue.dir);
     if (raw.quiz?.dir !== undefined) cfg.quizDir = String(raw.quiz.dir);
+    if (raw.quiz?.questions !== undefined) cfg.quizQuestions = Number(raw.quiz.questions);
     // Models: env > toml [models] > builtin default (resolveModels enforces the order).
     cfg.models = resolveModels({
       light: raw.models?.light !== undefined ? String(raw.models.light) : undefined,

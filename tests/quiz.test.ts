@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   INTERVALS,
+  QUIZ_MAX_QUESTIONS,
   addDays,
   dueCount,
   loadLedger,
@@ -190,6 +191,17 @@ describe("quiz", () => {
     const sel = selectNext(root, { limit: 2, date: D0 });
     expect(sel.picks.length).toBe(2);
     expect(sel.newCandidates).toBe(4);
+  });
+
+  test("session size: no limit → config [quiz] questions (3); explicit limit clamps at the fixed ceiling", () => {
+    const sel = selectNext(root, { date: D0 }); // stock default: 3 of the 4 candidates
+    expect(sel.limit).toBe(3);
+    expect(sel.picks.length).toBe(3);
+    expect(sel.newCandidates).toBe(4); // counts stay global past the default cap
+    const capped = selectNext(root, { limit: 99, date: D0 });
+    expect(capped.limit).toBe(QUIZ_MAX_QUESTIONS); // ceiling, even when asked for more
+    expect(quizStatus(root, { date: D0 }).questions).toBe(3);
+    expect(quizStatus(root, { date: D0 }).maxQuestions).toBe(QUIZ_MAX_QUESTIONS);
   });
 
   test("vanished page: excluded + reported by select, pruned by the next record", () => {

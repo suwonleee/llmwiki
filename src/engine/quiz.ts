@@ -34,6 +34,10 @@ import { parseFrontmatter } from "./lint.ts";
 // expanding cadence; the last box repeats as long-term maintenance.
 export const INTERVALS = [1, 3, 7, 16, 35, 60];
 export const LEDGER_BASENAME = "quiz-ledger.md";
+// Session ceiling — engine-owned, NOT configurable. The latency contract ("minutes total,
+// a quiz people skip reinforces nothing") is a design invariant, not a team convention;
+// config owns only the default ([quiz] questions).
+export const QUIZ_MAX_QUESTIONS = 7;
 
 export type QuizResult = "correct" | "wrong" | "skip";
 const RESULTS = new Set<string>(["correct", "wrong", "skip"]);
@@ -256,6 +260,7 @@ function statusLive(abs: string): boolean {
 
 export interface QuizSelection {
   picks: QuizPick[];
+  limit: number; // the limit actually applied: config default when unset, clamped to QUIZ_MAX_QUESTIONS
   dueWrong: number; // total due in ① (before limit)
   dueReview: number; // total due in ② (before limit)
   newCandidates: number; // total in ③ (before limit)
@@ -266,7 +271,8 @@ export interface QuizSelection {
 export function selectNext(ws: string, opts: { limit?: number; date?: string } = {}): QuizSelection {
   const root = resolve(ws);
   const date = opts.date ?? todayUTC();
-  const limit = Math.max(1, opts.limit ?? 5);
+  // Session size: [quiz] questions is the config default; QUIZ_MAX_QUESTIONS the fixed cap.
+  const limit = Math.min(QUIZ_MAX_QUESTIONS, Math.max(1, opts.limit ?? getConfig(root).quizQuestions));
   const { entries } = loadLedger(root);
 
   // Vanished pages are reported (and pruned on the next record); a page that merely went
@@ -298,7 +304,7 @@ export function selectNext(ws: string, opts: { limit?: number; date?: string } =
     ...news.map((c): QuizPick => ({ kind: "new", page: c.page, candidate: c })),
   ].slice(0, limit);
 
-  return { picks, dueWrong: wrongDue.length, dueReview: reviewDue.length, newCandidates: news.length, askedToday, missing };
+  return { picks, limit, dueWrong: wrongDue.length, dueReview: reviewDue.length, newCandidates: news.length, askedToday, missing };
 }
 
 // ---- record (the only writer; forgetting-curve step) ----------------------------------------
@@ -367,10 +373,13 @@ export interface QuizStatus {
   nextDue: string; // earliest future due ("" when none scheduled)
   weak: { page: string; asked: number; correct: number }[]; // <50% over 3+ asks — re-read these
   missing: string[];
+  questions: number; // config [quiz] questions — the session default
+  maxQuestions: number; // QUIZ_MAX_QUESTIONS — the fixed session ceiling
 }
 
 export function quizStatus(ws: string, opts: { date?: string } = {}): QuizStatus {
   const date = opts.date ?? todayUTC();
+  const cfg = getConfig(ws);
   const sel = selectNext(ws, { limit: 1, date });
   const { entries } = loadLedger(ws);
   const weak = entries
@@ -387,6 +396,8 @@ export function quizStatus(ws: string, opts: { date?: string } = {}): QuizStatus
     nextDue: future[0] ?? "",
     weak,
     missing: sel.missing,
+    questions: cfg.quizQuestions,
+    maxQuestions: QUIZ_MAX_QUESTIONS,
   };
 }
 
