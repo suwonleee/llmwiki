@@ -23,7 +23,7 @@
 // Returned dict keys are kept snake_case (cli.ts prints them by name).
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join, relative as relpath, resolve } from "node:path";
-import { claude } from "./claude.ts";
+import { llm } from "./claude.ts";
 import * as capture from "./capture.ts";
 import * as update from "./update.ts";
 import {
@@ -42,6 +42,7 @@ import { WikiIndex } from "./db.ts";
 import { render, type Increment } from "./extract.ts";
 import { sourceForKind } from "./source.ts";
 import { collectGroundedFacts, assessGrounding } from "./grounding.ts";
+import { ensureExcerpts } from "./excerpt.ts";
 import { updateReferences } from "./refs.ts";
 import { Linter, type LintIssue, type WikiIndexLike } from "./lint.ts";
 import { MODEL_HEAVY, MODEL_LIGHT } from "./models.ts";
@@ -241,7 +242,7 @@ export async function updateOne(
   const supportText = extractTxt + "\n" + evidence.corpus;
 
   // 1) WRITE
-  const raw = await claude(
+  const raw = await llm(
     formatPrompt(writePromptTemplate(cfg), {
       schema: schemaText(cfg),
       transcript_filename: fn,
@@ -262,7 +263,7 @@ export async function updateOne(
   const grounding = assessGrounding(page, supportText);
 
   // 2) VERIFY (independent second model, adversarial)
-  const verdict = await claude(
+  const verdict = await llm(
     formatPrompt(VERIFY_PROMPT, { extract: extractTxt, page }),
     vm,
   );
@@ -349,7 +350,10 @@ export async function updateOne(
 
   // 3b) NON-DIRECTION → write to its category, register provenance, run deterministic LINT.
   mkdirSync(join(dest, ".."), { recursive: true });
-  page = update.ensureAuthor(page);
+  // Attach portable evidence before the page leaves this machine — the transcript is open right
+  // here, and on any other clone it will not be readable at all (page format v3).
+  // (Authorship is deliberately NOT stamped: git already records it — decision 2026-07-10.)
+  page = ensureExcerpts(page, transcriptPath, offset);
   writeFileSync(dest, page + (page.endsWith("\n") ? "" : "\n"), "utf-8");
   idx.indexAll();
   const conn = idx.connect();

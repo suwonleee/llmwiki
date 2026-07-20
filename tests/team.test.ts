@@ -3,18 +3,20 @@
 //     registers every clean cited `.jsonl` as a virtual source on index/refs rebuild, so a
 //     teammate's citation NEVER lints as unresolved. The team flow depends on this — pin it.
 //   • skeleton: idempotently ensures .gitignore(.llmwiki/) + .gitattributes(log.md merge=union).
-//   • ensureAuthor: stamps `author:` into frontmatter (no-op without git identity/frontmatter).
+//   • authorship: READ from git (contributors + a seeded .mailmap), never cached into frontmatter
+//     — a stamped author goes stale the moment a teammate edits the page (decision 2026-07-10).
 //   • cold-start: `owner:` on a 0_review item renders as [→ name]; behind-upstream repos get
 //     one informational line.
 import { test, expect } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { Linter, type WikiIndexLike } from "../src/engine/lint.ts";
 import { WikiIndex } from "../src/engine/db.ts";
 import { autoRegisterCitedTranscripts } from "../src/engine/refs.ts";
-import { ensureSkeleton, ensureAuthor, gitUserName } from "../src/engine/update.ts";
+import { ensureSkeleton } from "../src/engine/update.ts";
+import { contributors } from "../src/engine/synthesis.ts";
 import { buildContext } from "../src/engine/context.ts";
 
 function git(cwd: string, ...args: string[]): void {
@@ -74,20 +76,45 @@ test("ensureSkeleton writes .gitignore/.gitattributes idempotently, preserving u
   expect(ga.split("\n").filter((l) => l.includes("log.md merge=union")).length).toBe(1);
 });
 
-// ---- ensureAuthor -------------------------------------------------------------------------
+// ---- authorship: read from git, never cached in frontmatter (decision 2026-07-10) ----------
 
-test("ensureAuthor stamps author into frontmatter once (or no-ops without git identity)", () => {
-  const page = "---\ntitle: T\ndate: 2026-07-07\n---\n\nbody";
-  const out = ensureAuthor(page);
-  if (gitUserName()) {
-    expect(out).toContain(`author: ${gitUserName()}`);
-    expect(ensureAuthor(out)).toBe(out); // idempotent
-  } else {
-    expect(out).toBe(page);
-  }
-  expect(ensureAuthor("no frontmatter body")).toBe("no frontmatter body");
-  const withAuthor = "---\ntitle: T\nauthor: someone-else\n---\nbody";
-  expect(ensureAuthor(withAuthor)).toBe(withAuthor); // declared author wins
+test("ensureSkeleton seeds .mailmap so one person's several git identities count once", () => {
+  const repo = mkdtempSync(join(tmpdir(), "llmwiki-team-mailmap-"));
+  ensureSkeleton(repo);
+  const mm = readFileSync(join(repo, ".mailmap"), "utf-8");
+  expect(mm).toContain("%aN"); // explains what the file is for
+
+  // additive: an existing .mailmap is a team artifact and must never be rewritten
+  writeFileSync(join(repo, ".mailmap"), "hand written\n", "utf-8");
+  ensureSkeleton(repo);
+  expect(readFileSync(join(repo, ".mailmap"), "utf-8")).toBe("hand written\n");
+});
+
+test("contributors are derived from git history, collapsing aliases via .mailmap", () => {
+  const repo = mkdtempSync(join(tmpdir(), "llmwiki-team-contrib-"));
+  const wiki = join(repo, "docs", "wiki", "2_milestone");
+  mkdirSync(wiki, { recursive: true });
+  git(repo, "init", "-q");
+  git(repo, "config", "core.hooksPath", "/dev/null"); // isolate from the developer's global hooks
+  writeFileSync(join(repo, ".mailmap"), "Su Won <su@work> Suwon Lee <su@personal>\n", "utf-8");
+
+  const commit = (name: string, email: string, file: string) => {
+    writeFileSync(join(wiki, file), `---\ntitle: ${file}\n---\nbody\n`, "utf-8");
+    git(repo, "add", "-A");
+    // --no-verify: a developer's global commit-msg hook must not decide whether this test runs
+    git(repo, "-c", `user.name=${name}`, "-c", `user.email=${email}`, "commit", "-q", "--no-verify", "-m", file);
+  };
+  commit("Su Won", "su@work", "a.md");
+  commit("Suwon Lee", "su@personal", "b.md"); // same human, second identity
+  commit("Teammate", "mate@work", "c.md");
+
+  const people = contributors(repo);
+  expect(people.map((p) => p.name).sort()).toEqual(["Su Won", "Teammate"]); // two people, not three
+  expect(people.find((p) => p.name === "Su Won")?.commits).toBe(2);
+});
+
+test("contributors degrades to empty outside a git repo instead of throwing", () => {
+  expect(contributors(mkdtempSync(join(tmpdir(), "llmwiki-team-nogit-")))).toEqual([]);
 });
 
 // ---- cold-start: owner tag + behind-upstream ---------------------------------------------

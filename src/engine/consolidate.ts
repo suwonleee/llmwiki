@@ -19,14 +19,14 @@
 // and consolidated without the two passes fighting over one offset.
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, relative as relpath, resolve } from "node:path";
-import { claude } from "./claude.ts";
+import { llm } from "./claude.ts";
 import * as capture from "./capture.ts";
 import { WikiIndex } from "./db.ts";
 import { render, type Increment } from "./extract.ts";
 import { sourceForKind } from "./source.ts";
 import { collectGroundedFacts, assessGrounding } from "./grounding.ts";
 import { updateReferences } from "./refs.ts";
-import { appendLog, ensureAuthor, ensureSkeleton } from "./update.ts";
+import { appendLog, ensureSkeleton } from "./update.ts";
 import { effectiveKo, getConfig, type WikiConfig } from "./config.ts";
 import { Linter, type LintIssue, type WikiIndexLike } from "./lint.ts";
 import { MODEL_HEAVY, MODEL_LIGHT } from "./models.ts";
@@ -117,11 +117,6 @@ function addedClaims(oldContent: string, newPage: string): string {
     added.push(l);
   }
   return added.join("\n");
-}
-
-function pageField(page: string, field: string): string {
-  const m = page.match(new RegExp(`^${field}:\\s*(.+)$`, "m"));
-  return m ? m[1]!.trim() : "";
 }
 
 function incDate(inc: Increment): string {
@@ -282,7 +277,7 @@ export async function consolidateOne(
     : "(none yet)";
 
   // 1) WRITE (draft the merged/new page, or SKIP)
-  const raw = await claude(
+  const raw = await llm(
     fill(WRITE_TOPIC_PROMPT, { existing: existingBlock, extract: extractTxt, transcript_filename: fn }),
     writeModel,
   );
@@ -327,7 +322,7 @@ export async function consolidateOne(
   }
 
   // 2) VERIFY (independent, adversarial — only the added claims)
-  const verdict = await claude(fill(VERIFY_TOPIC_PROMPT, { extract: extractTxt, added }), verifyModel);
+  const verdict = await llm(fill(VERIFY_TOPIC_PROMPT, { extract: extractTxt, added }), verifyModel);
   const verified = /^VERIFIED[\s.!]*$/.test(verdict.trim().toUpperCase());
 
   // 3) deterministic grounding on the added claims (fabricated file paths → strict-gate signal)
@@ -368,7 +363,8 @@ export async function consolidateOne(
 
   // accepted → write, register provenance, rebuild this page's edges, lint just this page.
   mkdirSync(join(dest, ".."), { recursive: true });
-  page = ensureAuthor(page);
+  // Authorship is read from git, not cached into frontmatter (decision 2026-07-10) — a stamped
+  // author goes stale the moment a teammate edits the page, and git is already the truth.
   writeFileSync(dest, page.endsWith("\n") ? page : page + "\n", "utf-8");
   idx.registerTranscript(transcriptPath, inc.sessionId);
   idx.indexAll();

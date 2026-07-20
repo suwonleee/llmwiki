@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { getConfig } from "./config.ts";
 import { createHash } from "node:crypto";
 import { basename, join, relative as relpath, resolve } from "node:path";
-import { claude } from "./claude.ts";
+import { llm } from "./claude.ts";
 import { WikiIndex, type DocRow } from "./db.ts";
 import { appendLog } from "./update.ts";
 import { MODEL_HEAVY } from "./models.ts";
@@ -307,7 +307,7 @@ export async function review(ws: string, opts: ReviewOpts): Promise<Record<strin
     .join("\n");
 
   const prompt = _PROMPT.replace("{repo}", name).replace("{date}", date).replace("{scopenote}", note).replace("{pages}", pagesTxt);
-  const raw = await claude(prompt, model);
+  const raw = await llm(prompt, model);
   const page = _extractPage(raw);
   if (raw.startsWith("__ERROR__") || !page.startsWith("---")) {
     return { verdict: "fail", n_pages: scoped.length, reason: raw.slice(0, 200) };

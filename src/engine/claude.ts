@@ -86,6 +86,3 @@ export async function llm(prompt: string, model: string): Promise<string> {
     rmSync(scratch, { recursive: true, force: true });
   }
 }
-
-// Backward-compat alias (the function was previously named `claude`).
-export const claude = llm;

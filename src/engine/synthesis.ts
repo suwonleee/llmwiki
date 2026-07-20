@@ -15,6 +15,7 @@
 //
 // The output is a DERIVED VIEW (like the index/refs graph), never a committed wiki page —
 // so it is always rebuildable and can never accumulate error.
+import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { WikiIndex } from "./db.ts";
@@ -199,7 +200,38 @@ export function buildDigest(repo: string, opts: DigestOptions = {}): string {
     for (const t of open) L.push(`- ${t}`);
   }
 
+  const people = contributors(repo);
+  if (people.length) {
+    L.push(`\n${lang === "ko" ? "## 기여자 (git 이력에서 파생)" : "## Contributors (derived from git history)"}`);
+    L.push(people.map((p) => `${p.name} (${p.commits})`).join(" · "));
+  }
+
   return L.join("\n");
+}
+
+// Who has written this wiki, read from git rather than from a cached frontmatter field: git is
+// already the truth, a stamped `author:` goes stale the moment someone else edits the page, and a
+// derived view costs one subprocess (~30ms for a whole wiki). `%aN` is the mailmap-resolved name,
+// so a person committing from two identities counts once (ensureSkeleton seeds a .mailmap).
+export function contributors(repo: string, limit = 12): { name: string; commits: number }[] {
+  try {
+    const r = spawnSync("git", ["-C", resolve(repo), "log", "--format=%aN", "--", "docs/wiki"], {
+      encoding: "utf-8",
+      timeout: 5000,
+    });
+    if (r.status !== 0) return [];
+    const counts = new Map<string, number>();
+    for (const line of (r.stdout ?? "").split("\n")) {
+      const name = line.trim();
+      if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .map(([name, commits]) => ({ name, commits }))
+      .sort((a, b) => b.commits - a.commits || a.name.localeCompare(b.name))
+      .slice(0, limit);
+  } catch {
+    return []; // no git, not a repo, or git too slow → the digest simply omits the section
+  }
 }
 
 // ---- topic view (Phase-0 of the topic encyclopedia: deterministic, LLM-0) --------------

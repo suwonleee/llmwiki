@@ -134,33 +134,40 @@ export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(w
   //                    instead of conflicting (ecosystem-proven: OmegaWiki/AutoSci).
   _ensureLine(join(root, ".gitignore"), ".llmwiki/");
   _ensureLine(join(root, ".gitattributes"), "docs/wiki/log.md merge=union");
+  //   .mailmap — authorship is READ from git rather than cached in frontmatter (decision
+  //              2026-07-10), and git's own answer is wrong by default: one person committing
+  //              from a work and a personal profile shows up as two contributors. .mailmap is
+  //              git's built-in fix, and `%aN`/`%aE` honor it everywhere. Seeded with this
+  //              machine's identity as a worked example the team can extend.
+  _ensureMailmap(root);
 }
 
-// git user.name of this machine (memoized; "" when git absent/unset). Stamps an optional
-// `author:` into engine-written pages so a wiki shared across teammates shows whose session a
-// page came from. Deterministic post-processing — never trusted to the LLM prompt.
-let _gitUserMemo: string | null = null;
-export function gitUserName(): string {
-  if (_gitUserMemo !== null) return _gitUserMemo;
+// Seed .mailmap with a commented example plus this machine's identity, so `git log --format=%aN`
+// (and anything reading it) collapses a person's several git identities into one. Idempotent and
+// additive: an existing file is never rewritten, and a missing git identity writes only the note.
+function _ensureMailmap(root: string): void {
+  const path = join(root, ".mailmap");
+  if (existsSync(path)) return;
+  const name = _gitConfig("user.name");
+  const email = _gitConfig("user.email");
+  const header =
+    "# Canonical identities for `git log --format=%aN` (authorship is read from git, never cached\n" +
+    "# in page frontmatter). One line per alias:  Canonical Name <canonical@email>  Alias <alias@email>\n";
+  const seed = name && email ? `${name} <${email}> ${name} <${email}>\n` : "";
   try {
-    const r = spawnSync("git", ["config", "user.name"], { encoding: "utf-8" });
-    _gitUserMemo = r.status === 0 ? (r.stdout ?? "").replace(/[\r\n]+/g, " ").trim() : "";
+    writeFileSync(path, header + seed, "utf-8");
   } catch {
-    _gitUserMemo = "";
+    /* unwritable repo root → skip; scaffolding must never break a close-out */
   }
-  return _gitUserMemo;
 }
 
-// Insert `author: <git user.name>` into a page's frontmatter when absent. No-op when the name
-// is unknown, the page has no frontmatter, or an author is already declared — so solo setups
-// without git identity see zero change.
-export function ensureAuthor(page: string): string {
-  const name = gitUserName();
-  if (!name || !page.startsWith("---")) return page;
-  const close = page.indexOf("\n---", 3);
-  if (close === -1) return page;
-  if (/^author:/m.test(page.slice(0, close))) return page;
-  return page.slice(0, close) + `\nauthor: ${name}` + page.slice(close);
+function _gitConfig(key: string): string {
+  try {
+    const r = spawnSync("git", ["config", key], { encoding: "utf-8" });
+    return r.status === 0 ? (r.stdout ?? "").replace(/[\r\n]+/g, " ").trim() : "";
+  } catch {
+    return "";
+  }
 }
 
 // Append `line` to `file` unless an identical line already exists; create the file if missing.
