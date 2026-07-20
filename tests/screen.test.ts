@@ -67,6 +67,29 @@ describe("screenSecrets — must not eat real evidence", () => {
   });
 });
 
+// Regression (2026-07-20, found by `llmwiki excerpt` emitting one in the clear): the AWS and GCP
+// patterns pinned an EXACT length and closed with \b. A look-alike longer than the real spec
+// matched the first N chars, failed the boundary on char N+1, and passed through unredacted —
+// the one outcome a screener must never have. Both are open-ended now, like the other shapes.
+describe("screenSecrets — over-length look-alikes must not slip through", () => {
+  test.each([
+    ["aws id at spec length (20)", "AKIAIOSFODNN7EXAMPLE"],
+    ["aws id longer than spec", "AKIAIOSFODNN7EXAMPLEEXTRA"],
+    ["aws sts prefix, over-length", "ASIAIOSFODNN7EXAMPLEEXTRA"],
+    ["gcp key longer than spec", `AIza${"a".repeat(40)}`],
+  ])("redacts %s", (_label, sample) => {
+    expect(hasSecret(sample)).toBe(true);
+    expect(screenSecrets(sample).text).not.toContain(sample);
+  });
+
+  test("redacts even when the shape is embedded in a command, not assigned to a name", () => {
+    const cmd = `perl -pi -e "s/AKIAIOSFODNN7EXAMPLEEXTRA/x/g" fixtures.ts`;
+    const r = screenSecrets(cmd);
+    expect(r.text).not.toContain("AKIAIOSFODNN7EXAMPLEEXTRA");
+    expect(r.text).toContain("perl"); // the evidential command survives
+  });
+});
+
 describe("screenSecrets — gutted signal", () => {
   test("a line that is almost entirely secret is flagged gutted (caller drops the excerpt)", () => {
     expect(screenSecrets("ghp_abcdefghijklmnopqrstuvwxyz0123456789").gutted).toBe(true);

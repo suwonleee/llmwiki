@@ -35,8 +35,13 @@ const GUTTED_RATIO_BACKSTOP = 0.2;
 // redacts once, wholly.
 const SECRET_PATTERNS: { name: string; re: RegExp }[] = [
   { name: "private-key-block", re: /-----BEGIN[ A-Z]*PRIVATE KEY-----[\s\S]*?(-----END[ A-Z]*PRIVATE KEY-----)?/g },
-  { name: "aws-access-key-id", re: /\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b/g },
-  { name: "gcp-api-key", re: /\bAIza[0-9A-Za-z_-]{35}\b/g },
+  // Length is open-ended and there is NO trailing \b on these two. An exact `{16}\b` reads the
+  // spec correctly (a real AWS id is exactly 20 chars) and screens wrongly: a longer look-alike
+  // matches the first 16 and then fails the boundary against char 17, so the whole run passes
+  // through UNREDACTED. That is the wrong way to be wrong for a screener — over-redacting a
+  // look-alike costs a few characters of evidence, under-redacting publishes a credential.
+  { name: "aws-access-key-id", re: /\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16,}/g },
+  { name: "gcp-api-key", re: /\bAIza[0-9A-Za-z_-]{35,}/g },
   { name: "slack-token", re: /\bxox[baprs]-[0-9A-Za-z-]{10,}/g },
   { name: "github-token", re: /\bgh[pousr]_[0-9A-Za-z]{20,}/g },
   { name: "anthropic-key", re: /\bsk-ant-[0-9A-Za-z_-]{20,}/g },

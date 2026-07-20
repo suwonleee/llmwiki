@@ -48,9 +48,13 @@ function parseArgs(argv: string[]): Parsed {
   const cmd = argv[0] ?? "";
   const positionals: string[] = [];
   const flags: Record<string, string | boolean> = {};
-  // flags that take a value (others are boolean switches)
+  // Flags that take a value (others are boolean switches). MISSING AN ENTRY FAILS SILENTLY: the
+  // flag parses as `true`, its value falls through to positionals, and the command runs happily
+  // with a default — `excerpt --offset N` quoted the wrong part of a transcript and `migrate
+  // --map old=new` applied no mapping, both without a word. tests/cli-flags.test.ts pins this set
+  // against every flag cli.ts reads as a value, so adding a value flag without listing it fails.
   const valueFlags = new Set([
-    "--path", "--scope", "--limit", "--kind", "--session",
+    "--path", "--scope", "--limit", "--kind", "--session", "--offset", "--map",
     "--write-model", "--verify-model", "--source", "--dest", "--model", "--date", "--min-pages",
     "--repo", "--max-pages", "--prompt", "--corpus", "--label",
     "--page", "--result", "--question",
