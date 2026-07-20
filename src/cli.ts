@@ -2,7 +2,8 @@
 // llmwiki — local-first compounding wiki engine (CLI).
 // Markdown under <workspace>/docs/wiki is the source of truth; .llmwiki/index.db is a
 // rebuildable derived index. No server, no MCP registration required.
-import { WikiIndex } from "./engine/db.ts";
+import { WikiIndex, dedupeByPage } from "./engine/db.ts";
+import * as excerpt from "./engine/excerpt.ts";
 import { updateReferences, autoRegisterCitedTranscripts } from "./engine/refs.ts";
 import { effectiveKo, getConfig, CONFIG_BASENAME, CONFIGS_DIR } from "./engine/config.ts";
 import { migrate } from "./engine/migrate.ts";
@@ -150,6 +151,11 @@ function cmdLint(p: Parsed) {
   if (issues.some((i) => i.severity === "error")) process.exit(1);
 }
 
+// Chunk over-fetch factor for page-level results: ask for K×this chunks so that after collapsing
+// to one row per page there are still K pages to show. 5 matches the factor bench.ts already used
+// for the same reason; a page rarely contributes more than a handful of matching chunks.
+const PAGE_FANOUT = 5;
+
 function cmdSearch(p: Parsed) {
   const ws = p.positionals[0] ?? die("search <workspace> <query> required");
   const query = p.positionals[1] ?? die("search <workspace> <query> required");
@@ -157,7 +163,9 @@ function cmdSearch(p: Parsed) {
   const kind = (p.flags["--kind"] as string) ?? null;
   const w = idx(ws);
   const conn = w.connect();
-  const rows = w.search(conn, query, limit, kind);
+  // Over-fetch chunks, then collapse to one row per page: a reader wants the top-K distinct
+  // PAGES, and several chunks of one page would otherwise consume several slots (dedupeByPage).
+  const rows = dedupeByPage(w.search(conn, query, limit * PAGE_FANOUT, kind), limit);
   conn.close();
   if (!rows.length) {
     console.log("(no matches)");
@@ -169,6 +177,30 @@ function cmdSearch(p: Parsed) {
     const snippet = String(r.content || "").split(/\s+/).filter(Boolean).join(" ").slice(0, 200);
     console.log(`    ${snippet}`);
   }
+}
+
+// Candidate evidence excerpts for a transcript (page format v3). Exists so a warm session REQUESTS
+// an excerpt instead of composing one from memory: everything here is screened for secrets and
+// capped by the engine, and quotes come out verbatim rather than paraphrased.
+function cmdExcerpt(p: Parsed) {
+  const transcript = p.positionals[0] ?? die("excerpt <transcript.jsonl> [--offset N] [--kind fact|judgment]");
+  const offset = parseInt(String(p.flags["--offset"] ?? "0"), 10) || 0;
+  const want = (p.flags["--kind"] as string) ?? null;
+  const limit = p.flags["--limit"] ? parseInt(String(p.flags["--limit"]), 10) || 20 : undefined;
+  const all = excerpt.mintExcerpts(transcript, offset, { limit });
+  const rows = want ? all.filter((e) => e.kind === want) : all;
+  if (!rows.length) {
+    console.log(ko ? "(발췌 후보 없음)" : "(no excerpt candidates)");
+    return;
+  }
+  for (const e of rows) console.log(`${e.kind === "fact" ? "F" : "J"} ${excerpt.renderExcerpt(e).trim()}`);
+  const redacted = rows.filter((e) => e.redactions.length).length;
+  if (redacted)
+    console.log(
+      ko
+        ? `  ⚠ ${redacted}건에서 비밀정보가 가려짐(«redacted») — 그대로 사용해도 안전하다`
+        : `  ⚠ ${redacted} excerpt(s) had secrets redacted («redacted») — safe to use as-is`,
+    );
 }
 
 function cmdUpdateStatus(p: Parsed) {
@@ -248,7 +280,7 @@ async function cmdAutoupdate(p: Parsed) {
   const mode = commit ? "COMMIT" : "DRY-RUN";
   // Always name the TARGET REPO in the header: a write command aimed via a relative path from
   // the wrong cwd is otherwise invisible until pages land in the wrong wiki (measured friction,
-  // 2026-07-07 balcony lifecycle test).
+  // 2026-07-07 multi-repo lifecycle test).
   console.log(`=== autoupdate [${mode}] ${rows.length} transcript(s) → ${resolve(ws)} ===`);
   for (const r of rows) {
     let line = `  [${r.verdict}] ${String(r.transcript).slice(0, 12)}`;
@@ -742,8 +774,8 @@ function cmdQuizStatus(p: Parsed) {
   const due = s.dueWrong + s.dueReview;
   console.log(
     ko
-      ? `quiz: 장부 ${s.total}항목 | 오늘 due ${due}건 (오답복습 ${s.dueWrong} · 주기복습 ${s.dueReview}) | 신규 후보 ${s.newCandidates} | 오늘 출제됨 ${s.askedToday}`
-      : `quiz: ledger ${s.total} item(s) | due today ${due} (wrong-review ${s.dueWrong} · curve-review ${s.dueReview}) | new candidates ${s.newCandidates} | asked today ${s.askedToday}`,
+      ? `quiz: 장부 ${s.total}항목 | 오늘 due ${due}건 (오답복습 ${s.dueWrong} · 주기복습 ${s.dueReview}) | 신규 후보 ${s.newCandidates} | 오늘 출제됨 ${s.askedToday} | 세션 ${s.questions}문(최대 ${s.maxQuestions})`
+      : `quiz: ledger ${s.total} item(s) | due today ${due} (wrong-review ${s.dueWrong} · curve-review ${s.dueReview}) | new candidates ${s.newCandidates} | asked today ${s.askedToday} | session ${s.questions}q (max ${s.maxQuestions})`,
   );
   if (s.nextDue && due === 0) console.log(ko ? `  다음 due: ${s.nextDue}` : `  next due: ${s.nextDue}`);
   for (const w of s.weak)
@@ -759,13 +791,21 @@ function cmdQuizStatus(p: Parsed) {
 // question (grounding rule: the page is the answer key).
 function cmdQuizNext(p: Parsed) {
   const ws = p.positionals[0] ?? die("quiz-next <workspace> [--limit N] [--date YYYY-MM-DD]");
-  const limit = Math.max(1, parseInt(String(p.flags["--limit"] ?? "5"), 10) || 5);
-  const sel = quiz.selectNext(ws, { limit, date: quizDate(p) });
+  // No --limit → config default ([quiz] questions); the engine clamps to the fixed ceiling.
+  const rawLimit = p.flags["--limit"];
+  const requested = rawLimit === undefined ? undefined : Math.max(1, parseInt(String(rawLimit), 10) || 1);
+  const sel = quiz.selectNext(ws, { limit: requested, date: quizDate(p) });
   console.log(
     ko
       ? `quiz-next: ${sel.picks.length}문항 선택 (전체 due — 오답복습 ${sel.dueWrong} · 주기복습 ${sel.dueReview} / 신규 후보 ${sel.newCandidates})`
       : `quiz-next: ${sel.picks.length} item(s) selected (all due — wrong-review ${sel.dueWrong} · curve-review ${sel.dueReview} / new candidates ${sel.newCandidates})`,
   );
+  if (requested !== undefined && requested > sel.limit)
+    console.log(
+      ko
+        ? `  ⚠ 요청 ${requested}문 → 세션 상한 ${sel.limit}문으로 제한됨 (엔진 고정 상한)`
+        : `  ⚠ requested ${requested} → capped at the session ceiling of ${sel.limit} (fixed engine cap)`,
+    );
   if (!sel.picks.length) {
     console.log(
       ko
@@ -836,6 +876,7 @@ const HANDLERS: Record<string, (p: Parsed) => void | Promise<void>> = {
   "distill-verify": cmdDistillVerify,
   topics: cmdTopics,
   "register-transcript": cmdRegisterTranscript,
+  excerpt: cmdExcerpt,
   review: cmdReview,
   overview: cmdOverview,
   gaps: cmdGaps,

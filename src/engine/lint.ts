@@ -7,7 +7,9 @@
 import type { Database } from "bun:sqlite";
 import { resolve as pathResolve, dirname as pathDirname } from "node:path";
 import { existsSync } from "node:fs";
-import { parseCitationFilename, stripCode } from "./refs.ts";
+import { parseCitationFilename, stripCode, stripEvidence } from "./refs.ts";
+import { parseExcerpts, verifyExcerpt } from "./excerpt.ts";
+import { hasSecret } from "./screen.ts";
 import { L0_BUDGET, L0_LINT_BUDGET } from "./budgets.ts";
 import { effectiveKo, getConfig, type WikiConfig } from "./config.ts";
 
@@ -31,6 +33,7 @@ export interface WikiDoc {
   content?: string | null;
   source_kind?: string | null;
   title?: string | null;
+  metadata?: string | null; // JSON; for a registered transcript holds { transcript_path, session_id }
 }
 
 export interface SourceRow {
@@ -244,6 +247,7 @@ export class Linter {
     }
     issues.push(...this._banned(path, content));
     issues.push(...this._citations(path, content, sourceLookup));
+    issues.push(...this._excerpts(doc, content, sourceLookup));
     issues.push(...this._links(doc, content, wikiLookup));
     issues.push(...this._graph(doc, content, sourceLookup));
     issues.push(...this._orphan(doc, wikiCount));
@@ -261,15 +265,20 @@ export class Linter {
     const path = this._p(doc);
     const dir = this.cfg.topicDir;
     if (!path.includes(`/${dir}/`) && !path.startsWith(`${dir}/`)) return [];
-    if (content.length <= TOPIC_BUDGET) return [];
+    // Measure PROSE, not evidence. This budget is a re-distill trigger whose only sanctioned fix
+    // is compressing prose while keeping every citation — so counting v3 excerpts would fire it on
+    // pages whose prose is fine, and make "cite less" the cheapest way to get under budget. In a
+    // system whose entire value is provenance, that incentive points the wrong way.
+    const prose = stripEvidence(content);
+    if (prose.length <= TOPIC_BUDGET) return [];
     return [
       {
         severity: "warn",
         code: "topic-oversize",
         path,
         message: this.ko
-          ? `주제 페이지가 예산(${TOPIC_BUDGET}자)을 초과 (${content.length}자) — deep 패스에서 인용된 transcript들로부터 재증류 권장 (인용 세트 축소 금지·위키→위키 재유도 금지)`
-          : `topic page is over budget (${content.length} > ${TOPIC_BUDGET} chars) — re-distill it from its cited transcripts in a deep pass (keep every citation; never rewrite from other wiki pages)`,
+          ? `주제 페이지 본문이 예산(${TOPIC_BUDGET}자)을 초과 (${prose.length}자, 근거 발췌 제외) — deep 패스에서 인용된 transcript들로부터 재증류 권장 (인용 세트 축소 금지·위키→위키 재유도 금지)`
+          : `topic page prose is over budget (${prose.length} > ${TOPIC_BUDGET} chars, excluding evidence excerpts) — re-distill it from its cited transcripts in a deep pass (keep every citation; never rewrite from other wiki pages)`,
       },
     ];
   }
@@ -467,6 +476,88 @@ export class Linter {
         });
       }
     }
+    return out;
+  }
+
+  // ---- v3 evidence excerpts ------------------------------------------------------------------
+  //
+  // Three checks over the indented evidence lines under footnote definitions. All three are
+  // deliberately quiet where they cannot be right:
+  //   • excerpt-secret     (error) — always checkable, and a leak is unrecoverable once pushed.
+  //   • unverified-excerpt (error) — only when the cited transcript is READABLE HERE. On a
+  //     teammate's machine the transcript is absent, and "cannot check" must never read as
+  //     "wrong" — that would make every shared page fail lint, the exact failure v3 prevents.
+  //   • missing-excerpt    (warn)  — only when the transcript is readable, i.e. when someone can
+  //     actually fill it. An old page whose transcript has rotated away would otherwise carry a
+  //     warning nobody can ever resolve, which is how warnings become noise.
+  _excerpts(doc: WikiDoc, content: string, sourceLookup: Record<string, WikiDoc>): LintIssue[] {
+    if (!this._isWiki(doc) || this._isLedger(doc)) return [];
+    const path = this._p(doc);
+    const out: LintIssue[] = [];
+
+    // footnote id → the transcript path it cites, when that file is readable on THIS machine
+    const localTranscript = new Map<string, string>();
+    const footnotes = new Set<string>();
+    for (const m of content.matchAll(FOOTNOTE_DEF)) {
+      const fid = m[1]!;
+      footnotes.add(fid);
+      const [filename] = parseCitationFilename(m[2]!);
+      const src = this._resolveSource(filename, sourceLookup);
+      if (!src?.metadata) continue;
+      try {
+        const p = JSON.parse(String(src.metadata))?.transcript_path;
+        if (typeof p === "string" && p.includes("/") && existsSync(p)) localTranscript.set(fid, p);
+      } catch {
+        /* unparseable metadata → treat as "no local transcript" */
+      }
+    }
+
+    const withExcerpt = new Set<string>();
+    for (const ex of parseExcerpts(content)) {
+      withExcerpt.add(ex.footnote);
+
+      if (hasSecret(ex.text)) {
+        out.push({
+          severity: "error",
+          code: "excerpt-secret",
+          path,
+          message: this.ko
+            ? `${ex.line}행 근거 발췌에 비밀정보로 보이는 값이 있다 — 커밋 전에 제거할 것 (한 번 푸시되면 되돌릴 수 없다)`
+            : `evidence excerpt on line ${ex.line} contains what looks like a secret — remove it before committing (a pushed secret cannot be recalled)`,
+        });
+      }
+
+      const tp = localTranscript.get(ex.footnote);
+      if (tp && verifyExcerpt(ex.text, tp) === false) {
+        out.push({
+          severity: "error",
+          code: "unverified-excerpt",
+          path,
+          message: this.ko
+            ? `${ex.line}행 발췌가 인용한 transcript에 없다 (\`^${ex.footnote}\`) — 원문 그대로 옮기거나 주장을 내릴 것`
+            : `excerpt on line ${ex.line} does not appear in the transcript it cites (\`^${ex.footnote}\`) — quote it verbatim or drop the claim`,
+        });
+      }
+    }
+
+    // Judgment pages assert what a human decided and why; that is the class a teammate cannot
+    // re-derive from code, so it is where portable evidence pays. Canonical domains only — a
+    // custom config's domains simply don't trigger this, which is the safe direction to fail.
+    const domain = String(parseFrontmatter(content).domain ?? "");
+    if (domain === "direction" || domain === "decision") {
+      for (const fid of footnotes) {
+        if (withExcerpt.has(fid) || !localTranscript.has(fid)) continue;
+        out.push({
+          severity: "warn",
+          code: "missing-excerpt",
+          path,
+          message: this.ko
+            ? `각주 \`^${fid}\`에 근거 발췌가 없다 — transcript가 아직 이 머신에 있으니 지금 채울 수 있다 (\`llmwiki excerpt\`)`
+            : `footnote \`^${fid}\` carries no evidence excerpt — its transcript is still readable here, so it can be filled now (\`llmwiki excerpt\`)`,
+        });
+      }
+    }
+
     return out;
   }
 
