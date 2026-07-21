@@ -222,3 +222,18 @@ heavy = "toml-heavy"
     expect(defaults().models.heavy).toBe("env-heavy");
   });
 });
+
+// Personal overlay ([private] dirs): additional LOCAL-ONLY wiki folders.
+test("[private] dirs parses; default is empty", () => {
+  expect(defaults().privateDirs).toEqual([]);
+  const c = loadFrom(tmpToml('config_version = 1\n[private]\ndirs = ["9_personal", "8_scratch"]\n'));
+  expect(c.privateDirs).toEqual(["9_personal", "8_scratch"]);
+  expect(c.error).toBeUndefined();
+});
+
+test("a private dir colliding with a shared dir is rejected — it would gitignore a team category", () => {
+  const c = loadFrom(tmpToml('config_version = 1\n[private]\ndirs = ["5_topic"]\n'));
+  expect(c.error).toContain("collides");
+  const d = loadFrom(tmpToml('config_version = 1\n[private]\ndirs = ["3_decision"]\n'));
+  expect(d.error).toContain("collides");
+});

@@ -116,6 +116,7 @@ function cmdInit(p: Parsed) {
   const cfg = getConfig(w.root);
   const scaffold = [cfg.queueDir, ...cfg.categories.map((c) => c.dir), cfg.topicDir];
   for (const d of scaffold) mkdirSync(join(w.root, "docs", "wiki", d), { recursive: true });
+  update.ensurePrivateDirs(w.root, cfg);
   const [neu] = w.indexAll();
   // Materialize the citation/link graph too (same as `index`). Without this, a fresh clone's
   // first `lint` right after setup.sh's `init` reports a spurious citation-graph-mismatch on
@@ -124,6 +125,7 @@ function cmdInit(p: Parsed) {
   console.log(`✓ Initialized ${w.root}`);
   console.log(`  docs/wiki/ + .llmwiki/index.db created; indexed ${neu} file(s)`);
   console.log(`  categories scaffolded: ${scaffold.join(" · ")}`);
+  if (cfg.privateDirs.length) console.log(`  private (local-only, auto-gitignored): ${cfg.privateDirs.join(" · ")}`);
   console.log(`  refs: ${r.tc} citation, ${r.tl} link edge(s) across ${r.pages} page(s)`);
 }
 

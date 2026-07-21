@@ -60,6 +60,12 @@ config_version = 1
 # dir = "6_quiz"         # human memory loop (quiz ledger + session records) — never indexed/searched
 # questions = 3          # default questions per /wiki-quiz session (a numeric argument raises it; engine caps at 7)
 
+# [private]
+# dirs = ["9_personal"]  # additional LOCAL-ONLY wiki folders: indexed·searched·quizzed like any
+#                        # page, but auto-gitignored — personal pages inside a shared repo without
+#                        # manual git fencing. Committing this config makes the rule team-wide.
+#                        # Must not collide with a category/topic/queue/quiz dir.
+
 # --- LLM model tiers (per generative pass) -----------------------------------------
 # light = WRITE/drafting tier (cheap, high-volume). heavy = VERIFY gate + semantic
 # review tier (judgment). Resolution order: env > this [models] block > builtin default.

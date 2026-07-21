@@ -140,6 +140,19 @@ export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(w
   //              git's built-in fix, and `%aN`/`%aE` honor it everywhere. Seeded with this
   //              machine's identity as a worked example the team can extend.
   _ensureMailmap(root);
+  ensurePrivateDirs(root, cfg);
+}
+
+// Personal overlay (config [private] dirs): full local wiki citizens — indexed, searched,
+// quizzed, linted — that never ship. The engine owns the git fencing (idempotent ignore lines),
+// so "shared wiki, personal pages" costs no manual .gitignore discipline and no `git add .`
+// accident surface; a committed config makes the convention team-wide. An empty list (the
+// default) changes nothing — the team feature stays additive and silent for solo use.
+export function ensurePrivateDirs(root: string, cfg: WikiConfig): void {
+  for (const d of cfg.privateDirs) {
+    mkdirSync(join(root, "docs", "wiki", d), { recursive: true });
+    _ensureLine(join(root, ".gitignore"), `docs/wiki/${d}/`);
+  }
 }
 
 // Seed .mailmap with a commented example plus this machine's identity, so `git log --format=%aN`

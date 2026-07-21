@@ -38,6 +38,7 @@ export interface WikiConfig {
   queueDir: string; // human-judgment queue
   quizDir: string; // human memory loop (quiz ledger + session records) — never indexed/searched
   quizQuestions: number; // default questions per /wiki-quiz session (argument can raise it; engine caps at QUIZ_MAX_QUESTIONS)
+  privateDirs: string[]; // additional LOCAL-ONLY wiki dirs — indexed/searched/quizzed like any page, auto-gitignored, never committed
   models: { light: string; heavy: string }; // LLM tier per pass — env LLMWIKI_MODEL_LIGHT/HEAVY overrides this
   files: { l0: string; overview: string; log: string };
   legacyDirs: string[]; // old flat category names still scanned for staleness/index
@@ -78,6 +79,7 @@ export function defaults(): WikiConfig {
     queueDir: "0_review",
     quizDir: "6_quiz",
     quizQuestions: 3,
+    privateDirs: [],
     models: resolveModels(), // env-or-builtin when there is no toml [models]
     files: { l0: "current-state.md", overview: "overview.md", log: "log.md" },
     legacyDirs: ["milestones", "insights", "decisions", "directions"],
@@ -115,6 +117,16 @@ function _validate(c: WikiConfig): string | null {
     return `quizDir collides with a content dir: ${JSON.stringify(c.quizDir)} (the quiz subtree is never indexed)`;
   if (!Number.isInteger(c.quizQuestions) || c.quizQuestions < 1)
     return `quiz questions must be an integer ≥ 1: ${JSON.stringify(c.quizQuestions)}`;
+  // Private dirs are ADDITIONAL local-only folders. Colliding with a shared dir would silently
+  // gitignore a whole team category — a surprise no config comment can repair; forbid it.
+  const seen = new Set<string>();
+  for (const d of c.privateDirs) {
+    if (!d || /[\\/]/.test(d)) return `private dir invalid: ${JSON.stringify(d)}`;
+    if (seen.has(d)) return `duplicate private dir: ${d}`;
+    seen.add(d);
+    if (d === c.topicDir || d === c.queueDir || d === c.quizDir || c.categories.some((cat) => cat.dir === d))
+      return `private dir collides with a shared wiki dir: ${JSON.stringify(d)} (private dirs are additional, local-only folders)`;
+  }
   return null;
 }
 
@@ -141,6 +153,7 @@ export function loadFrom(path: string): WikiConfig {
     if (raw.queue?.dir !== undefined) cfg.queueDir = String(raw.queue.dir);
     if (raw.quiz?.dir !== undefined) cfg.quizDir = String(raw.quiz.dir);
     if (raw.quiz?.questions !== undefined) cfg.quizQuestions = Number(raw.quiz.questions);
+    if (Array.isArray(raw.private?.dirs)) cfg.privateDirs = raw.private.dirs.map(String);
     // Models: env > toml [models] > builtin default (resolveModels enforces the order).
     cfg.models = resolveModels({
       light: raw.models?.light !== undefined ? String(raw.models.light) : undefined,
