@@ -53,6 +53,17 @@ export function _isDue(lastDate: string | undefined, today: string, intervalDays
   return (now - last) / 86_400_000 >= intervalDays;
 }
 
+// Silent-failure detector for backgrounded commit runs (pure, exported for tests). A commit run
+// stamps `launched` right before the heavy LLM call; only a COMPLETED commit overwrites the state
+// with a launch-free `{hash, date, dest}` stamp. So "launched present, and no completion on or
+// after it" means a run started and died without a trace — the exact success-looking failure a
+// backgrounded review would otherwise hide. Visibility only: the cadence gate keys off `date`,
+// so a died run leaves the review due and the next close-out re-runs it (self-healing).
+export function _launchIncomplete(st: { date?: string; launched?: string }): boolean {
+  if (!st.launched) return false;
+  return !st.date || st.date < st.launched;
+}
+
 const _PROMPT = `You are the **semantic self-healing (semantic lint)** checker for an LLM Wiki. Below are one
 project's ({repo}) wiki pages (title, date, gist, excerpt, cites=footnote-citation count). Look for these 5 things:
 
@@ -230,13 +241,24 @@ export function _runHash(briefs: Brief[]): string {
 function _statePath(root: string): string {
   return join(root, ".llmwiki", "review-state.json");
 }
-function _readState(root: string): { hash?: string; date?: string; dest?: string } {
+function _readState(root: string): { hash?: string; date?: string; dest?: string; launched?: string } {
   try {
     return JSON.parse(readFileSync(_statePath(root), "utf-8"));
   } catch {
     return {};
   }
 }
+// Stamp "a commit run is past all gates and about to spend the LLM call". Merges into the
+// existing state so the last completed stamp stays readable; the completion _writeState
+// overwrites with a launch-free object, which is what clears the marker.
+function _markLaunched(root: string, date: string): void {
+  const dir = join(root, ".llmwiki");
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  writeFileSync(_statePath(root), JSON.stringify({ ..._readState(root), launched: date }, null, 2), "utf-8");
+}
+// A completion writes a launch-free object — this is what clears the `launched` marker, and it
+// also clears any CONCURRENT run's marker (two same-repo close-outs racing): acceptable, because
+// the erasing run is itself a completed review and the cadence gate re-runs on schedule anyway.
 function _writeState(root: string, st: { hash: string; date: string; dest: string }): void {
   const dir = join(root, ".llmwiki");
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -261,6 +283,14 @@ export async function review(ws: string, opts: ReviewOpts): Promise<Record<strin
   // (env LLMWIKI_MODEL_HEAVY > toml [models].heavy > builtin).
   const model = opts.model ?? getConfig(root).models.heavy;
 
+  // Backgrounded runs fail silently by construction (no terminal to error into) — surface a
+  // prior launch that never committed on EVERY exit path, so whichever call the next close-out
+  // makes reports it. Detection only; the cadence gate below still re-runs the died review.
+  const st0 = _readState(root);
+  const prevIncomplete = _launchIncomplete(st0)
+    ? { prev_launch_incomplete: st0.launched, prev_launch_note: `a review launched ${st0.launched} never committed (backgrounded run died or is still running)` }
+    : {};
+
   // Cadence gate first — cheaper than building briefs (which reindexes). Only committed runs
   // stamp the state, so the gate keys off the last *committed* review, matching the close-out
   // auto-run it exists for.
@@ -270,6 +300,7 @@ export async function review(ws: string, opts: ReviewOpts): Promise<Record<strin
       return {
         verdict: "skip",
         due: false,
+        ...prevIncomplete,
         reason: `not due: last review ${st.date} is younger than ${REVIEW_INTERVAL_DAYS}d (interval via LLMWIKI_REVIEW_INTERVAL_DAYS; --force to override).`,
       };
     }
@@ -280,6 +311,7 @@ export async function review(ws: string, opts: ReviewOpts): Promise<Record<strin
     return {
       verdict: "skip",
       n_pages: briefs.length,
+      ...prevIncomplete,
       reason: `검사 재료 부족: ${briefs.length} < min_pages ${minPages}. 페이지 더 쌓인 뒤 재시도.`,
     };
   }
@@ -297,6 +329,7 @@ export async function review(ws: string, opts: ReviewOpts): Promise<Record<strin
         verdict: "skip",
         n_pages: scoped.length,
         cached: true,
+        ...prevIncomplete,
         reason: `no page changes since last review (${st.date}); ${scoped.length}/${briefs.length} in scope. --force to re-run.`,
       };
     }
@@ -307,15 +340,20 @@ export async function review(ws: string, opts: ReviewOpts): Promise<Record<strin
     .join("\n");
 
   const prompt = _PROMPT.replace("{repo}", name).replace("{date}", date).replace("{scopenote}", note).replace("{pages}", pagesTxt);
+  // Past every gate, about to spend the heavy call: stamp the launch (commit runs only — a
+  // dry-run never commits by design, so a launch marker there would be a permanent false
+  // positive). A successful commit's _writeState below overwrites launch-free = completion.
+  if (commit) _markLaunched(root, date);
   const raw = await llm(prompt, model);
   const page = _extractPage(raw);
   if (raw.startsWith("__ERROR__") || !page.startsWith("---")) {
-    return { verdict: "fail", n_pages: scoped.length, reason: raw.slice(0, 200) };
+    return { verdict: "fail", n_pages: scoped.length, ...prevIncomplete, reason: raw.slice(0, 200) };
   }
 
   const result: Record<string, any> = {
     verdict: "reviewed",
     n_pages: scoped.length,
+    ...prevIncomplete,
     scope: { included: scoped.length, total: briefs.length, bounded: scoped.length < briefs.length },
   };
   const dest = join(root, "docs", "wiki", getConfig(root).queueDir, `semantic-review-${date}.md`);

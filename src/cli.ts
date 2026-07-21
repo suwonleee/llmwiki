@@ -329,6 +329,15 @@ async function cmdReview(p: Parsed) {
   });
   const mode = commit ? "COMMIT" : "DRY-RUN";
   console.log(`=== review [${ko ? "의미 lint" : "semantic lint"} · ${mode}] ${ws} ===`);
+  // Backgrounded runs have no terminal to error into — this line is the only place a silent
+  // death becomes visible, so print it on every verdict, skip included.
+  if (r.prev_launch_incomplete) {
+    console.log(
+      ko
+        ? `  ⚠️  ${r.prev_launch_incomplete} 발사된 리뷰가 커밋 없이 종료됨 (백그라운드 사망 또는 아직 진행 중) — cadence 게이트가 재실행을 보장`
+        : `  ⚠️  a review launched ${r.prev_launch_incomplete} never committed (backgrounded run died or still running) — the cadence gate guarantees a re-run`,
+    );
+  }
   if (r.verdict === "skip") {
     console.log(`  ⏭  ${r.reason}`);
     return;
