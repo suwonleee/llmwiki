@@ -15,7 +15,7 @@ The compounding loop so far closes only the LLM's side: capture → `/wiki-fast`
 - **Latency contract**: default question count = config `[quiz] questions` (stock 3); a numeric argument raises it, the engine caps at 7 (fixed). Minutes total; a quiz people skip reinforces nothing — keep it light enough to be a habit.
 
 ## Scheduling model (engine-owned — don't re-derive it)
-- Ledger: `docs/wiki/6_quiz/quiz-ledger.md`, engine-managed markers (`<!-- quiz:{…} -->`) — **never hand-edit**.
+- Ledger: `docs/wiki/6_quiz/quiz-ledger.<id>.md` — **per person** (the forgetting curve is per-human; `<id>` resolves from git identity, `LLMWIKI_QUIZ_IDENTITY` overrides; a legacy bare `quiz-ledger.md` is adopted by the first identity to quiz, history intact). Engine-managed markers (`<!-- quiz:{…} -->`) — **never hand-edit**.
 - Forgetting curve, day-granular (min 1 day): boxes at **1 · 3 · 7 · 16 · 35 · 60 days**. correct → next box; wrong/skip → box 0. An item asked today is never re-selected today.
 - `quiz-next` priority: ① wrong/skip items due (oldest first) ② correct items whose curve review arrived ③ never-quizzed pages — direction(4) > decision(3) > insight·topic(2) > milestone(1), newest first within a weight.
 - superseded/draft pages and vanished pages are excluded automatically; the quiz layer itself is excluded from index/search/cold-start (one-directional: wiki → human).

@@ -16,7 +16,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { effectiveKo, getConfig, type WikiConfig } from "./config.ts";
-import { LEDGER_BASENAME, parseLedger, renderLedger, type QuizEntry } from "./quiz.ts";
+import { parseLedger, renderLedger, type QuizEntry } from "./quiz.ts";
 import { WikiIndex } from "./db.ts";
 import { updateReferences, autoRegisterCitedTranscripts } from "./refs.ts";
 import { Linter, type WikiIndexLike } from "./lint.ts";
@@ -177,26 +177,30 @@ export function migrate(
   // The quiz ledger stores page identities as BARE wiki-relative paths — none of rewriteLinks'
   // three token forms. Without a remap, every renamed category's entries turn "missing", get
   // pruned, and restart as new: silent loss of the box/due history the quiz layer exists to
-  // accumulate (quiz.ts). Planned here, written after the dir renames.
-  const ledgerFile = join(wiki, cfg.quizDir, LEDGER_BASENAME);
-  let ledgerEntries: QuizEntry[] = [];
-  let ledgerRemapped = 0;
-  if (existsSync(ledgerFile)) {
-    try {
-      ledgerEntries = parseLedger(readFileSync(ledgerFile, "utf-8"));
-      for (const e of ledgerEntries) {
-        const owner = pairs.find((pair) => e.page.startsWith(pair.from + "/"));
-        if (owner) {
-          e.page = owner.to + e.page.slice(owner.from.length);
-          ledgerRemapped += 1;
+  // accumulate (quiz.ts). Ledgers are per person (quiz-ledger.<id>.md; the bare pre-identity
+  // name included) — every one found is remapped. Planned here, written after the dir renames.
+  const quizDirPath = join(wiki, cfg.quizDir);
+  const ledgers: { file: string; entries: QuizEntry[]; remapped: number }[] = [];
+  if (existsSync(quizDirPath)) {
+    for (const f of readdirSync(quizDirPath).filter((n) => /^quiz-ledger.*\.md$/.test(n))) {
+      const file = join(quizDirPath, f);
+      try {
+        const entries = parseLedger(readFileSync(file, "utf-8"));
+        let remapped = 0;
+        for (const e of entries) {
+          const owner = pairs.find((pair) => e.page.startsWith(pair.from + "/"));
+          if (owner) {
+            e.page = owner.to + e.page.slice(owner.from.length);
+            remapped += 1;
+          }
         }
+        if (remapped) ledgers.push({ file, entries, remapped });
+      } catch {
+        // fail-safe: an unparsable ledger never aborts a migrate; its entries stay untouched
       }
-    } catch {
-      // fail-safe: an unparsable ledger never aborts a migrate; entries stay untouched
-      ledgerEntries = [];
-      ledgerRemapped = 0;
     }
   }
+  const ledgerRemapped = ledgers.reduce((n, l) => n + l.remapped, 0);
 
   if (!opts.commit) {
     return { verdict: "planned", pairs, strays, linksRewritten: links, domainsRewritten: domains, quizLedgerRemapped: ledgerRemapped };
@@ -214,8 +218,8 @@ export function migrate(
       renameSync(from, to);
     }
   }
-  if (ledgerRemapped) {
-    writeFileSync(ledgerFile, renderLedger(ledgerEntries, new Date().toISOString().slice(0, 10), effectiveKo(cfg)), "utf-8");
+  for (const l of ledgers) {
+    writeFileSync(l.file, renderLedger(l.entries, new Date().toISOString().slice(0, 10), effectiveKo(cfg)), "utf-8");
   }
   writeFileSync(join(wiki, SCHEMA_VERSION_FILE), schemaSnapshot(cfg) + "\n", "utf-8");
 

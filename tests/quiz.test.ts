@@ -25,6 +25,10 @@ import { defaults, loadFrom, _resetForTests } from "../src/engine/config.ts";
 import { migrate } from "../src/engine/migrate.ts";
 import { citedTranscripts } from "../src/engine/reconcile.ts";
 
+// Ledgers are per-identity; pin it so filename assertions are machine-independent
+// (the git-config fallback would resolve to whoever runs the suite).
+process.env.LLMWIKI_QUIZ_IDENTITY = "tester";
+
 const D0 = "2026-07-13"; // fixed dates — the scheduler is deterministic, tests never use real today
 const D1 = "2026-07-14";
 
@@ -288,7 +292,7 @@ describe("quiz", () => {
       conn.close();
       // and the quiz commands follow the same dir
       recordResult(root, { page: "3_decision/dec-b.md", result: "wrong", date: D0 });
-      expect(loadLedger(root).path.endsWith("9_memory/quiz-ledger.md")).toBe(true);
+      expect(loadLedger(root).path.endsWith("9_memory/quiz-ledger.tester.md")).toBe(true);
     } finally {
       rmSync(clone, { recursive: true, force: true });
     }

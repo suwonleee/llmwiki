@@ -19,13 +19,16 @@
 //     guard, hence invisible to search/lint/review/synthesis/cold-start. The wiki must never
 //     re-ingest its own quiz artifacts (a self-feeding loop the anti-drift rule forbids) —
 //     the flow is one-directional: wiki → human.
-//   • Ledger = quiz-ledger.md in the gap-queue pattern: one human-readable line per item plus
+//   • Ledger = quiz-ledger.<id>.md, PER PERSON (the forgetting curve is per-human — one shared
+//     ledger in a team repo would interleave everyone's review history into everyone's
+//     scheduling), in the gap-queue pattern: one human-readable line per item plus
 //     a machine marker (<!-- quiz:{json} -->). Engine-owned; hand-editing markers is
 //     unsupported (any quiz-record rewrites the file whole).
 //   • Dates are day-granular UTC YYYY-MM-DD (the engine-wide convention). An item asked today
 //     is never re-selected today — the minimum interval really is 1 day.
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import { getConfig, isHumanReviewDir, logDirs, effectiveKo, type WikiConfig } from "./config.ts";
 import { parseFrontmatter } from "./lint.ts";
 
@@ -98,8 +101,56 @@ function sanitizeQ(q: string): string {
   return q.replace(/\s+/g, " ").replace(/-->/g, "→").trim().slice(0, 200);
 }
 
+// Ledger identity — deterministic and OFFLINE: env override → git email local-part → git
+// user.name → "me". Git config is read at global scope too, so a non-repo workspace still
+// resolves to the machine's identity rather than "me". Memoized per root: ledgerPath sits on
+// the cold-start path (context C2 → dueCount), and one subprocess per session is enough.
+const _identityCache = new Map<string, string>();
+export function quizIdentity(root: string): string {
+  const env = process.env.LLMWIKI_QUIZ_IDENTITY;
+  if (env) return _sanitizeId(env) || "me";
+  const hit = _identityCache.get(root);
+  if (hit) return hit;
+  let id = "";
+  for (const key of ["user.email", "user.name"]) {
+    try {
+      const r = spawnSync("git", ["-C", root, "config", key], { encoding: "utf-8" });
+      const raw = (r.stdout || "").trim();
+      id = _sanitizeId(key === "user.email" ? (raw.split("@")[0] ?? "") : raw);
+      if (id) break;
+    } catch {
+      /* no git on PATH → fall through */
+    }
+  }
+  const resolved = id || "me";
+  _identityCache.set(root, resolved);
+  return resolved;
+}
+
+function _sanitizeId(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^[-.]+|[-.]+$/g, "")
+    .slice(0, 40);
+}
+
 function ledgerPath(root: string, cfg: WikiConfig): string {
-  return join(root, "docs", "wiki", cfg.quizDir, LEDGER_BASENAME);
+  const dir = join(root, "docs", "wiki", cfg.quizDir);
+  const mine = join(dir, `quiz-ledger.${quizIdentity(root)}.md`);
+  // One-time adoption of the pre-identity ledger (bare quiz-ledger.md): the rename carries the
+  // box/due history over intact. First identity to quiz adopts it — right for the solo→team
+  // transition (the history was theirs); later identities start fresh, and a repo converges to
+  // one ledger per person. Adoption failure (read-only fs) degrades to a fresh ledger.
+  const legacy = join(dir, LEDGER_BASENAME);
+  if (!existsSync(mine) && existsSync(legacy)) {
+    try {
+      renameSync(legacy, mine);
+    } catch {
+      /* fresh ledger */
+    }
+  }
+  return mine;
 }
 
 // ---- ledger (parse ↔ render round-trip; markers carry the state) ---------------------------
