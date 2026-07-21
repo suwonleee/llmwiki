@@ -28,7 +28,7 @@ import { runBench, writeResults } from "./engine/bench.ts";
 import { verifyDistillFiles } from "./engine/distill.ts";
 import { runArm, loadArm, judgeArms } from "./engine/compare.ts";
 import { CLONE_ROOT } from "./engine/paths.ts";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 // User-facing CLI output adapts to LLMWIKI_LANG (default English, Korean when set) — same
@@ -109,6 +109,13 @@ function cmdInit(p: Parsed) {
   const ws = p.positionals[0] ?? die("init <workspace> required");
   const w = idx(ws);
   w.init();
+  // Scaffold the category folders (config-aware: custom [[category]] conventions win) so a
+  // newcomer's first page has a place to land without first learning the folder layout —
+  // fresh-install E2E (2026-07-21) showed init leaving docs/wiki/ empty and the first write
+  // failing on the missing category dir. Idempotent: re-running init re-creates a deleted dir.
+  const cfg = getConfig(w.root);
+  const scaffold = [cfg.queueDir, ...cfg.categories.map((c) => c.dir), cfg.topicDir];
+  for (const d of scaffold) mkdirSync(join(w.root, "docs", "wiki", d), { recursive: true });
   const [neu] = w.indexAll();
   // Materialize the citation/link graph too (same as `index`). Without this, a fresh clone's
   // first `lint` right after setup.sh's `init` reports a spurious citation-graph-mismatch on
@@ -116,6 +123,7 @@ function cmdInit(p: Parsed) {
   const r = rebuildRefs(w);
   console.log(`✓ Initialized ${w.root}`);
   console.log(`  docs/wiki/ + .llmwiki/index.db created; indexed ${neu} file(s)`);
+  console.log(`  categories scaffolded: ${scaffold.join(" · ")}`);
   console.log(`  refs: ${r.tc} citation, ${r.tl} link edge(s) across ${r.pages} page(s)`);
 }
 

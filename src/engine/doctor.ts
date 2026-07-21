@@ -35,8 +35,11 @@ const CORE = [
   "skill/wiki-ask.md",
   "skill/wiki-deep.md",
 ];
-// slash commands that must be present in every profile's commands/ dir
-const COMMANDS = ["wiki-fast.md", "wiki-ask.md", "wiki-deep.md"] as const;
+// slash commands that must be present in every profile's commands/ dir.
+// Must stay in sync with wire.ts SKILLS and the repo's skill/ dir — tests/skills-drift.test.ts
+// enforces all three (drift here is silent: wire installs a command doctor never checks, so its
+// loss is invisible — the same success-looking-failure class as the CLI value-flag allowlist).
+const COMMANDS = ["wiki-fast.md", "wiki-ask.md", "wiki-deep.md", "wiki-quiz.md"] as const;
 const PLIST = join(HOME, "Library", "LaunchAgents", "com.llmwiki.daemon.plist");
 const LABEL = "com.llmwiki.daemon";
 // canonical SessionStart read-injection hook — what --fix re-registers if a profile lost it
