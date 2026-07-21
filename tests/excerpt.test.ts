@@ -106,10 +106,10 @@ describe("excerpt", () => {
   });
 
   test("secrets never reach a minted excerpt (the gate is inside mint, not left to callers)", () => {
-    write(transcript(`키를 확인하려고 AWS_SECRET_ACCESS_KEY='wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY' 로 호출했다`));
+    write(transcript(`키를 확인하려고 DB_PASSWORD='Not-A-Real-Value-123' 로 호출했다`));
     const all = mintExcerpts(path);
     expect(all.length).toBeGreaterThan(0);
-    for (const e of all) expect(e.text).not.toContain("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY");
+    for (const e of all) expect(e.text).not.toContain("Not-A-Real-Value-123");
     expect(all.some((e) => e.text.includes(REDACTED))).toBe(true);
   });
 
@@ -197,7 +197,7 @@ describe("excerpt", () => {
   });
 
   test("verification is redaction-aware — a screened quote still checks its surviving segments", () => {
-    write(transcript(`자격증명 AWS_SECRET_ACCESS_KEY='wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY' 로 계정을 확인했다`));
+    write(transcript(`자격증명 DB_PASSWORD='Not-A-Real-Value-123' 로 계정을 확인했다`));
     const screened = mintExcerpts(path).find((e) => e.text.includes(REDACTED));
     expect(screened).toBeDefined();
     expect(verifyExcerpt(screened!.text, path)).toBe(true);

@@ -73,7 +73,7 @@ describe("lint — v3 evidence excerpts", () => {
   test("a secret in an excerpt is an ERROR — a pushed credential cannot be recalled", () => {
     const content = page(
       "decision",
-      `- 자격증명으로 확인했다 [^1]\n\n[^1]: ${TRANSCRIPT}\n    > [2026-06-29 14:02 user] "키는 ghp_abcdefghijklmnopqrstuvwxyz0123456789 였다"`,
+      `- 자격증명으로 확인했다 [^1]\n\n[^1]: ${TRANSCRIPT}\n    > [2026-06-29 14:02 user] "키는 ghp_NOTAREALTOKENNOTAREALTOKEN0000000000 였다"`,
     );
     const issues = linter._excerpts(doc(content), content, sources(true));
     const secret = issues.find((i) => i.code === "excerpt-secret");
@@ -83,7 +83,7 @@ describe("lint — v3 evidence excerpts", () => {
   test("secrets are caught on a teammate's machine too (no transcript needed to see a key)", () => {
     const content = page(
       "decision",
-      `- x [^1]\n\n[^1]: ${TRANSCRIPT}\n    > [ts user] "AKIAIOSFODNN7EXAMPLE 로 호출했다"`,
+      `- x [^1]\n\n[^1]: ${TRANSCRIPT}\n    > [ts user] "xoxb-EXAMPLE-NOT-A-REAL-TOKEN 로 호출했다"`,
     );
     expect(codes(content, /* local */ false)).toContain("excerpt-secret");
   });

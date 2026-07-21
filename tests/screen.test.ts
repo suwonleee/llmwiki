@@ -31,20 +31,20 @@ describe("screenSecrets — real leak shapes", () => {
   });
 
   test("a redacted excerpt never carries the secret onward (hasSecret is idempotent)", () => {
-    const once = screenSecrets("token: ghp_abcdefghijklmnopqrstuvwxyz0123456789");
+    const once = screenSecrets("token: ghp_NOTAREALTOKENNOTAREALTOKEN0000000000");
     expect(hasSecret(once.text)).toBe(false);
     expect(screenSecrets(once.text).text).toBe(once.text);
   });
 
   test.each([
     ["aws access key id", "id is AKIAIOSFODNN7EXAMPLE here"],
-    ["github token", "use ghp_abcdefghijklmnopqrstuvwxyz0123456789"],
+    ["github token", "use ghp_NOTAREALTOKENNOTAREALTOKEN0000000000"],
     ["slack token", "xoxb-EXAMPLE-NOT-A-REAL-TOKEN"],
-    ["anthropic key", "sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaaa"],
+    ["anthropic key", "sk-ant-NOT-A-REAL-KEY-000000000000"],
     ["jwt", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"],
     ["bearer header", "Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345"],
     ["url userinfo", "psql postgres://admin:hunter2hunter2@db.internal/app"],
-    ["named password assignment", 'DB_PASSWORD="Sup3rSecret!@#"'],
+    ["named password assignment", 'DB_PASSWORD="Not-A-Real-Value-123"'],
     ["private key block", "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n-----END RSA PRIVATE KEY-----"],
   ])("blocks %s", (_label, sample) => {
     expect(hasSecret(sample)).toBe(true);
@@ -92,7 +92,7 @@ describe("screenSecrets — over-length look-alikes must not slip through", () =
 
 describe("screenSecrets — gutted signal", () => {
   test("a line that is almost entirely secret is flagged gutted (caller drops the excerpt)", () => {
-    expect(screenSecrets("ghp_abcdefghijklmnopqrstuvwxyz0123456789").gutted).toBe(true);
+    expect(screenSecrets("ghp_NOTAREALTOKENNOTAREALTOKEN0000000000").gutted).toBe(true);
   });
 
   test("a mostly-prose line keeps its excerpt", () => {
@@ -153,9 +153,9 @@ describe("screenSecrets — placeholder assignments stay untouched", () => {
   });
 
   test("a real-looking value right next to a placeholder still redacts", () => {
-    const r = screenSecrets('API_KEY=<your-key> DB_PASSWORD="Sup3rSecret!@#"');
+    const r = screenSecrets('API_KEY=<your-key> DB_PASSWORD="Not-A-Real-Value-123"');
     expect(r.text).toContain("API_KEY=<your-key>");
-    expect(r.text).not.toContain("Sup3rSecret");
+    expect(r.text).not.toContain("Not-A-Real-Value");
     expect(r.redactions).toEqual(["named-assignment"]);
   });
 });
@@ -171,6 +171,6 @@ describe("screenSecrets — non-ASCII assignment values are prose", () => {
   });
 
   test("an ASCII credential right after Korean prose still redacts", () => {
-    expect(hasSecret('앞은 산문이지만 DB_PASSWORD="Sup3rSecret!@#" 는 값이다')).toBe(true);
+    expect(hasSecret('앞은 산문이지만 DB_PASSWORD="Not-A-Real-Value-123" 는 값이다')).toBe(true);
   });
 });

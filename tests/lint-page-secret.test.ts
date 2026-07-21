@@ -36,13 +36,13 @@ describe("lint — page-secret", () => {
   const codes = (content: string, rel?: string, kind?: string) => issues(content, rel, kind).map((i) => i.code);
 
   test("a value-shaped credential in prose is an ERROR — a pushed secret cannot be recalled", () => {
-    const found = issues(page("토큰 ghp_abcdefghijklmnopqrstuvwxyz0123456789 로 호출해 확인했다"));
+    const found = issues(page("토큰 ghp_NOTAREALTOKENNOTAREALTOKEN0000000000 로 호출해 확인했다"));
     expect(found.map((i) => i.code)).toEqual(["page-secret"]);
     expect(found[0]!.severity).toBe("error");
   });
 
   test("a named assignment with a real-looking value errors — fenced code included", () => {
-    expect(codes(page('```bash\nexport DB_PASSWORD="Sup3rSecret!@#"\n```'))).toEqual(["page-secret"]);
+    expect(codes(page('```bash\nexport DB_PASSWORD="Not-A-Real-Value-123"\n```'))).toEqual(["page-secret"]);
   });
 
   test("config placeholders stay silent — documentation must not cost close-outs", () => {
@@ -59,21 +59,21 @@ describe("lint — page-secret", () => {
 
   test("an excerpt line is excerpt-secret's finding, not page-secret's", () => {
     const content = page(
-      `- 자격증명으로 확인했다 [^1]\n\n[^1]: ${TRANSCRIPT}\n    > [2026-06-29 14:02 user] "키는 ghp_abcdefghijklmnopqrstuvwxyz0123456789 였다"`,
+      `- 자격증명으로 확인했다 [^1]\n\n[^1]: ${TRANSCRIPT}\n    > [2026-06-29 14:02 user] "키는 ghp_NOTAREALTOKENNOTAREALTOKEN0000000000 였다"`,
     );
     expect(codes(content)).toEqual([]);
   });
 
   test("ledger files are screened too — log lines get committed like any page", () => {
-    expect(codes("## [2026-07-21] sync | AKIAIOSFODNN7EXAMPLE 로 배포\n", "docs/wiki/log.md")).toEqual(["page-secret"]);
+    expect(codes("## [2026-07-21] sync | xoxb-EXAMPLE-NOT-A-REAL-TOKEN 로 배포\n", "docs/wiki/log.md")).toEqual(["page-secret"]);
   });
 
   test("non-wiki docs are not this rule's business", () => {
-    expect(codes("AKIAIOSFODNN7EXAMPLE", "src/notes.md", "repo")).toEqual([]);
+    expect(codes("xoxb-EXAMPLE-NOT-A-REAL-TOKEN", "src/notes.md", "repo")).toEqual([]);
   });
 
   test("each offending line reports once, with its line number in the message", () => {
-    const found = issues(page("첫 줄은 안전\nAKIAIOSFODNN7EXAMPLE 로 확인\n중간도 안전\nxoxb-EXAMPLE-NOT-A-REAL-TOKEN 사용"));
+    const found = issues(page("첫 줄은 안전\nxoxb-EXAMPLE-NOT-A-REAL-TOKEN 로 확인\n중간도 안전\nxoxb-EXAMPLE-NOT-A-REAL-TOKEN 사용"));
     expect(found.length).toBe(2);
     expect(found[0]!.message).toContain("line 12");
     expect(found[1]!.message).toContain("line 14");
