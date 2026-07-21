@@ -62,6 +62,48 @@ describe("parseCitationFilename", () => {
   test("dash description stripped", () => {
     expect(parseCitationFilename("foo.md — desc")).toEqual(["foo.md", null]);
   });
+
+  // `path:line` tolerance — the universal convention warm sessions keep producing.
+  // Rejecting it caused a lint→rework loop every close-out (observed 2026-07-21 in a
+  // real project close-out); the line number is absorbed into the same
+  // locator slot `, p.N` already uses. Canonical format stays the bare path.
+  test("code path with :line absorbed", () => {
+    expect(parseCitationFilename("src/engine/refs.ts:79")).toEqual(["src/engine/refs.ts", 79]);
+  });
+
+  test("code path with :line range absorbed (start line kept)", () => {
+    expect(parseCitationFilename("src/engine/lint.ts:464-476")).toEqual(["src/engine/lint.ts", 464]);
+  });
+
+  test("extension-only filename with :line absorbed", () => {
+    expect(parseCitationFilename("cli.ts:12")).toEqual(["cli.ts", 12]);
+  });
+
+  test("non-path colon suffix NOT stripped (unresolved reports what was written)", () => {
+    expect(parseCitationFilename("12:30")).toEqual(["12:30", null]);
+  });
+
+  test("transcript filename untouched", () => {
+    expect(parseCitationFilename("5f2e7479-5ef3-407b-b9c7-2f4c3ca0287e.jsonl")).toEqual([
+      "5f2e7479-5ef3-407b-b9c7-2f4c3ca0287e.jsonl",
+      null,
+    ]);
+  });
+
+  test("document-type target with :N NOT stripped (bare-.jsonl$ consumers must agree)", () => {
+    // autoRegisterCitedTranscripts/ensureExcerpts anchor on bare `.jsonl$` — stripping here
+    // would make `x.jsonl:12` resolve in the parser but dangle there. Intact = one visible error.
+    expect(parseCitationFilename("abc.jsonl:12")).toEqual(["abc.jsonl:12", null]);
+    expect(parseCitationFilename("paper.pdf:3")).toEqual(["paper.pdf:3", null]);
+  });
+
+  test("line:col keeps the col only (recorded: falls through to visible unresolved)", () => {
+    expect(parseCitationFilename("src/a.ts:12:34")).toEqual(["src/a.ts:12", 34]);
+  });
+
+  test(":line plus dash description", () => {
+    expect(parseCitationFilename("src/foo.ts:12 — why it matters")).toEqual(["src/foo.ts", 12]);
+  });
 });
 
 describe("stripCode", () => {

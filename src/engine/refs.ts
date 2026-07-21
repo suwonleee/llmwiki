@@ -24,6 +24,13 @@ const _INLINE_CODE_RE = /`[^`\n]*`/g;
 const _IMG_EXT_RE = /\.(png|jpg|jpeg|gif|webp|svg)$/i;
 const _DASH_SPLIT_RE = /\s+[-–—]\s+/;
 const _PAGE_RE = /,\s*p\.?\s*(\d+)\b/;
+// Trailing `:N` / `:N-M` line locator on a code-path citation (`src/foo.ts:123`). The `path:line`
+// convention is universal (compilers, editors, other tools' citations), so warm sessions keep
+// producing it no matter what the skill prose prescribes — rejecting it caused a lint→rework loop
+// every close-out. Absorb it like `, p.N`: the number lands in the same locator slot of the
+// [filename, number|null] tuple (a graph-edge `page` is just "locator within the source").
+// Canonical format stays the bare path; this is input tolerance, not a format change.
+const _LINE_SUFFIX_RE = /:(\d+)(?:[-–]\d+)?$/;
 const _MD_LINK_HEAD_RE = /^\[([^\]]+)\]\([^)]*\)(.*)$/;
 
 // Self-heal transcript provenance: a wiki page cites its session transcript (`[^1]: <id>.jsonl`),
@@ -86,6 +93,20 @@ export function parseCitationFilename(raw: string): [string, number | null] {
   const pm = _PAGE_RE.exec(raw);
   if (pm) {
     return [raw.slice(0, pm.index).trim(), parseInt(pm[1]!, 10)];
+  }
+  // Only strip a `:N` suffix when the prefix looks like a path (`.` or `/`) — a malformed
+  // citation like `12:30` must stay intact so unresolved-citation reports what was written.
+  // Document-type targets (_SRC_EXT: .jsonl/.pdf/.md/…) are also left intact: line suffixes are
+  // a CODE-path convention, and several transcript consumers (autoRegisterCitedTranscripts,
+  // ensureExcerpts) anchor on a bare `.jsonl$` — stripping here but not there would make
+  // `x.jsonl:12` resolve in one place and dangle in another. Left intact it fails one way,
+  // visibly (unresolved-citation).
+  const lm = _LINE_SUFFIX_RE.exec(raw);
+  if (lm && lm.index > 0) {
+    const prefix = raw.slice(0, lm.index);
+    if (/[./]/.test(prefix) && !_SRC_EXT.test(prefix)) {
+      return [prefix.trim(), parseInt(lm[1]!, 10)];
+    }
   }
   return [raw, null];
 }

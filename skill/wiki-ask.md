@@ -46,7 +46,7 @@ $ARGUMENTS
 3. **Read + raw tracing**: Read the top candidate pages. For each page's footnote citation (`[^n]: <transcript/code>`), **directly Read the raw file** it points to and verify the facts (don't assert from the wiki alone).
 
 4. **Synthesize (citations required)**: synthesize an answer to the question.
-   - Fact claims = **footnotes traced down to raw** (transcript filename / code `path:line`). No wiki→wiki re-derivation.
+   - Fact claims = **footnotes traced down to raw** (transcript filename / bare code path — `:line` tolerated but not canonical). No wiki→wiki re-derivation.
    - If contradictions/unresolved items appear, show them as-is (no hiding). Show the answer **in the session first**.
    - The LLM does *not* invent new decisions/directions/insights. Mark anything not in the wiki/raw as "no basis".
 
