@@ -6,7 +6,7 @@
 // (custom [[category]] conventions win over the defaults), and re-running init self-heals a
 // deleted dir. Exercised through the real CLI so the whole cmdInit path is covered.
 import { test, expect, describe } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -38,6 +38,26 @@ describe("init scaffolds category folders", () => {
       rmSync(join(ws, "docs", "wiki", "2_milestone"), { recursive: true });
       runInit(ws);
       expect(existsSync(join(ws, "docs", "wiki", "2_milestone"))).toBe(true);
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+});
+
+// init must hand over a COMPLETE wiki-ready repo, team-safety included: without the .gitignore
+// seed the adopter's very next commit ships the derived SQLite index (binary merge conflicts),
+// and without .gitattributes concurrent log.md appends conflict on every merge — the exact
+// failures ensureSkeleton's seeding exists to prevent, previously unreachable from `init`.
+describe("init seeds the full skeleton", () => {
+  test("team-safety files and the L0/overview/log templates exist after init", () => {
+    const ws = mkdtempSync(join(tmpdir(), "llmwiki-init-"));
+    try {
+      runInit(ws);
+      expect(readFileSync(join(ws, ".gitignore"), "utf-8")).toContain(".llmwiki/");
+      expect(readFileSync(join(ws, ".gitattributes"), "utf-8")).toContain("docs/wiki/log.md merge=union");
+      for (const f of ["current-state.md", "overview.md", "log.md"]) {
+        expect(existsSync(join(ws, "docs", "wiki", f))).toBe(true);
+      }
     } finally {
       rmSync(ws, { recursive: true, force: true });
     }

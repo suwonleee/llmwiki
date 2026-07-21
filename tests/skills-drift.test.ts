@@ -34,4 +34,10 @@ describe("skill command lists stay in sync", () => {
   test("doctor checks every installed skill (one missing here is lost silently)", () => {
     expect([...doctorCommands].sort()).toEqual([...wireSkills].sort());
   });
+
+  test("doctor's CORE file-sanity list covers every skill source file (a missing source is repairable only if checked)", () => {
+    const src = readFileSync(join(ROOT, "src/engine/doctor.ts"), "utf8");
+    const core = src.match(/const CORE = \[([\s\S]*?)\]/)?.[1] ?? "";
+    for (const f of skillFiles) expect(core).toContain(`"skill/${f}"`);
+  });
 });

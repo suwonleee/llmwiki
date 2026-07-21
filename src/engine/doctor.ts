@@ -34,6 +34,7 @@ const CORE = [
   "skill/wiki-fast.md",
   "skill/wiki-ask.md",
   "skill/wiki-deep.md",
+  "skill/wiki-quiz.md",
 ];
 // slash commands that must be present in every profile's commands/ dir.
 // Must stay in sync with wire.ts SKILLS and the repo's skill/ dir — tests/skills-drift.test.ts
