@@ -123,3 +123,54 @@ describe("screenSecrets — gutted signal", () => {
     expect(ko.gutted).toBe(en.gutted);
   });
 });
+
+// Placeholder values are documentation, not leaks. The named-assignment rule fires on the NAME,
+// so without this carve-out every setup example in a wiki page (`API_KEY=<your-key>`) would trip
+// the page-secret/excerpt-secret gate and cost a close-out. The carve-out is shape-proven only:
+// anything the placeholder list can't recognize still redacts (deny-by-shape stays the default).
+describe("screenSecrets — placeholder assignments stay untouched", () => {
+  const silent = [
+    ["angle-bracketed", "LLMWIKI_API_KEY=<your-key>"],
+    ["shell var reference", "GITHUB_TOKEN=$GITHUB_TOKEN"],
+    ["braced shell var", "AUTH_TOKEN=${CI_AUTH_TOKEN}"],
+    ["ellipsis", "OPENAI_API_KEY=..."],
+    ["unicode ellipsis", "DB_PASSWORD=…"],
+    ["x-run", "SLACK_TOKEN=xxxxx"],
+    ["star-run", "PASSWORD: ***"],
+    ["self-describing word", "API_KEY=your-key-here"],
+    ["changeme", 'ADMIN_PASSWORD="changeme"'],
+  ] as const;
+  for (const [label, sample] of silent) {
+    test(`${label}: not a redaction`, () => {
+      const r = screenSecrets(sample);
+      expect(r.redactions).toEqual([]);
+      expect(r.text).toBe(sample);
+    });
+  }
+
+  test("inside backticks the wrapping punctuation does not defeat the carve-out", () => {
+    expect(hasSecret("설정은 `LLMWIKI_API_KEY=<your-key>` 한 줄이면 된다")).toBe(false);
+  });
+
+  test("a real-looking value right next to a placeholder still redacts", () => {
+    const r = screenSecrets('API_KEY=<your-key> DB_PASSWORD="Sup3rSecret!@#"');
+    expect(r.text).toContain("API_KEY=<your-key>");
+    expect(r.text).not.toContain("Sup3rSecret");
+    expect(r.redactions).toEqual(["named-assignment"]);
+  });
+});
+
+// A non-ASCII value is prose, not key material — every machine credential alphabet (base64,
+// hex, provider token charsets) is ASCII. The natural Korean wiki idiom `NAME: 상태 설명` was
+// the observed false-positive class (2026-07-21 trial): it punished exactly the
+// security-conscious phrasing ("값은 1Password 보관") the screen exists to encourage.
+describe("screenSecrets — non-ASCII assignment values are prose", () => {
+  test("Korean status after a token name: silent", () => {
+    expect(hasSecret("SLACK_TOKEN: 미설정 (발급 대기)")).toBe(false);
+    expect(hasSecret("GITHUB_TOKEN: 팀 계정으로 발급 완료, 값은 1Password 보관")).toBe(false);
+  });
+
+  test("an ASCII credential right after Korean prose still redacts", () => {
+    expect(hasSecret('앞은 산문이지만 DB_PASSWORD="Sup3rSecret!@#" 는 값이다')).toBe(true);
+  });
+});

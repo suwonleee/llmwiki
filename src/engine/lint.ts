@@ -248,6 +248,7 @@ export class Linter {
     issues.push(...this._banned(path, content));
     issues.push(...this._citations(path, content, sourceLookup));
     issues.push(...this._excerpts(doc, content, sourceLookup));
+    issues.push(...this._pageSecrets(doc, content));
     issues.push(...this._links(doc, content, wikiLookup));
     issues.push(...this._graph(doc, content, sourceLookup));
     issues.push(...this._orphan(doc, wikiCount));
@@ -475,6 +476,37 @@ export class Linter {
           message: `footnote \`^${fid}\` cites \`${filename}\`, but no matching source exists`,
         });
       }
+    }
+    return out;
+  }
+
+  // ---- page-wide secret screen ---------------------------------------------------------------
+  //
+  // page-secret (error) — the prose-side twin of excerpt-secret. The excerpt path is hard-gated
+  // at mint (screenSecrets) and re-checked below, but nothing stopped the author's own PROSE from
+  // carrying a credential the session had in context — an env value pasted into a milestone, a
+  // token inside a quoted command. Same screener, same severity: a wiki that commits to git is
+  // clone-distributed, and a pushed credential cannot be recalled. Runs on every committed wiki
+  // file, ledgers included; excerpt lines are skipped (excerpt-secret below already owns those,
+  // and one finding per leak keeps the fix obvious). Placeholder examples (`API_KEY=<your-key>`)
+  // pass — the screener recognizes documentation shapes, so config examples don't cost close-outs.
+  _pageSecrets(doc: WikiDoc, content: string): LintIssue[] {
+    if (!this._isWiki(doc)) return [];
+    const path = this._p(doc);
+    const out: LintIssue[] = [];
+    const excerptLines = new Set(parseExcerpts(content).map((e) => e.line));
+    const lines = content.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      if (excerptLines.has(i + 1)) continue;
+      if (!hasSecret(lines[i]!)) continue;
+      out.push({
+        severity: "error",
+        code: "page-secret",
+        path,
+        message: this.ko
+          ? `${i + 1}행에 비밀정보로 보이는 값이 있다 — 값을 지우고 서술로 바꿀 것 (한 번 푸시되면 되돌릴 수 없다; 긴 hex/base64 덩어리 포함, 커밋 해시는 짧은 형태로)`
+          : `line ${i + 1} contains what looks like a secret — drop the value and describe it instead (a pushed secret cannot be recalled; long hex/base64 blobs count, shorten commit hashes)`,
+      });
     }
     return out;
   }

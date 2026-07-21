@@ -56,6 +56,14 @@ const SECRET_PATTERNS: { name: string; re: RegExp }[] = [
 const ASSIGNMENT_RE =
   /\b([A-Za-z_][A-Za-z0-9_]*(?:SECRET|PASSWORD|PASSWD|PASSPHRASE|TOKEN|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL|AUTH)[A-Za-z0-9_]*)(\s*[=:]\s*)(?:"([^"]*)"|'([^']*)'|(\S+))/gi;
 
+// Values that are documentation stand-ins, not credentials: angle-bracketed (`<your-key>`),
+// shell-var references (`$TOKEN`, `${TOKEN}`), ellipses, x/star runs, and self-describing words
+// (`example…`, `changeme`). Without this, `API_KEY=<your-key>` in a setup note trips the gate
+// and every config example costs a close-out. Kept deliberately narrow — a value this list
+// can't PROVE harmless falls through to the deny-by-shape default.
+const PLACEHOLDER_VALUE_RE =
+  /^(?:<[^<>]+>|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|\.{3,}|…|x{3,}|\*{3,}|(?:your|example|sample|dummy|fake|placeholder|changeme|redacted)[A-Za-z0-9._-]*)$/i;
+
 // High-entropy standalone blobs (base64/hex) that no named pattern caught. Long + mixed-class is
 // the signal; prose and file paths do not look like this. Kept last and deliberately narrow —
 // a false redaction inside evidence is a real cost, so this only fires on ≥32 chars with both
@@ -95,6 +103,17 @@ export function screenSecrets(input: string): ScreenResult {
   text = text.replace(ASSIGNMENT_RE, (_m, key: string, sep: string, dq?: string, sq?: string, bare?: string) => {
     const value = dq ?? sq ?? bare ?? "";
     if (!value || value === REDACTED) return `${key}${sep}${value}`;
+    // A bare \S+ value swallows adjacent punctuation (`KEY=<your-key>` inside backticks grabs
+    // the closing backtick) — strip wrapping punctuation before the placeholder test only; the
+    // redaction path keeps the greedy match, over-eating punctuation is the safe direction there.
+    // A non-ASCII value is prose, not key material — every machine credential alphabet
+    // (base64, hex, provider token charsets) is ASCII. Without this, natural wiki lines like
+    // `SLACK_TOKEN: 미설정 (발급 대기)` or `GITHUB_TOKEN: 팀 계정으로 발급, 값은 1Password 보관`
+    // trip the gate — punishing exactly the security-conscious phrasing the screen exists for.
+    if (/[^\x00-\x7F]/.test(value)) return _m;
+    // Raw value first (the strip would eat an ellipsis placeholder whole), then the stripped core.
+    const core = value.replace(/^[`'"(\[]+/, "").replace(/[`'")\].,;:!?]+$/, "");
+    if (PLACEHOLDER_VALUE_RE.test(value) || PLACEHOLDER_VALUE_RE.test(core)) return _m;
     redactions.push("named-assignment");
     return `${key}${sep}${REDACTED}`;
   });
