@@ -1,6 +1,6 @@
 // Deterministic synthesis (the safe revival of the removed generative `synthesize`).
 //
-// Decision 16 disabled UNATTENDED synthesis to avoid model-collapse (an LLM re-summarizing
+// UNATTENDED synthesis was originally disabled to avoid model-collapse (an LLM re-summarizing
 // its own summaries, drifting from ground truth). But that conflated two things:
 //   1. mechanical/relational synthesis — cross-references, hubs, supersession/freshness,
 //      open contradictions. Pure bookkeeping over ALREADY-grounded pages.

@@ -1,8 +1,7 @@
 // autoupdate — unattended update with a safety gate (the direction's last mile).
 //
-// Decisions 11·12 deferred unattended update for fear of model-collapse / low-trust KB.
-// This closes that gap *safely* with the community's answer (NicoBleh/tomjwxf: an
-// independent second model reviews every write):
+// Unattended update was deliberately deferred for fear of model-collapse / low-trust KB.
+// This closes that gap *safely* — an independent second model reviews every write:
 //
 //   1. WRITE   — claude -p produces a grounded wiki page from the transcript extract
 //                (cites the transcript; judgment → status: draft).
@@ -277,7 +276,7 @@ export async function updateOne(
   // date stamp the page deterministically if model left it blank
   page = _stampDate(page, inc);
 
-  // choose destination. Decision 22: ONLY direction shifts (1_direction) go to the human
+  // choose destination. By design, ONLY direction shifts (1_direction) go to the human
   // queue (0_review). milestone/decision/insight are adjudicated by the independent Opus
   // VERIFY pass — accepted as `ready` when grounded, otherwise rejected (omitted). Quality
   // failures never land in the human queue, which is reserved for strategic direction.
@@ -390,7 +389,7 @@ export async function updateOne(
     return result;
   }
 
-  // Opus rejected (ungrounded) or lint error → omit. Decision 22: do NOT escalate to the
+  // Opus rejected (ungrounded) or lint error → omit. By design, do NOT escalate to the
   // human queue (0_review is direction-only). Remove the page, log the reason, and advance
   // the watermark as 'skipped' (the raw transcript is preserved immutably and can be
   // reprocessed). This supersedes the earlier rule that rejection never advanced the watermark.
