@@ -73,6 +73,22 @@ describe("excerpt", () => {
 
   // ---- mint --------------------------------------------------------------------------------
 
+  // A UTF-16 slice cap landing inside a surrogate pair (any emoji in the utterance) minted a lone
+  // surrogate, which becomes U+FFFD when the page is written as UTF-8 — and the corrupted
+  // excerpt then fails its own verbatim check (unverified-excerpt). Cut on a code-point boundary.
+  test("cap landing inside an emoji backs off — no lone surrogate persisted", () => {
+    // clip() cuts at index EXCERPT_MAX-1; place the emoji's high surrogate exactly at the edge
+    write(transcript("a".repeat(EXCERPT_MAX - 2) + "🚀 그리고 한참 이어지는 판단 발화"));
+    const judged = mintExcerpts(path).filter((e) => e.kind === "judgment");
+    const long = judged.find((e) => e.text.endsWith("…"))!;
+    expect(long).toBeDefined();
+    // no unpaired surrogate half anywhere in the capped text
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(long.text)).toBe(false);
+    // survives a UTF-8 write→read round-trip byte-identically (what persisting to a page does)
+    expect(Buffer.from(long.text, "utf8").toString("utf8")).toBe(long.text);
+    expect(long.text.length).toBeLessThanOrEqual(EXCERPT_MAX);
+  });
+
   test("mints both classes: machine facts from tool events, verbatim judgment from the human", () => {
     const all = mintExcerpts(path);
     const facts = all.filter((e) => e.kind === "fact");

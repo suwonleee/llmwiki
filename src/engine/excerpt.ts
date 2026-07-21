@@ -41,7 +41,15 @@ export interface Excerpt {
 
 function clip(s: string): string {
   const one = s.replace(/\s+/g, " ").trim();
-  return one.length > EXCERPT_MAX ? one.slice(0, EXCERPT_MAX - 1).trimEnd() + "…" : one;
+  if (one.length <= EXCERPT_MAX) return one;
+  // Cut on a code-point boundary: a JS slice counts UTF-16 units, so a cap landing inside a
+  // surrogate pair (any emoji in the transcript) leaves a lone surrogate that becomes U+FFFD
+  // the moment the page is written as UTF-8 — and a corrupted excerpt then fails its own
+  // verbatim check (unverified-excerpt), an error the author can neither read nor fix.
+  let end = EXCERPT_MAX - 1;
+  const cu = one.charCodeAt(end - 1);
+  if (cu >= 0xd800 && cu <= 0xdbff) end -= 1; // high surrogate at the edge → back off the pair
+  return one.slice(0, end).trimEnd() + "…";
 }
 
 // Screen → cap → reject if gutted or too short. The single funnel every candidate passes through.
