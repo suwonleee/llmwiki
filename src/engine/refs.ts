@@ -219,7 +219,7 @@ export function updateReferences(
   let cites = 0;
   let links = 0;
   for (const [targetId, refType, page] of edges) {
-    const k = `${targetId} ${refType}`;
+    const k = `${targetId}\0${refType}`;
     if (seen.has(k)) continue;
     seen.add(k);
     index.upsertReference(conn, docId, targetId, refType, page);
