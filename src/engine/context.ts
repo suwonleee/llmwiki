@@ -333,11 +333,20 @@ export function buildContext(repo: string): string {
   // and a cited session whose live transcript keeps growing both re-enter pending() but are already
   // represented in the wiki — nagging them makes the first impression lie and summons the human as a
   // verifier. uncitedPending() subtracts the cited set (reconcile's own citation scan).
+  //
+  // Adoption is per-repo: the daemon captures every repo in the background (so adopting later
+  // loses nothing — watermarks are durable), but a repo that never adopted the wiki (no
+  // docs/wiki/) must not pay an attention tax for a tool it doesn't use. Without this gate,
+  // any directory you ever chat in starts greeting every session with a growing backlog nag —
+  // the same first-impression failure the honesty rule above exists to prevent. Un-adopted
+  // repos stay COMPLETELY silent; `llmwiki init` turns the accumulated backlog on, intact.
   let pendRows: ReturnType<typeof pending> = [];
-  try {
-    pendRows = uncitedPending(proj);
-  } catch {
-    pendRows = [];
+  if (hasWiki) {
+    try {
+      pendRows = uncitedPending(proj);
+    } catch {
+      pendRows = [];
+    }
   }
   if (pendRows.length > 0) {
     L.push(T.pending(pendRows.length));
