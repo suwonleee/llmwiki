@@ -5,29 +5,51 @@
   </picture>
 </p>
 
-# llmwiki · Quiz_wiki — a local-first compounding engineering logbook + topic encyclopedia that quizzes you back
+# llmwiki · Quiz_wiki — a lightweight, local-first project wiki that compounds, and quizzes you back
 
 *Also known as: quiz wiki · llmwiki quiz · Quiz_wiki — the spaced-repetition layer that quizzes you on your own past decisions.*
 
-**English** · [한국어](README.ko.md)
+**English** · [한국어](README.ko.md) · [日本語](README.ja.md) · [中文](README.zh.md)
 
-> Whatever the project, whatever terminal (default/tmux/iTerm2) or coding agent (Claude Code · Codex · OpenCode) you use,
-> project-specific LLM knowledge **compounds**.
-> An LLM-maintained project wiki for agentic environments —
-> it sources from work transcripts and splits labor into **fact = unattended / judgment = human-present**.
-> And the loop closes on the human too — a daily forgetting-curve quiz (`/wiki-quiz`) keeps your memory of your own decisions as sharp as the model's context.
-> The structure is **two layers** — a per-session *logbook* (time axis: `2_milestone`·`3_decision`·`4_insight`) + a per-concept *topic encyclopedia* (`5_topic`, topic axis·in-place consolidation). Both are re-derived only from raw transcripts (no wiki→wiki).
+Whatever project, terminal (default/tmux/iTerm2), or coding agent (Claude Code · Codex · OpenCode) you work in, project-specific LLM knowledge **compounds** instead of evaporating.
 
-The engine is a **local library** — SQLite index·deterministic lint·citation/cross-reference graph·content-hash
-increments — with **an automatic capture daemon + transcript compounding + labor split (fact = AI / judgment = human) + a human-side memory quiz (`/wiki-quiz`)** on top. **No MCP registration required.**
+- **What it is**
+    - an LLM-maintained project wiki for agentic environments — sourced from your work transcripts, stored as plain git markdown
+    - engine = a local library: SQLite index · deterministic lint · citation/cross-reference graph · content-hash increments
+    - on top: an automatic capture daemon + transcript compounding — **no MCP registration**
+- **Labor split**
+    - fact — written unattended, by the AI
+    - judgment (direction · decisions · contradictions) — always human-present
+    - human memory — a daily forgetting-curve quiz (`/wiki-quiz`), keeping your recall of your own decisions as sharp as the model's context
+- **Two layers, one source**
+    - per-session *logbook* — time axis: `2_milestone` · `3_decision` · `4_insight`
+    - per-concept *topic encyclopedia* — `5_topic`, topic axis, in-place consolidation
+    - both re-derived from raw transcripts only — no wiki→wiki
 
 The core idea — a project wiki that the LLM maintains and the human only steers — comes from [Andrej Karpathy's LLM-wiki note](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). That note is the only outside reference: the design and code here are original.
+
+## Claude Code quick start (5 minutes)
+
+```bash
+git clone https://github.com/suwonleee/llmwiki.git
+cd llmwiki
+./setup.sh --harness claude              # plain ./setup.sh auto-detects installed harnesses
+
+bun src/cli.ts init /path/to/your-project
+cd /path/to/your-project
+claude
+```
+
+- Close out a meaningful session with **`/wiki-fast`** — periodic deep pass `/wiki-deep` · query/file back `/wiki-ask` · recall `/wiki-quiz`
+- Wired automatically: capture daemon · SessionStart/UserPromptSubmit read-injection · `/wiki-*` commands
+- Health check: `bun src/cli.ts doctor`
+    - the `llmwiki` user command ships with the Codex/OpenCode wirings; a Claude-only install drives the CLI as `bun <clone>/src/cli.ts …`
 
 ## Codex quick start (5 minutes)
 
 ```bash
-git clone https://github.com/suwonleee/llmwiki-runtime.git llmwiki_runtime
-cd llmwiki_runtime
+git clone https://github.com/suwonleee/llmwiki.git
+cd llmwiki
 ./setup.sh --harness codex
 export PATH="$HOME/.local/bin:$PATH"  # setup prints this only when your PATH needs it
 
@@ -37,22 +59,20 @@ llmwiki init .
 codex
 ```
 
-Inside Codex, type **`$wiki-fast`** after a meaningful work session. Use
-`$wiki-deep` periodically, `$wiki-ask` to query/file back, and `$wiki-quiz`
-for recall. `setup.sh` installs these as Codex skills under `~/.agents/skills`, merges
-the native hooks without replacing unrelated hooks, and installs `llmwiki` in
-`~/.local/bin`. If that directory is not on `PATH`, setup prints the exact fix.
-Re-running setup safely migrates earlier `$llmwiki-*` installs to the shorter `$wiki-*` names.
-
-Verify with `llmwiki doctor`. Before hook review it reports **one-time action required**;
-it does not claim that injection is already active. Codex owns the current hook-trust
-verdict, so `/hooks` is the source of truth after hook changes.
+- In the Codex prompt: **`$wiki-fast`** after a meaningful session · `$wiki-deep` periodically · `$wiki-ask` to query/file back · `$wiki-quiz` for recall
+- What setup installs
+    - four `$wiki-*` skills under `~/.agents/skills` — re-running setup migrates earlier `$llmwiki-*` installs to the shorter names
+    - native `SessionStart`/`UserPromptSubmit` hooks merged into `$CODEX_HOME/hooks.json` — unrelated hooks untouched
+    - the `llmwiki` command in `~/.local/bin` — the exact `PATH` fix printed only when needed
+- Verify: `llmwiki doctor`
+    - before hook review it reports **one-time action required** — it never claims injection is already active
+    - Codex owns the hook-trust verdict: after hook changes, `/hooks` is the source of truth
 
 ## OpenCode quick start (5 minutes)
 
 ```bash
-git clone https://github.com/suwonleee/llmwiki-runtime.git llmwiki_runtime
-cd llmwiki_runtime
+git clone https://github.com/suwonleee/llmwiki.git
+cd llmwiki
 ./setup.sh --harness opencode
 
 cd /path/to/your-project
@@ -60,11 +80,14 @@ llmwiki init .
 opencode
 ```
 
-OpenCode uses the same **`/wiki-fast`**, `/wiki-deep`, `/wiki-ask`, and `/wiki-quiz`
-syntax as Claude Code. Setup installs global custom commands and the read-injection
-plugin under `$XDG_CONFIG_HOME/opencode/` (default `~/.config/opencode/`).
+- Same syntax as Claude Code: **`/wiki-fast`** · `/wiki-deep` · `/wiki-ask` · `/wiki-quiz`
+- What setup installs
+    - global `/wiki-*` custom commands + the read-injection plugin under `$XDG_CONFIG_HOME/opencode/` (default `~/.config/opencode/`)
+    - the shared `llmwiki` command in `~/.local/bin`
 
 ## The Compounding Loop
+
+Six stages — two fully unattended, the rest one command each.
 
 | Stage | What | Automatic? | Implementation |
 |------|------|:---:|------|
@@ -76,12 +99,27 @@ plugin under `$XDG_CONFIG_HOME/opencode/` (default `~/.config/opencode/`).
 | **Self-healing** | Structural (orphan·stale·dangling) = deterministic `lint` / semantic (contradiction·stale claim·missing concept) = generative `review` (auto on sync — engine-gated cadence `--if-due`, default 7d·scoped+cached) → gaps land in `gaps`'s self-closing queue (`0_review/gap-queue.md`) | 1 command → auto | `lint`·`review`·`gaps` (`src/engine/{lint,review,gaps}.ts`) |
 
 ### The human memory loop (`/wiki-quiz`)
-Every other stage keeps the **model** grounded; this one keeps the **human** sharp. The labor split leaves exactly one non-delegable duty — direction + contradiction judgment — and that judgment decays with the human's memory of their own past decisions. `/wiki-quiz` runs a few minutes of active recall over the wiki's judgment layer (direction > decision > insight·topic > milestone, newest first): the engine schedules deterministically on a day-granular forgetting curve (boxes 1·3·7·16·35·60 days; wrong/skip → back to 1 day; an item is never asked twice in one day), the session authors and gist-grades the questions warm, grounded in the pages. Wrong answers come back first the next day. Records live in `docs/wiki/6_quiz/` (ledger + per-day session notes) — a **human-only layer excluded from indexing/search/cold-start**, so the LLM never feeds on its own quiz output: strictly one-directional, wiki → human.
 
-A quiz session is **pre-authored in one batch**: the engine picks the due items, the session reads those pages together and writes every question up front, so answering one question shows the next immediately — no per-question wait. Session size is `[quiz] questions` in `llmwiki.config.toml` (default **3**, raise it with an argument like `/wiki-quiz 5`, capped at **7** by the engine — a quiz people skip reinforces nothing).
+Every other stage keeps the **model** grounded; this one keeps the **human** sharp.
+
+- **Why it exists**
+    - the labor split leaves the human exactly one non-delegable duty — direction + contradiction judgment
+    - that judgment decays together with your memory of your own past decisions
+- **How it schedules** — deterministic, engine-side, zero LLM
+    - day-granular forgetting curve: boxes of 1·3·7·16·35·60 days
+    - wrong or skipped → back to 1 day; an item is never asked twice in one day
+    - scope: the wiki's judgment layer — direction > decision > insight·topic > milestone, newest first
+- **How a session runs** — pre-authored in one batch
+    - the engine picks the due items; the session reads those pages together and writes every question up front — answering one shows the next with no wait
+    - answers are gist-graded warm, grounded in the pages; wrong answers come back first the next day
+    - size: `[quiz] questions` in `llmwiki.config.toml` — default **3**, raise per run like `/wiki-quiz 5`, engine-capped at **7** (a quiz people skip reinforces nothing)
+- **Where records live**
+    - `docs/wiki/6_quiz/` — ledger + per-day session notes
+    - a human-only layer excluded from indexing/search/cold-start — the LLM never feeds on its own quiz output: strictly wiki → human
 
 ### Evidence that travels with the page (page format v3)
-A citation like `[^s1]: <session>.jsonl` points at a transcript that lives on **one machine** — so a teammate can read your conclusion but not the grounding behind it. v3 puts 1–2 lines of the evidence itself on an indented continuation line under the footnote:
+
+A citation like `[^s1]: <session>.jsonl` points at a transcript that lives on **one machine** — a teammate can read your conclusion but not the grounding behind it. v3 puts 1–2 lines of the evidence itself right under the footnote:
 
 ```markdown
 - We kept the log layer and added the topic layer on top of it [^s1]
@@ -90,10 +128,27 @@ A citation like `[^s1]: <session>.jsonl` points at a transcript that lives on **
     > [2026-06-29 14:02 user] "keep the log as-is and layer on top — replacing it is the risky part"
 ```
 
-The footnote definition line stays byte-identical to before (four parsers read it, and one of them is what keeps a teammate's citation from erroring). Excerpts come from `llmwiki excerpt` — **verbatim, length-capped, and secret-screened**, because the raw material is a session transcript and those routinely contain credentials. Judgment claims quote the human; factual claims carry a machine tool-record. Lint verifies a quote really appears in the transcript **where that transcript is readable**, and stays silent on a clone where it isn't — "can't check" must never read as "wrong". Excerpts are excluded from the search index and from the topic-page budget, so adding evidence costs neither retrieval quality nor prose room.
+- **Format contract**
+    - the footnote definition line stays byte-identical to before — four parsers read it, and one of them keeps a teammate's citation from erroring
+    - excerpts come only from `llmwiki excerpt` — verbatim, length-capped, secret-screened (raw transcripts routinely contain credentials)
+    - judgment claims quote the human; factual claims carry a machine tool-record
+- **Lint stance**
+    - a quote is verified against the transcript only **where that transcript is readable**; on other clones lint stays silent — "can't check" must never read as "wrong"
+- **Zero retrieval cost**
+    - excerpts are excluded from the search index and the topic-page budget — evidence costs neither retrieval quality nor prose room
 
 ### Self-healing flow (the human only fills in)
-At close-out (`/wiki-fast`) and on the deep pass (`/wiki-deep`): ① deterministic `lint` (structure) → ② generative `review` (semantics — auto-run via `--if-due`, but the **engine enforces the cadence** (default 7 days, `LLMWIKI_REVIEW_INTERVAL_DAYS`); input is scoped to recent+tag-neighbor pages and skipped if nothing changed; the deep pass runs it unconditionally) → ③ the *missing concepts·follow-up questions* `review` surfaces get stacked by `gaps` into a **tracking queue**. A gap gets filled once someone **works that topic once, or the `/wiki-deep` deep pass fills it**, and **auto-closes** from the queue if `review` fails to surface it twice in a row. In other words, the wiki tells you *what's missing* on its own — the human only supplies the judgment to fill it in. Gaps are deliberately **not auto-generated** — so pages don't get invented from thin evidence.
+
+The wiki reports what's missing on its own; the human supplies only the judgment that fills it.
+
+- **At close-out (`/wiki-fast`) and on the deep pass (`/wiki-deep`)**
+    - ① deterministic `lint` — structure (orphan · stale · dangling)
+    - ② generative `review` — semantics (contradiction · stale claim · missing concept); auto via `--if-due` with an engine-enforced cadence (default 7 days, `LLMWIKI_REVIEW_INTERVAL_DAYS`), input scoped to recent + tag-neighbor pages, skipped when nothing changed; the deep pass runs it unconditionally
+    - ③ `gaps` — stacks the *missing concepts · follow-up questions* that `review` surfaced into a tracking queue (`0_review/gap-queue.md`)
+- **How a gap closes**
+    - filled once someone works that topic once, or the deep pass fills it
+    - auto-closes when `review` fails to surface it twice in a row
+- **Deliberately not auto-generated** — pages never get invented from thin evidence
 
 ## Structure
 
@@ -134,56 +189,70 @@ tests/         bun:test suite (chunker·refs·lint·extract·capture·db·source
 package.json·tsconfig.json   Bun metadata (for typecheck; the runtime executes .ts directly)
 ```
 
-Storage principle: **capture queue = central (`<clone>/.state/capture.db`) / content = each repo's `docs/wiki/` (co-located, markdown = source of truth) / index = `<repo>/.llmwiki/index.db` (regenerable)**.
+Storage principle — three homes, one owner each:
+
+- capture queue — central: `<clone>/.state/capture.db`
+- content — each repo's own `docs/wiki/` (co-located; markdown = source of truth)
+- index — `<repo>/.llmwiki/index.db` (regenerable at any time)
 
 ## Prerequisites
 
 | | Required | Notes |
 |---|---|---|
 | **Bun ≥ 1.1** | ✔ required | Single binary (`curl -fsSL https://bun.sh/install \| bash`). Runs `.ts` directly, and `bun:sqlite` bundles FTS5 — zero build·`node_modules`. Running the engine and `bun test` work with no install; only `bun run typecheck` (tsc) needs a one-time `bun install` (dev-only). |
-| **Codex CLI** | ✔ for the Codex quick start | `codex` must be on `PATH` with lifecycle-hook support and the stable `hooks` feature enabled. Setup checks support—and an existing feature setting—before changing hooks, skills, or services. |
-| **LLM CLI** | only for the generative pass | Capture·read-injection·`/wiki-*`·`ingest` (capture-only, queues pending updates) work without it. `autoupdate·review` and `ingest`'s consolidation call an LLM CLI, so they need one — default `claude -p` ([install](https://docs.claude.com/en/docs/claude-code/setup)), or point `LLMWIKI_LLM_CMD` at a different CLI/provider. |
+| **Codex · OpenCode CLI** | their quick starts only | `codex` / `opencode` on `PATH`. Codex additionally needs lifecycle-hook support with the stable `hooks` feature enabled. Setup checks support — and any existing feature setting — before changing hooks, skills, or services. |
+| **LLM CLI** | only for the generative pass | Capture·read-injection·`/wiki-*`·`ingest` (capture-only, queues pending updates) work without it. `autoupdate·review` and `ingest`'s consolidation call an LLM CLI — default `claude -p` ([install](https://docs.claude.com/en/docs/claude-code/setup)), or point `LLMWIKI_LLM_CMD` at a different CLI/provider. |
 | **OS** | macOS / Linux | macOS=launchd, Linux=systemd (`--user`), falls back to cron+nohup if systemd is unavailable. Daemon details in [`daemon/README.md`](daemon/README.md) |
 
-### Harness·OS notes (Claude Code / Codex / Windows)
+### Harness · OS notes (Claude Code / Codex / OpenCode / Windows)
 
-- **Claude Code**: `git clone … && ./setup.sh` → done. Capture·read-injection·`/wiki-*` are all wired automatically.
-- **Codex (OpenAI)**: `./setup.sh --harness codex` installs the user CLI, four `$wiki-*` skills, and merges native `SessionStart`/`UserPromptSubmit` hooks into `$CODEX_HOME/hooks.json`. Start Codex once and use `/hooks` to review the exact commands; new or changed hooks stay skipped until trusted. Capture watches `$CODEX_HOME/sessions/**/*.jsonl[.zst]`. Warm skills work with Codex itself; unattended `autoupdate`/`review` still need `LLMWIKI_LLM_CMD` when Claude CLI is absent.
-- **OpenCode**: `./setup.sh --harness opencode` installs global `/wiki-*` custom commands, a clone-pinned read-injection plugin, and the user CLI. Capture reads the SQLite session store; setup preserves `XDG_DATA_HOME`/`OPENCODE_DB` in the daemon environment.
-- **Windows**: Bun·`bun:sqlite` run natively and path matching normalizes backslashes. But native Windows needs (a) **Git Bash** for the `.sh` scripts, and (b) manual **Task Scheduler/NSSM** registration since there's no launchd/systemd/cron for the daemon. → **WSL2 is recommended** (launchd→systemd·bash·paths all work unmodified; this also matches the official Claude Code·Codex recommendation).
+- **Claude Code** — `git clone … && ./setup.sh`, done
+    - capture · read-injection · `/wiki-*` commands all wired automatically
+- **Codex (OpenAI)** — `./setup.sh --harness codex`
+    - installs the user CLI + four `$wiki-*` skills, and merges native `SessionStart`/`UserPromptSubmit` hooks into `$CODEX_HOME/hooks.json`
+    - one-time: start Codex and review the exact commands in `/hooks` — new or changed hooks stay skipped until trusted
+    - capture watches `$CODEX_HOME/sessions/**/*.jsonl[.zst]`
+    - warm skills run on Codex itself; unattended `autoupdate`/`review` still need `LLMWIKI_LLM_CMD` when the Claude CLI is absent
+- **OpenCode** — `./setup.sh --harness opencode`
+    - installs global `/wiki-*` custom commands, a clone-pinned read-injection plugin, and the user CLI
+    - capture reads the SQLite session store; `XDG_DATA_HOME`/`OPENCODE_DB` are preserved in the daemon environment
+- **Windows** — WSL2 recommended
+    - Bun·`bun:sqlite` run natively, and path matching normalizes backslashes
+    - native Windows still needs Git Bash for the `.sh` scripts, plus manual Task Scheduler/NSSM registration (no launchd/systemd/cron)
+    - under WSL2 everything runs unmodified (launchd→systemd·bash·paths) — also the official Claude Code·Codex recommendation
 
 ## Install / Usage
 
-**Clone this repo anywhere, under any name, and run `./setup.sh`** — that makes it the engine for that machine. Re-run setup after moving or updating the clone; it refreshes generated skills and wiring idempotently.
-All wiring (daemon·hooks·CLI·`/wiki-*` commands) is **derived from the clone location itself**, so there's no need
-for a fixed path like `~/llmwiki` (the clone folder can have any name). With just Bun, `.ts` runs as-is via `bun` with no extra dependencies (no bundle·build step).
+**Clone this repo anywhere, under any name, and run `./setup.sh`** — that makes it the engine for that machine.
+
+- every wire (daemon · hooks · CLI · `/wiki-*` commands) is derived from the clone location itself — no fixed path like `~/llmwiki`, any folder name
+- with just Bun, `.ts` runs as-is — no bundle, no build step
+- after moving or updating the clone, re-run setup — it refreshes generated skills and wiring idempotently
 
 ```bash
-# 0) clone the runtime engine (once, one per machine) — location/name doesn't matter
-git clone https://github.com/suwonleee/llmwiki-runtime.git llmwiki_runtime
-cd llmwiki_runtime
+# 0) clone the engine (once, one per machine) — location/name doesn't matter
+git clone https://github.com/suwonleee/llmwiki.git
+cd llmwiki
 
-# 1) one-shot install — doctor → capture daemon (OS auto-detect) → Codex hooks + skills + CLI → doctor
-./setup.sh --harness codex               # use --harness auto when Claude Code is also installed
-# OpenCode only: ./setup.sh --harness opencode
+# 1) one-shot install — doctor → capture daemon (OS auto-detect) → harness wiring → doctor
+./setup.sh --harness auto                # or pin one: claude · codex · opencode
 
 # 2) just work — sessions are captured automatically in any folder/terminal
-#    to use it manually in another project, from that folder:
-#    bun <clone>/src/cli.ts init|index|search|lint <repo>
+#    manual per-repo commands: bun <clone>/src/cli.ts init|index|search|lint <repo>
 
-# 3) in Codex, close out/tidy up the session (type these in the Codex prompt)
-$wiki-fast                              # FAST close-out: this meaningful session + topics + L0 + lint
-$wiki-deep                              # periodic DEEP pass: backlog + review + gaps + re-distill
-$wiki-quiz                              # human memory loop over your own decisions/direction
+# 3) close out the session in your agent's prompt
+/wiki-fast                               # FAST close-out (Codex: $wiki-fast)
+/wiki-deep                               # periodic DEEP pass (Codex: $wiki-deep)
+/wiki-quiz                               # human memory loop (Codex: $wiki-quiz)
 ```
 
-> To run individual steps: `bun <clone>/src/cli.ts doctor` · `bash <clone>/daemon/install.sh` ·
-> `bun <clone>/src/daemon/wire-codex.ts`. To revert Codex wiring:
-> `bun <clone>/src/daemon/wire-codex.ts --revert`. Claude Code uses `wire.ts` separately.
+> Individual steps: `bun <clone>/src/cli.ts doctor` · `bash <clone>/daemon/install.sh` ·
+> `bun <clone>/src/daemon/wire.ts` (Claude) · `wire-codex.ts` / `wire-opencode.ts` (Codex/OpenCode) —
+> each wire script also takes `--revert` to undo its own changes.
 
-## Configuration (environment variables) — provider·model·CLI agnostic
+## Configuration (environment variables) — provider · model · CLI agnostic
 
-The generative pass (autoupdate/review) uses `claude -p` + the latest Claude model by default, but everything can be swapped via env vars (with no configuration at all, behavior is identical to the stock defaults):
+The generative pass (autoupdate/review) defaults to `claude -p` + the latest Claude models; with no configuration at all, behavior is identical to stock.
 
 | env | default | purpose |
 |---|---|---|
@@ -200,23 +269,34 @@ The generative pass (autoupdate/review) uses `claude -p` + the latest Claude mod
 | `LLMWIKI_OVERVIEW_BUDGET` | `8000` | Character budget for overview.md at which `overview --normalize` warns (watches for entry-point bloat). |
 | `LLMWIKI_L0_BUDGET` | `1600` | Character **standard** for the cold-start L0 (current-state). Injection **never cuts**: an over-standard page is injected whole with a one-line notice appended (nudging the next close-out to trim); the `oversized-l0` lint warns from 1.25×. |
 
-Bump each tier to "whatever top-tier model just shipped," or swap in a non-Anthropic model/endpoint.
-
-**Harness-agnostic reading**: `bun <clone>/src/cli.ts context <repo>` prints the cold-start context, and `... turn-context <repo>` (hook stdin JSON or `--prompt`) prints per-turn related-page pointers (≤3 lines, silent unless confident). Claude Code wires both automatically (SessionStart·UserPromptSubmit hooks); recent Codex can run the same hook scripts natively (`adapters/codex/`), OpenCode via a one-file plugin (`adapters/opencode/`). Other harnesses invoke the same commands from AGENTS.md/a startup prompt. Per-turn injection is a progressive enhancement — the cold-start + `search` baseline is identical everywhere.
+- bump each tier to whatever top-tier model just shipped, or swap in a non-Anthropic model/endpoint
+- **Harness-agnostic reading**
+    - `bun <clone>/src/cli.ts context <repo>` — the cold-start context · `… turn-context <repo>` (hook stdin JSON or `--prompt`) — per-turn related-page pointers (≤3 lines, silent unless confident)
+    - Claude Code wires both hooks automatically; recent Codex runs the same hook scripts natively (`adapters/codex/`); OpenCode injects via a one-file plugin (`adapters/opencode/`)
+    - any other harness calls the same commands from AGENTS.md or a startup prompt
+    - per-turn injection is a progressive enhancement — the cold-start + `search` baseline is identical everywhere
 
 ## Team use (sharing one project's wiki)
 
-Solo is the default and needs none of this — everything below is additive and silent for a single user.
+Solo is the default and needs none of this — everything below is additive and silent for a single user. With several people on one project, each runs their own local engine (own capture daemon, own queue) and condenses **their own sessions** into the shared `docs/wiki/`; sharing is plain git.
 
-When several people work on one project, each person runs their own local engine (own capture daemon, own queue) and condenses **their own sessions** into the shared `docs/wiki/`; sharing is plain git. What the engine does for you:
-
-- **Scaffold safety**: the skeleton ensures `.gitignore` (`.llmwiki/` — the derived index is never committed) and `.gitattributes` (`docs/wiki/log.md merge=union` — concurrent appends merge cleanly instead of conflicting).
-- **Attribution**: unattended writes stamp `author:` (from git `user.name`) into page frontmatter; a `0_review` question can carry `owner: <name>` and cold-start shows it as `[→ name]` so teammates skip questions that aren't theirs.
-- **Teammate citations**: a footnote citing a transcript from another machine self-heals — every clean cited `.jsonl` is registered as a virtual source on index rebuild (transcripts rotate anyway), so a teammate's citation never breaks your `lint` gate. Malformed citations still error.
-- **Continuity**: cold-start prints one line when your clone is behind origin (a teammate may have merged context — pull before starting).
-- **Review flow**: treat wiki commits like code — same branch, same PR; the PR review *is* the human gate for AI-written pages. If `gap-queue.md`/`overview.md` ever conflict, take either side and re-run `llmwiki gaps` / `llmwiki overview --normalize` (they converge); never hand-merge their generated bodies.
-- **`current-state.md` (L0) conflicts**: taking either side is safe — the next `/wiki-fast` freshness step re-derives Now/Next from the wiki state and converges. Prefer the union of both sides' **Next** bullets (never lose a pending action).
-- **Same `5_topic` page, concurrent appends**: keep **both sides' bullets**. Topic pages are additive by format rule (existing lines are immutable; merges only add), so the union is always the correct merge.
+- **Scaffold safety**
+    - `.gitignore` seeded — `.llmwiki/` (the derived index) never gets committed
+    - `.gitattributes` seeded — `docs/wiki/log.md merge=union`, so concurrent appends merge instead of conflicting
+- **Attribution**
+    - unattended writes stamp `author:` (from git `user.name`) into page frontmatter
+    - a `0_review` question can carry `owner: <name>` — cold-start shows it as `[→ name]`, so teammates skip questions that aren't theirs
+- **Teammate citations self-heal**
+    - every clean cited `.jsonl` is registered as a virtual source on index rebuild (transcripts rotate anyway)
+    - a teammate's citation never breaks your `lint` gate; malformed citations still error
+- **Continuity**
+    - cold-start prints one line when your clone is behind origin — a teammate may have merged context; pull before starting
+- **Review flow**
+    - wiki commits ride the same branch and PR as code — the PR review *is* the human gate for AI-written pages
+    - `gap-queue.md` / `overview.md` conflicts: take either side, re-run `llmwiki gaps` / `llmwiki overview --normalize` (they converge) — never hand-merge their generated bodies
+- **Known-safe conflicts**
+    - `current-state.md` (L0): either side is safe — the next `/wiki-fast` re-derives Now/Next from the wiki state; prefer the union of both sides' **Next** bullets (never lose a pending action)
+    - same `5_topic` page, concurrent appends: keep **both sides' bullets** — topic pages are additive by format rule (existing lines immutable, merges only add), so the union is always the correct merge
 
 ## Team conventions — `llmwiki.config.toml` (optional)
 
@@ -230,23 +310,40 @@ review = "human"   # human → 0_review queue · model → strong-model adjudica
 guide = "Quarterly goals; changes need human sign-off."
 ```
 
-- **Single source of truth**: the WRITE prompts, cold-start operating rules, and `llmwiki conventions <repo>` (which the `/wiki-*` skills defer to) are all rendered from this file — no prose duplicates to drift.
-- **Per-repo configs** (optional): put multiple `*.toml` files under `<clone>/configs/`. A file with a top-level `applies_to = ["<folder>", ...]` governs those folders and everything under them (segment-safe prefix, most-specific match wins, `~` expands); a file without `applies_to` is the default for all repos (canonical: `configs/default.toml`). Precedence: named match → `configs/` default → root `llmwiki.config.toml` → built-in defaults. Matching uses the path the session hook passes (`CLAUDE_PROJECT_DIR`/cwd).
-- **Check** with `llmwiki config [workspace]` — shows which file was selected and why (validates; an invalid or unreadable file falls back safely with a warning, never breaks a session).
-- **Restructure an existing wiki** with `llmwiki migrate <repo>` (dry-run) → `--commit`: folder renames with every wikilink/relative link rewritten, frontmatter `domain:` updated, `.schema-version` stamped. Never runs automatically — cold-start only *detects* drift (both directions: wiki newer than your engine config, or config newer than the wiki) and suggests it.
-- **Team distribution**: commit the config to your team's engine fork; members `git pull`, one person runs `migrate`, the result merges by PR like any other change.
-- **Compatibility discipline**: config keys are only removed after a deprecation window with a lint warning and a `migrate` step — never silently.
+- **Single source of truth**
+    - the WRITE prompts, cold-start operating rules, and `llmwiki conventions <repo>` (which the `/wiki-*` skills defer to) all render from this file — no prose duplicates to drift
+- **Per-repo configs** (optional)
+    - multiple `*.toml` files under `<clone>/configs/` — a file with `applies_to = ["<folder>", …]` governs those folders and everything under them (segment-safe prefix, most-specific match wins, `~` expands)
+    - a file without `applies_to` = the default for all repos (canonical: `configs/default.toml`)
+    - precedence: named match → `configs/` default → root `llmwiki.config.toml` → built-in defaults; matching uses the path the session hook passes (`CLAUDE_PROJECT_DIR`/cwd)
+- **Check** — `llmwiki config [workspace]`
+    - shows which file was selected and why (with validation); an invalid or unreadable file falls back safely with a warning — never breaks a session
+- **Restructure an existing wiki** — `llmwiki migrate <repo>` (dry-run) → `--commit`
+    - folder renames with every wikilink/relative link rewritten, frontmatter `domain:` updated, `.schema-version` stamped
+    - never runs automatically — cold-start only detects drift (both directions: wiki newer than your engine config, or config newer than the wiki) and suggests it
+- **Team distribution**
+    - commit the config to your team's engine fork; members `git pull`, one person runs `migrate`, the result merges by PR like any other change
+- **Compatibility discipline**
+    - config keys are removed only after a deprecation window with a lint warning and a `migrate` step — never silently
 
 ## Regression measurement (engine-dev tools — never part of the daily loop)
 
-- **`llmwiki bench <repo>`** — deterministic retrieval benchmark (zero LLM, runs in ms). Golden query set at `<repo>/docs/wiki/.bench/golden.toml` (≤20 per repo, any language) → search any-hit `r@k` + turn-context pointer-hit/silence (a refusal query is correct when turn-context stays silent — structural, language-neutral). Seeded tune/sealed split via `--tune-only` / `--sealed` (tune = iterate freely; every look at sealed results weakens it as a regression guard — final checks only).
-- **`llmwiki compare-arm <repo> --corpus <dir> --label <name>`** → **`llmwiki compare-verdict A.json B.json`** — frozen-corpus A/B: build an isolated temp wiki per config/git-state from the same transcript corpus (the arm build is the only LLM step), then judge the two labeled results with sequential gates (regression-block first → keep/adopt/undecided, zero LLM). Run only when prompts/models change.
+- **`llmwiki bench <repo>`** — deterministic retrieval benchmark (zero LLM, runs in ms)
+    - golden query set at `<repo>/docs/wiki/.bench/golden.toml` (≤20 per repo, any language)
+    - scores search any-hit `r@k` + turn-context pointer-hit/silence — a refusal query is correct when turn-context stays silent (structural, language-neutral)
+    - seeded tune/sealed split — `--tune-only` to iterate freely, `--sealed` for final checks only (every look at sealed results weakens it as a regression guard)
+- **`llmwiki compare-arm <repo> --corpus <dir> --label <name>`** → **`llmwiki compare-verdict A.json B.json`** — frozen-corpus A/B
+    - builds an isolated temp wiki per config/git-state from the same transcript corpus — the arm build is the only LLM step
+    - judges the two labeled results with sequential gates: regression-block first → keep/adopt/undecided, zero LLM
+    - run only when prompts/models change
 
 ## Principles
-- transcript = raw and immutable (citation only, no wiki→wiki re-derivation). Incremental = process only what's past the watermark.
-- fact = automatic by AI / judgment (decision Why·What·Alt·direction) = human (`status: draft` flag).
-- git markdown = single source of truth. Commits = under a single author's identity (the repo owner).
-- No over-engineering: under 100k tokens, no vector DB·RAG needed (index.md navigation suffices).
+
+- transcript = raw and immutable — citation only, no wiki→wiki re-derivation; incremental = only what's past the watermark
+- fact = automatic by AI / judgment (decision Why·What·Alt·direction) = human — the `status: draft` flag
+- git markdown = single source of truth — commits under a single author's identity (the repo owner)
+- no over-engineering — under 100k tokens, no vector DB·RAG needed (index.md navigation suffices)
 
 ## License
+
 [Apache License 2.0](LICENSE) © 2026 suwonleee.
