@@ -145,7 +145,7 @@ export function mark(transcriptPath: string, byteOffset: number, status = "disti
 }
 
 // All transcripts the central queue has seen for a repo (any status). Used by
-// `register-transcript` to make a warm /wiki-fast session's transcripts citable sources so
+// `register-transcript` to make a warm /wiki-save session's transcripts citable sources so
 // decision/insight pages can cite the real session (not a repointed code file).
 export function transcriptsForRepo(repo: string): { path: string; session: string | null }[] {
   const db = connect();
@@ -165,4 +165,33 @@ export function stats(): Record<string, number> {
   const out: Record<string, number> = {};
   for (const r of rows) out[r.status] = r.n;
   return out;
+}
+
+// Delete queue rows that can never condense again: still pending, transcript gone (no .zst
+// sibling either — same liveness rule as pending()), and old enough that "gone" means the
+// harness rotated it rather than a volume that happens to be unreachable right now — deleting
+// a merely-unreachable row would reset its watermark and re-condense already-filed content
+// when the file reappears. Distilled/skipped rows stay regardless of the file: they are the
+// ledger of what was filed (register-transcript reads them for citations).
+export function prune(olderThanDays = 30): { removed: number; kept: number } {
+  const db = connect();
+  const rows = db
+    .query("SELECT transcript_path, first_seen FROM capture_queue WHERE status='pending'")
+    .all() as { transcript_path: string; first_seen: string | null }[];
+  const cutoffMs = Date.now() - olderThanDays * 86_400_000;
+  let removed = 0;
+  for (const r of rows) {
+    const alive =
+      existsSync(r.transcript_path) ||
+      (!r.transcript_path.endsWith(".zst") && existsSync(`${r.transcript_path}.zst`));
+    if (alive) continue;
+    // first_seen is sqlite datetime('now') — UTC "YYYY-MM-DD HH:MM:SS"
+    const seenMs = r.first_seen ? Date.parse(`${r.first_seen.replace(" ", "T")}Z`) : NaN;
+    if (Number.isNaN(seenMs) || seenMs > cutoffMs) continue;
+    db.run("DELETE FROM capture_queue WHERE transcript_path = ?", [r.transcript_path]);
+    removed++;
+  }
+  const kept = rows.length - removed;
+  db.close();
+  return { removed, kept };
 }

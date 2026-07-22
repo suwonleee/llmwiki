@@ -10,8 +10,8 @@ It installs three user-level surfaces:
 
 - `$XDG_CONFIG_HOME/opencode/plugin/llmwiki.ts` (default
   `~/.config/opencode/plugin/llmwiki.ts`) for cold-start and per-turn read injection.
-- `$XDG_CONFIG_HOME/opencode/commands/wiki-{fast,deep,ask,quiz}.md` for
-  `/wiki-fast`, `/wiki-deep`, `/wiki-ask`, and `/wiki-quiz`.
+- `$XDG_CONFIG_HOME/opencode/commands/wiki-{save,deep,ask,quiz}.md` for
+  `/wiki-save`, `/wiki-deep`, `/wiki-ask`, and `/wiki-quiz`.
 - `~/.local/bin/llmwiki`, unless `LLMWIKI_BIN_DIR` selects another user bin directory.
 
 The installer preserves unrelated files, refuses name collisions, re-points managed

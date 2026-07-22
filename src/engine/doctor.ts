@@ -35,7 +35,7 @@ const CORE = [
   "hooks/sessionstart-inject.sh",
   "hooks/userpromptsubmit-inject.sh",
   "setup.sh",
-  "skill/wiki-fast.md",
+  "skill/wiki-save.md",
   "skill/wiki-ask.md",
   "skill/wiki-deep.md",
   "skill/wiki-quiz.md",
@@ -44,7 +44,7 @@ const CORE = [
 // Must stay in sync with wire.ts SKILLS and the repo's skill/ dir — tests/skills-drift.test.ts
 // enforces all three (drift here is silent: wire installs a command doctor never checks, so its
 // loss is invisible — the same success-looking-failure class as the CLI value-flag allowlist).
-const COMMANDS = ["wiki-fast.md", "wiki-ask.md", "wiki-deep.md", "wiki-quiz.md"] as const;
+const COMMANDS = ["wiki-save.md", "wiki-ask.md", "wiki-deep.md", "wiki-quiz.md"] as const;
 const PLIST = join(HOME, "Library", "LaunchAgents", "com.llmwiki.daemon.plist");
 const LABEL = "com.llmwiki.daemon";
 // canonical SessionStart read-injection hook — what --fix re-registers if a profile lost it
@@ -61,10 +61,13 @@ const TURNCTX_CMD = `bash ${shellQuote(`${CLONE_ROOT}/hooks/userpromptsubmit-inj
 const WIRE_CLAUDE_CMD = `bun ${shellQuote(join(CLONE_ROOT, "src", "daemon", "wire.ts"))}`;
 const WIRE_CODEX_CMD = `bun ${shellQuote(join(CLONE_ROOT, "src", "daemon", "wire-codex.ts"))}`;
 const WIRE_OPENCODE_CMD = `bun ${shellQuote(join(CLONE_ROOT, "src", "daemon", "wire-opencode.ts"))}`;
-const CODEX_SKILLS = ["wiki-fast", "wiki-ask", "wiki-deep", "wiki-quiz"] as const;
-const LEGACY_CODEX_SKILLS = CODEX_SKILLS.map((name) => `llmwiki-${name.slice("wiki-".length)}`);
+const CODEX_SKILLS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz"] as const;
+// explicit install history (mirrors wire-codex.ts LEGACY_SKILLS) — deriving legacy names from
+// the current ones breaks on every rename: it fabricates never-installed names and goes blind
+// to the ones that actually exist on disk
+const LEGACY_CODEX_SKILLS = ["llmwiki-fast", "llmwiki-ask", "llmwiki-deep", "llmwiki-quiz", "wiki-fast"];
 const CODEX_MANAGED = "llmwiki-codex-managed";
-const OPENCODE_COMMANDS = ["wiki-fast", "wiki-ask", "wiki-deep", "wiki-quiz"] as const;
+const OPENCODE_COMMANDS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz"] as const;
 const OPENCODE_MANAGED = "llmwiki-opencode-managed";
 
 export interface CodexInstallStatus {

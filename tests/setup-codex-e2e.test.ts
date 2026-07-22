@@ -71,8 +71,8 @@ describe("fresh Codex setup", () => {
       `<key>CODEX_HOME</key><string>${codexHome.replaceAll("&", "&amp;")}</string>`,
     );
     expect(readFileSync(join(codexHome, "hooks.json"), "utf8")).toContain("sessionstart-inject.sh");
-    expect(readFileSync(join(home, ".agents", "skills", "wiki-fast", "SKILL.md"), "utf8")).toContain(
-      "name: wiki-fast",
+    expect(readFileSync(join(home, ".agents", "skills", "wiki-save", "SKILL.md"), "utf8")).toContain(
+      "name: wiki-save",
     );
 
     const cli = Bun.spawnSync([join(home, ".local", "bin", "llmwiki"), "--help"], {

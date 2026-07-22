@@ -20,12 +20,12 @@ Options:
 
 Codex installs:
   - native SessionStart + UserPromptSubmit hooks in \$CODEX_HOME/hooks.json
-  - \$wiki-fast, \$wiki-deep, \$wiki-ask, \$wiki-quiz skills
+  - \$wiki-save, \$wiki-deep, \$wiki-ask, \$wiki-quiz skills
   - a user-level llmwiki command in ~/.local/bin
 
 OpenCode installs:
   - the global read-injection plugin under \$XDG_CONFIG_HOME/opencode/plugin
-  - /wiki-fast, /wiki-deep, /wiki-ask, /wiki-quiz commands
+  - /wiki-save, /wiki-deep, /wiki-ask, /wiki-quiz commands
   - the same user-level llmwiki command
 EOF
 }
@@ -214,13 +214,13 @@ echo "=== setup installed. ==="
 echo "  • Initialize a project: llmwiki init <repo>"
 if [ "$USE_CODEX" -eq 1 ]; then
     echo "  • One-time Codex activation: start Codex, open /hooks, trust both llmwiki hooks."
-    echo "  • Then work in a project and close the session with: \$wiki-fast"
+    echo "  • Then work in a project and close the session with: \$wiki-save"
 fi
 if [ "$USE_CLAUDE" -eq 1 ]; then
-    echo "  • Claude Code close-out: /wiki-fast"
+    echo "  • Claude Code close-out: /wiki-save"
 fi
 if [ "$USE_OPENCODE" -eq 1 ]; then
-    echo "  • OpenCode close-out: /wiki-fast"
+    echo "  • OpenCode close-out: /wiki-save"
 fi
 echo "  • Verify anytime: llmwiki doctor"
 echo "  • Undo Codex: $BUN_Q ${ROOT_Q}/src/daemon/wire-codex.ts --revert"

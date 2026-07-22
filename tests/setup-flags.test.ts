@@ -75,7 +75,7 @@ describe("setup command contract", () => {
     expect(result.exitCode).toBe(0);
     const output = new TextDecoder().decode(result.stdout);
     expect(output).toContain("OpenCode");
-    expect(output).toContain("/wiki-fast");
+    expect(output).toContain("/wiki-save");
     expect(existsSync(join(home, ".config", "opencode"))).toBe(false);
     expect(existsSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"))).toBe(false);
   });
@@ -146,7 +146,7 @@ describe("setup command contract", () => {
   test("OpenCode command conflicts fail in preflight before daemon mutation", () => {
     const commandDir = join(home, ".config", "opencode", "commands");
     mkdirSync(commandDir, { recursive: true });
-    writeFileSync(join(commandDir, "wiki-fast.md"), "---\ndescription: user-owned\n---\n");
+    writeFileSync(join(commandDir, "wiki-save.md"), "---\ndescription: user-owned\n---\n");
 
     const result = run(["--harness", "opencode"]);
 

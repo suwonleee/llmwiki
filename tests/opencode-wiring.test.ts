@@ -15,7 +15,7 @@ import { join } from "node:path";
 
 const ROOT = join(import.meta.dir, "..");
 const WIRE = join(ROOT, "src", "daemon", "wire-opencode.ts");
-const COMMANDS = ["wiki-fast", "wiki-ask", "wiki-deep", "wiki-quiz"] as const;
+const COMMANDS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz"] as const;
 
 function run(home: string, configRoot: string, args: string[] = []) {
   return Bun.spawnSync(["bun", WIRE, ...args], {
@@ -80,7 +80,7 @@ describe("OpenCode wiring", () => {
   });
 
   test("refuses to overwrite an unrelated slash command", () => {
-    const command = join(opencodeRoot, "commands", "wiki-fast.md");
+    const command = join(opencodeRoot, "commands", "wiki-save.md");
     mkdirSync(join(opencodeRoot, "commands"), { recursive: true });
     writeFileSync(command, "---\ndescription: user-owned\n---\nDo something else.\n");
 
@@ -145,8 +145,8 @@ describe("OpenCode wiring", () => {
 
   test("OpenCode revert leaves the shared CLI while Codex still uses this clone", () => {
     expect(run(home, configRoot).exitCode).toBe(0);
-    const codexSkill = join(home, ".agents", "skills", "wiki-fast", "SKILL.md");
-    mkdirSync(join(home, ".agents", "skills", "wiki-fast"), { recursive: true });
+    const codexSkill = join(home, ".agents", "skills", "wiki-save", "SKILL.md");
+    mkdirSync(join(home, ".agents", "skills", "wiki-save"), { recursive: true });
     writeFileSync(codexSkill, `<!-- llmwiki-codex-managed root=${ROOT} -->\n`);
 
     expect(run(home, configRoot, ["--revert"]).exitCode).toBe(0);

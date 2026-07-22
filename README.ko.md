@@ -40,7 +40,7 @@ cd /path/to/your-project
 claude
 ```
 
-- 의미 있는 세션 마감은 **`/wiki-fast`** — 주기 deep 패스 `/wiki-deep` · 질문·재기록 `/wiki-ask` · 사람 복습 `/wiki-quiz`
+- 의미 있는 세션 마감은 **`/wiki-save`** — 주기 deep 패스 `/wiki-deep` · 질문·재기록 `/wiki-ask` · 사람 복습 `/wiki-quiz`
 - 자동 배선: 캡처 데몬 · SessionStart/UserPromptSubmit 읽기 주입 · `/wiki-*` 커맨드
 - 상태 점검: `bun src/cli.ts doctor`
     - `llmwiki` 사용자 명령은 Codex/OpenCode 배선이 설치함 — Claude 단독 설치에서는 `bun <clone>/src/cli.ts …` 형태로 CLI 사용
@@ -59,7 +59,7 @@ llmwiki init .
 codex
 ```
 
-- Codex 입력창에서: 의미 있는 세션 마감 **`$wiki-fast`** · 주기적으로 `$wiki-deep` · 질문·재기록 `$wiki-ask` · 사람 복습 `$wiki-quiz`
+- Codex 입력창에서: 의미 있는 세션 마감 **`$wiki-save`** · 주기적으로 `$wiki-deep` · 질문·재기록 `$wiki-ask` · 사람 복습 `$wiki-quiz`
 - setup이 설치하는 것
     - `~/.agents/skills` 아래 `$wiki-*` 스킬 4개 — 재실행 시 이전 `$llmwiki-*` 설치를 짧은 이름으로 안전하게 이관
     - `$CODEX_HOME/hooks.json`에 native `SessionStart`/`UserPromptSubmit` 훅 병합 — 무관한 기존 훅은 보존
@@ -80,7 +80,7 @@ llmwiki init .
 opencode
 ```
 
-- Claude Code와 동일한 문법: **`/wiki-fast`** · `/wiki-deep` · `/wiki-ask` · `/wiki-quiz`
+- Claude Code와 동일한 문법: **`/wiki-save`** · `/wiki-deep` · `/wiki-ask` · `/wiki-quiz`
 - setup이 설치하는 것
     - `$XDG_CONFIG_HOME/opencode/`(기본 `~/.config/opencode/`)에 전역 `/wiki-*` custom command + 읽기 주입 플러그인
     - `~/.local/bin`에 공유 `llmwiki` 명령
@@ -92,11 +92,15 @@ opencode
 | 고리 | 무엇 | 자동? | 구현 |
 |------|------|:---:|------|
 | **캡처** | 모든 세션 transcript → 중앙 큐 | ✔ | `src/daemon/watch.ts` (터미널·프로필 무관) |
-| **업데이트(update)** | 큐 → 그 레포 `docs/wiki/` **로그층**(증분 append) | 1커맨드 | Codex: `$wiki-fast` / `$wiki-deep` · Claude·OpenCode: `/wiki-fast` / `/wiki-deep` + `src/engine/update.ts` |
-| **통합(consolidate)** | 로그 → 개념별 **주제 백과** `5_topic/`(in-place 병합·raw 재-grounding) | 1커맨드 | Codex: `$wiki-fast` / `$wiki-deep` · Claude·OpenCode: `/wiki-fast` / `/wiki-deep` + `src/engine/consolidate.ts` |
+| **업데이트(update)** | 큐 → 그 레포 `docs/wiki/` **로그층**(증분 append) | 1커맨드 | Codex: `$wiki-save` / `$wiki-deep` · Claude·OpenCode: `/wiki-save` / `/wiki-deep` + `src/engine/update.ts` |
+| **통합(consolidate)** | 로그 → 개념별 **주제 백과** `5_topic/`(in-place 병합·raw 재-grounding) | 1커맨드 | Codex: `$wiki-save` / `$wiki-deep` · Claude·OpenCode: `/wiki-save` / `/wiki-deep` + `src/engine/consolidate.ts` |
 | **읽기** | cold-start 주입 + 턴별 관련 페이지 포인터 | ✔ | `hooks/sessionstart-inject.sh` · `hooks/userpromptsubmit-inject.sh` (Claude Code; Codex/OpenCode 는 `adapters/`) |
 | **퀴즈(사람 기억)** | 위키의 판단층 → **사람을 위한** 망각곡선(일 단위) 간격반복 퀴즈 (`6_quiz/` 기록 — 인덱스·검색 제외; cold-start 에 due 카운트 1줄) | 1커맨드 | Codex: `$wiki-quiz` · Claude·OpenCode: `/wiki-quiz` + `src/engine/quiz.ts` (`quiz-status`·`quiz-next`·`quiz-record`) |
 | **자가치유** | 구조(orphan·stale·dangling)=결정적 `lint` / 의미(모순·낡은주장·개념누락)=생성적 `review`(sync 자동 — 주기 게이트 `--if-due` 기본 7일·범위한정+캐시) → 갭은 `gaps` 자가종료 큐(`0_review/gap-queue.md`) | 1커맨드 → 자동 | `lint`·`review`·`gaps` (`src/engine/{lint,review,gaps}.ts`) |
+
+- **transcript 보존** — transcript는 llmwiki가 아니라 에이전트의 파일
+    - 각 에이전트의 보존정책대로 회전 (Claude Code 기본 ~30일 · Codex는 종료 세션을 `.zst` 압축) — llmwiki는 사본을 만들지 않음
+    - 남길 세션은 회전 전에 `/wiki-save`로 마감 · transcript가 이미 사라진 큐 행은 deep 패스가 정리 (`capture-prune`, 30일 가드)
 
 ### 사람 기억 루프 (`/wiki-quiz`)
 
@@ -141,7 +145,7 @@ opencode
 
 위키가 무엇이 빠졌는지 스스로 보고하고, 사람은 채우는 판단만 합니다.
 
-- **마감(`/wiki-fast`) · deep 패스(`/wiki-deep`) 때**
+- **마감(`/wiki-save`) · deep 패스(`/wiki-deep`) 때**
     - ① 결정적 `lint` — 구조 (orphan · stale · dangling)
     - ② 생성적 `review` — 의미 (모순 · 낡은 주장 · 개념 누락); `--if-due`로 자동 실행하되 엔진이 주기를 강제(기본 7일, `LLMWIKI_REVIEW_INTERVAL_DAYS`) · 입력은 최근+태그 이웃 한정 · 무변경 시 스킵 · deep 패스는 무조건 실행
     - ③ `gaps` — `review`가 찾은 *개념 누락 · 다음 질문*을 추적 큐(`0_review/gap-queue.md`)로 적재
@@ -155,7 +159,7 @@ opencode
 ```
 setup.sh       원클릭 온보딩 (경로 무관: doctor→데몬→훅·커맨드→인덱스)
 src/           TypeScript 엔진 (Bun 런타임, bun:sqlite 내장 — node_modules·빌드 0)
-  cli.ts       CLI 디스패처: init·index·reindex·refs·lint·search·update-*·skeleton·autoupdate·consolidate·topics·ingest·register-transcript·review·gaps·distill-verify·git-rules·overview·reconcile·doctor·context·digest·context-audit·config·conventions·migrate·quiz-*·bench·compare-arm·compare-verdict
+  cli.ts       CLI 디스패처: init·index·reindex·refs·lint·search·update-*·skeleton·autoupdate·consolidate·topics·ingest·register-transcript·review·gaps·distill-verify·git-rules·overview·reconcile·doctor·context·digest·context-audit·config·conventions·migrate·quiz-*·capture-prune·bench·compare-arm·compare-verdict
   engine/
     schema.sql   per-repo 인덱스 스키마 (documents·chunks·FTS5·references)
     db.ts        WikiIndex: 인덱싱(content_hash 증분)·검색·그래프·staleness
@@ -183,7 +187,7 @@ src/           TypeScript 엔진 (Bun 런타임, bun:sqlite 내장 — node_modu
 daemon/        install.sh (launchd/systemd/cron 자동감지) + autoupdate-*.sh (무인 사실 패스)
 hooks/         sessionstart-inject.sh (cold-start 주입) · userpromptsubmit-inject.sh (턴별 포인터 주입)
 adapters/      codex/ (네이티브 훅 hooks.json 템플릿) · opencode/ (플러그인 1파일)
-skill/         wiki-fast(fast 세션 마감)·wiki-deep(deep 주기 패스)·wiki-ask·wiki-quiz(사람 기억) (/커맨드)
+skill/         wiki-save(세션 마감)·wiki-deep(deep 주기 패스)·wiki-ask·wiki-quiz(사람 기억) (/커맨드)
 examples/      sample-wiki/ — 완성된 위키 예시(읽기 전용). 엔진이 인덱싱 안 함(IGNORE_DIRS). **복사하지 말 것** — 실제 위키는 각 프로젝트 docs/wiki에 자동 생성. examples/README.md 참조
 tests/         bun:test 스위트 (chunker·refs·lint·extract·capture·db·source·review-scope·overview·gaps·quiz·마이그레이션) — `bun test`
 package.json·tsconfig.json   Bun 메타(typecheck용; 런타임은 .ts 직접 실행)
@@ -241,7 +245,7 @@ cd llmwiki
 #    레포별 수동 명령: bun <clone>/src/cli.ts init|index|search|lint <repo>
 
 # 3) 에이전트 입력창에서 세션 마감
-/wiki-fast                               # fast 마감 (Codex: $wiki-fast)
+/wiki-save                               # 세션 마감 (Codex: $wiki-save)
 /wiki-deep                               # deep 주기 패스 (Codex: $wiki-deep)
 /wiki-quiz                               # 사람 기억 루프 (Codex: $wiki-quiz)
 ```
@@ -264,7 +268,7 @@ cd llmwiki
 | `LLMWIKI_SEARCH_RELAX` | (on) | `off`면 완화 폴백 비활성 — 자연어 질의가 strict AND 0건일 때 같은 단어들을 OR로 1회 재시도(trigram 안전·유니코드/CJK 인식·stopword 목록 없음). A/B 측정용 킬스위치. |
 | `LLMWIKI_MAX_SOURCE_BYTES` | `262144` (256KB) | 소스 파일당 콘텐츠 캡. 초과 파일(수 MB yaml/json 픽스처 등)은 메타데이터만 등록 — 이름·경로로는 검색되지만 전문 색인은 제외. 위키 페이지는 캡 무관. 픽스처 많은 레포에서도 인덱스를 작게, 검색을 빠르게 유지 — 검색·turn-context 품질 무변. |
 | `LLMWIKI_REVIEW_MAX_PAGES` | `80` | `review` 단일패스 입력 cap. 위키가 이보다 크면 최근+태그 이웃만 검토(프롬프트 오버플로 방지). |
-| `LLMWIKI_REVIEW_INTERVAL_DAYS` | `7` | `review --if-due` 주기 게이트 — 마지막 커밋된 review 이후 이 일수가 지나야 실행(그 전엔 ~0.03초에 결정적 skip). fast 마감의 review 비용을 기본 0으로. |
+| `LLMWIKI_REVIEW_INTERVAL_DAYS` | `7` | `review --if-due` 주기 게이트 — 마지막 커밋된 review 이후 이 일수가 지나야 실행(그 전엔 ~0.03초에 결정적 skip). 세션 마감의 review 비용을 기본 0으로. |
 | `LLMWIKI_TOPIC_BUDGET` | `10000` | `5_topic` 페이지 비대 경고(`topic-oversize`, advisory) 글자 예산 — 초과 시 deep 패스가 인용 transcript 로부터 다시 작성하며 `distill-verify`(인용 세트 축소 금지)로 게이트. |
 | `LLMWIKI_OVERVIEW_BUDGET` | `8000` | `overview --normalize` 가 경고를 내는 overview.md 글자 예산(엔트리포인트 비대 감시). |
 | `LLMWIKI_L0_BUDGET` | `1600` | cold-start L0(current-state)의 글자 **기준**. 주입은 **자르지 않음** — 기준 초과 페이지도 전량 주입하고 초과 통지 1줄을 부착(다음 마감이 트리밍하도록); `oversized-l0` lint 는 1.25×부터 경고. |
@@ -295,7 +299,7 @@ cd llmwiki
     - 위키 커밋은 코드와 같은 브랜치·같은 PR — **PR 리뷰가 곧 AI 작성 페이지의 사람 승인 게이트**
     - `gap-queue.md`/`overview.md` 충돌 시: 아무 쪽이나 취한 뒤 `llmwiki gaps` / `llmwiki overview --normalize` 재실행(수렴함) — 생성된 본문의 수동 병합 금지
 - **안전이 확인된 충돌 2종**
-    - `current-state.md`(L0): 아무 쪽을 취해도 안전 — 다음 `/wiki-fast`가 위키 상태에서 Now/Next를 재유도해 수렴 · 단 **Next** 불릿만은 양쪽 합집합 권장(액션 대기를 잃지 않기)
+    - `current-state.md`(L0): 아무 쪽을 취해도 안전 — 다음 `/wiki-save`가 위키 상태에서 Now/Next를 재유도해 수렴 · 단 **Next** 불릿만은 양쪽 합집합 권장(액션 대기를 잃지 않기)
     - 같은 `5_topic` 페이지 동시 추가: **양쪽 불릿 모두 보존** — 토픽 페이지는 포맷 규칙상 추가 전용(기존 줄 불변·병합은 추가만)이라 합집합이 항상 옳은 병합
 
 ## 팀 컨벤션 — `llmwiki.config.toml` (선택)

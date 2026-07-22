@@ -40,7 +40,7 @@ cd /path/to/your-project
 claude
 ```
 
-- Close out a meaningful session with **`/wiki-fast`** — periodic deep pass `/wiki-deep` · query/file back `/wiki-ask` · recall `/wiki-quiz`
+- Close out a meaningful session with **`/wiki-save`** — periodic deep pass `/wiki-deep` · query/file back `/wiki-ask` · recall `/wiki-quiz`
 - Wired automatically: capture daemon · SessionStart/UserPromptSubmit read-injection · `/wiki-*` commands
 - Health check: `bun src/cli.ts doctor`
     - the `llmwiki` user command ships with the Codex/OpenCode wirings; a Claude-only install drives the CLI as `bun <clone>/src/cli.ts …`
@@ -59,7 +59,7 @@ llmwiki init .
 codex
 ```
 
-- In the Codex prompt: **`$wiki-fast`** after a meaningful session · `$wiki-deep` periodically · `$wiki-ask` to query/file back · `$wiki-quiz` for recall
+- In the Codex prompt: **`$wiki-save`** after a meaningful session · `$wiki-deep` periodically · `$wiki-ask` to query/file back · `$wiki-quiz` for recall
 - What setup installs
     - four `$wiki-*` skills under `~/.agents/skills` — re-running setup migrates earlier `$llmwiki-*` installs to the shorter names
     - native `SessionStart`/`UserPromptSubmit` hooks merged into `$CODEX_HOME/hooks.json` — unrelated hooks untouched
@@ -80,7 +80,7 @@ llmwiki init .
 opencode
 ```
 
-- Same syntax as Claude Code: **`/wiki-fast`** · `/wiki-deep` · `/wiki-ask` · `/wiki-quiz`
+- Same syntax as Claude Code: **`/wiki-save`** · `/wiki-deep` · `/wiki-ask` · `/wiki-quiz`
 - What setup installs
     - global `/wiki-*` custom commands + the read-injection plugin under `$XDG_CONFIG_HOME/opencode/` (default `~/.config/opencode/`)
     - the shared `llmwiki` command in `~/.local/bin`
@@ -92,11 +92,15 @@ Six stages — two fully unattended, the rest one command each.
 | Stage | What | Automatic? | Implementation |
 |------|------|:---:|------|
 | **Capture** | Every session transcript → central queue | ✔ | `src/daemon/watch.ts` (terminal/profile-agnostic) |
-| **Condense (update)** | Queue → that repo's `docs/wiki/` **log layer** (incremental append) | 1 command | Codex: `$wiki-fast` / `$wiki-deep` · Claude/OpenCode: `/wiki-fast` / `/wiki-deep` + `src/engine/update.ts` |
-| **Consolidate** | Log → per-concept **topic encyclopedia** `5_topic/` (in-place merge·raw re-grounding) | 1 command | Codex: `$wiki-fast` / `$wiki-deep` · Claude/OpenCode: `/wiki-fast` / `/wiki-deep` + `src/engine/consolidate.ts` |
+| **Condense (update)** | Queue → that repo's `docs/wiki/` **log layer** (incremental append) | 1 command | Codex: `$wiki-save` / `$wiki-deep` · Claude/OpenCode: `/wiki-save` / `/wiki-deep` + `src/engine/update.ts` |
+| **Consolidate** | Log → per-concept **topic encyclopedia** `5_topic/` (in-place merge·raw re-grounding) | 1 command | Codex: `$wiki-save` / `$wiki-deep` · Claude/OpenCode: `/wiki-save` / `/wiki-deep` + `src/engine/consolidate.ts` |
 | **Read** | Cold-start injection + per-turn related-page pointers | ✔ | `hooks/sessionstart-inject.sh` · `hooks/userpromptsubmit-inject.sh` (Claude Code; Codex/OpenCode → `adapters/`) |
 | **Quiz (human memory)** | Wiki's judgment layer → day-granular spaced-repetition quiz **for the human** (`6_quiz/` records — never indexed/searched; cold-start shows a due-count line) | 1 command | Codex: `$wiki-quiz` · Claude/OpenCode: `/wiki-quiz` + `src/engine/quiz.ts` (`quiz-status`·`quiz-next`·`quiz-record`) |
 | **Self-healing** | Structural (orphan·stale·dangling) = deterministic `lint` / semantic (contradiction·stale claim·missing concept) = generative `review` (auto on sync — engine-gated cadence `--if-due`, default 7d·scoped+cached) → gaps land in `gaps`'s self-closing queue (`0_review/gap-queue.md`) | 1 command → auto | `lint`·`review`·`gaps` (`src/engine/{lint,review,gaps}.ts`) |
+
+- **Transcript retention** — transcripts are the agent's files, not llmwiki's
+    - they rotate on each agent's own schedule (Claude Code defaults to ~30 days; Codex compresses finished sessions to `.zst`) — llmwiki never copies them
+    - close out sessions worth keeping with `/wiki-save` before they age out; queue rows whose transcript is already gone are pruned by the deep pass (`capture-prune`, 30-day guard)
 
 ### The human memory loop (`/wiki-quiz`)
 
@@ -141,7 +145,7 @@ A citation like `[^s1]: <session>.jsonl` points at a transcript that lives on **
 
 The wiki reports what's missing on its own; the human supplies only the judgment that fills it.
 
-- **At close-out (`/wiki-fast`) and on the deep pass (`/wiki-deep`)**
+- **At close-out (`/wiki-save`) and on the deep pass (`/wiki-deep`)**
     - ① deterministic `lint` — structure (orphan · stale · dangling)
     - ② generative `review` — semantics (contradiction · stale claim · missing concept); auto via `--if-due` with an engine-enforced cadence (default 7 days, `LLMWIKI_REVIEW_INTERVAL_DAYS`), input scoped to recent + tag-neighbor pages, skipped when nothing changed; the deep pass runs it unconditionally
     - ③ `gaps` — stacks the *missing concepts · follow-up questions* that `review` surfaced into a tracking queue (`0_review/gap-queue.md`)
@@ -155,7 +159,7 @@ The wiki reports what's missing on its own; the human supplies only the judgment
 ```
 setup.sh       one-click onboarding (path-agnostic: doctor→daemon→hooks·commands→index)
 src/           TypeScript engine (Bun runtime, bun:sqlite built in — zero node_modules·build)
-  cli.ts       CLI dispatcher: init·index·reindex·refs·lint·search·update-*·skeleton·autoupdate·consolidate·topics·ingest·register-transcript·review·gaps·distill-verify·git-rules·overview·reconcile·doctor·context·digest·context-audit·config·conventions·migrate·quiz-*·bench·compare-arm·compare-verdict
+  cli.ts       CLI dispatcher: init·index·reindex·refs·lint·search·update-*·skeleton·autoupdate·consolidate·topics·ingest·register-transcript·review·gaps·distill-verify·git-rules·overview·reconcile·doctor·context·digest·context-audit·config·conventions·migrate·quiz-*·capture-prune·bench·compare-arm·compare-verdict
   engine/
     schema.sql   per-repo index schema (documents·chunks·FTS5·references)
     db.ts        WikiIndex: indexing(content_hash incremental)·search·graph·staleness
@@ -183,7 +187,7 @@ src/           TypeScript engine (Bun runtime, bun:sqlite built in — zero node
 daemon/        install.sh (launchd/systemd/cron auto-detect) + autoupdate-*.sh (unattended fact pass)
 hooks/         sessionstart-inject.sh (cold-start) · userpromptsubmit-inject.sh (per-turn pointers)
 adapters/      codex/ (native-hook hooks.json template) · opencode/ (single-file plugin)
-skill/         wiki-fast(fast session close-out)·wiki-deep(periodic deep pass)·wiki-ask·wiki-quiz(human memory) (/commands)
+skill/         wiki-save(session close-out)·wiki-deep(periodic deep pass)·wiki-ask·wiki-quiz(human memory) (/commands)
 examples/      sample-wiki/ — a finished wiki example (read-only illustration). Not indexed by the engine (IGNORE_DIRS). **Do not copy** — real wikis are auto-generated under each project's docs/wiki. See examples/README.md
 tests/         bun:test suite (chunker·refs·lint·extract·capture·db·source·review-scope·overview·gaps·quiz·migrations) — `bun test`
 package.json·tsconfig.json   Bun metadata (for typecheck; the runtime executes .ts directly)
@@ -241,7 +245,7 @@ cd llmwiki
 #    manual per-repo commands: bun <clone>/src/cli.ts init|index|search|lint <repo>
 
 # 3) close out the session in your agent's prompt
-/wiki-fast                               # FAST close-out (Codex: $wiki-fast)
+/wiki-save                               # close out this session (Codex: $wiki-save)
 /wiki-deep                               # periodic DEEP pass (Codex: $wiki-deep)
 /wiki-quiz                               # human memory loop (Codex: $wiki-quiz)
 ```
@@ -264,7 +268,7 @@ The generative pass (autoupdate/review) defaults to `claude -p` + the latest Cla
 | `LLMWIKI_SEARCH_RELAX` | (on) | Set `off` to disable the relaxed-recall fallback — when a natural-language query strict-AND matches 0 rows, search retries ONCE with the same terms OR-joined (trigram-safe, Unicode/CJK-aware, no stopword lists). Kill-switch for A/B measurement. |
 | `LLMWIKI_MAX_SOURCE_BYTES` | `262144` (256KB) | Per-file content cap for SOURCE files. Larger files (multi-MB yaml/json fixtures) are registered metadata-only — findable by name, but not full-text indexed. Wiki pages are exempt. Keeps the index compact and search fast on fixture-heavy repos, with no quality change on search/turn-context. |
 | `LLMWIKI_REVIEW_MAX_PAGES` | `80` | Input cap for a single `review` pass. If the wiki exceeds this, only recent+tag-neighbor pages are reviewed (to avoid prompt overflow). |
-| `LLMWIKI_REVIEW_INTERVAL_DAYS` | `7` | Cadence gate for `review --if-due` — it runs only when this many days have passed since the last committed review (before that it skips deterministically in ~0.03s). Makes the fast close-out's review cost zero by default. |
+| `LLMWIKI_REVIEW_INTERVAL_DAYS` | `7` | Cadence gate for `review --if-due` — it runs only when this many days have passed since the last committed review (before that it skips deterministically in ~0.03s). Makes the per-session close-out's review cost zero by default. |
 | `LLMWIKI_TOPIC_BUDGET` | `10000` | Character budget for the `topic-oversize` advisory warning on `5_topic` pages — over budget, the deep pass rewrites the page from its cited transcripts, gated by `distill-verify` (the citation set must not shrink). |
 | `LLMWIKI_OVERVIEW_BUDGET` | `8000` | Character budget for overview.md at which `overview --normalize` warns (watches for entry-point bloat). |
 | `LLMWIKI_L0_BUDGET` | `1600` | Character **standard** for the cold-start L0 (current-state). Injection **never cuts**: an over-standard page is injected whole with a one-line notice appended (nudging the next close-out to trim); the `oversized-l0` lint warns from 1.25×. |
@@ -295,7 +299,7 @@ Solo is the default and needs none of this — everything below is additive and 
     - wiki commits ride the same branch and PR as code — the PR review *is* the human gate for AI-written pages
     - `gap-queue.md` / `overview.md` conflicts: take either side, re-run `llmwiki gaps` / `llmwiki overview --normalize` (they converge) — never hand-merge their generated bodies
 - **Known-safe conflicts**
-    - `current-state.md` (L0): either side is safe — the next `/wiki-fast` re-derives Now/Next from the wiki state; prefer the union of both sides' **Next** bullets (never lose a pending action)
+    - `current-state.md` (L0): either side is safe — the next `/wiki-save` re-derives Now/Next from the wiki state; prefer the union of both sides' **Next** bullets (never lose a pending action)
     - same `5_topic` page, concurrent appends: keep **both sides' bullets** — topic pages are additive by format rule (existing lines immutable, merges only add), so the union is always the correct merge
 
 ## Team conventions — `llmwiki.config.toml` (optional)

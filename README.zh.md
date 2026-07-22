@@ -40,7 +40,7 @@ cd /path/to/your-project
 claude
 ```
 
-- 一次有意义的会话结束时输入 **`/wiki-fast`** — 周期深度整理 `/wiki-deep` · 提问与回填 `/wiki-ask` · 复习 `/wiki-quiz`
+- 一次有意义的会话结束时输入 **`/wiki-save`** — 周期深度整理 `/wiki-deep` · 提问与回填 `/wiki-ask` · 复习 `/wiki-quiz`
 - 自动接线: 捕获守护进程 · SessionStart/UserPromptSubmit 读取注入 · `/wiki-*` 命令
 - 健康检查: `bun src/cli.ts doctor`
     - `llmwiki` 用户命令由 Codex/OpenCode 接线安装 — 仅装 Claude 时以 `bun <clone>/src/cli.ts …` 形式使用 CLI
@@ -59,7 +59,7 @@ llmwiki init .
 codex
 ```
 
-- 在 Codex 输入框: 有意义的会话收尾 **`$wiki-fast`** · 周期性 `$wiki-deep` · 提问与回填 `$wiki-ask` · 复习 `$wiki-quiz`
+- 在 Codex 输入框: 有意义的会话收尾 **`$wiki-save`** · 周期性 `$wiki-deep` · 提问与回填 `$wiki-ask` · 复习 `$wiki-quiz`
 - setup 安装的内容
     - `~/.agents/skills` 下的 4 个 `$wiki-*` 技能 — 重跑 setup 会把旧的 `$llmwiki-*` 安全迁移到短名字
     - 把原生 `SessionStart`/`UserPromptSubmit` 钩子合并进 `$CODEX_HOME/hooks.json` — 不碰无关的既有钩子
@@ -80,7 +80,7 @@ llmwiki init .
 opencode
 ```
 
-- 与 Claude Code 相同的语法: **`/wiki-fast`** · `/wiki-deep` · `/wiki-ask` · `/wiki-quiz`
+- 与 Claude Code 相同的语法: **`/wiki-save`** · `/wiki-deep` · `/wiki-ask` · `/wiki-quiz`
 - setup 安装的内容
     - `$XDG_CONFIG_HOME/opencode/`（默认 `~/.config/opencode/`）下的全局 `/wiki-*` 自定义命令 + 读取注入插件
     - `~/.local/bin` 里的共享 `llmwiki` 命令
@@ -92,11 +92,15 @@ opencode
 | 环节 | 内容 | 自动? | 实现 |
 |------|------|:---:|------|
 | **捕获** | 每个会话 transcript → 中央队列 | ✔ | `src/daemon/watch.ts`（终端/配置无关） |
-| **凝练（update）** | 队列 → 该仓库 `docs/wiki/` **日志层**（增量 append） | 1 条命令 | Codex: `$wiki-fast` / `$wiki-deep` · Claude/OpenCode: `/wiki-fast` / `/wiki-deep` + `src/engine/update.ts` |
-| **整合（consolidate）** | 日志 → 按概念的**主题百科** `5_topic/`（原地合并·raw 再接地） | 1 条命令 | Codex: `$wiki-fast` / `$wiki-deep` · Claude/OpenCode: `/wiki-fast` / `/wiki-deep` + `src/engine/consolidate.ts` |
+| **凝练（update）** | 队列 → 该仓库 `docs/wiki/` **日志层**（增量 append） | 1 条命令 | Codex: `$wiki-save` / `$wiki-deep` · Claude/OpenCode: `/wiki-save` / `/wiki-deep` + `src/engine/update.ts` |
+| **整合（consolidate）** | 日志 → 按概念的**主题百科** `5_topic/`（原地合并·raw 再接地） | 1 条命令 | Codex: `$wiki-save` / `$wiki-deep` · Claude/OpenCode: `/wiki-save` / `/wiki-deep` + `src/engine/consolidate.ts` |
 | **读取** | 冷启动注入 + 每轮相关页面指针 | ✔ | `hooks/sessionstart-inject.sh` · `hooks/userpromptsubmit-inject.sh`（Claude Code; Codex/OpenCode → `adapters/`） |
 | **测验（人的记忆）** | wiki 的判断层 → **给人做的**按天遗忘曲线间隔重复测验（`6_quiz/` 记录 — 永不索引/搜索; 冷启动显示一行到期数） | 1 条命令 | Codex: `$wiki-quiz` · Claude/OpenCode: `/wiki-quiz` + `src/engine/quiz.ts`（`quiz-status`·`quiz-next`·`quiz-record`） |
 | **自愈** | 结构（orphan·stale·dangling）= 确定性 `lint` / 语义（矛盾·过时主张·概念缺失）= 生成式 `review`（sync 时自动 — 引擎节流 `--if-due` 默认 7 天·限定范围+缓存）→ 缺口进入 `gaps` 的自闭队列（`0_review/gap-queue.md`） | 1 条命令 → 自动 | `lint`·`review`·`gaps`（`src/engine/{lint,review,gaps}.ts`） |
+
+- **transcript 保留** — transcript 是智能体自己的文件，不是 llmwiki 的
+    - 按各智能体的保留策略轮转（Claude Code 默认约 30 天 · Codex 把结束的会话压缩为 `.zst`）— llmwiki 从不复制它们
+    - 值得保留的会话请在轮转前用 `/wiki-save` 收尾 · transcript 已消失的队列行由深度整理清除（`capture-prune`，30 天防护）
 
 ### 人的记忆循环（`/wiki-quiz`）
 
@@ -141,7 +145,7 @@ opencode
 
 wiki 自己报告缺了什么，人只提供补上它的判断。
 
-- **收尾（`/wiki-fast`）· 深度整理（`/wiki-deep`）时**
+- **收尾（`/wiki-save`）· 深度整理（`/wiki-deep`）时**
     - ① 确定性 `lint` — 结构（orphan · stale · dangling）
     - ② 生成式 `review` — 语义（矛盾 · 过时主张 · 概念缺失）; 经 `--if-due` 自动运行且节奏由引擎强制（默认 7 天，`LLMWIKI_REVIEW_INTERVAL_DAYS`）· 输入限定为近期+标签相邻页面 · 无变更即跳过 · 深度整理则无条件运行
     - ③ `gaps` — 把 `review` 找到的*概念缺失 · 后续问题*堆入追踪队列（`0_review/gap-queue.md`）
@@ -155,7 +159,7 @@ wiki 自己报告缺了什么，人只提供补上它的判断。
 ```
 setup.sh       一键上手（路径无关: doctor→守护进程→钩子·命令→索引）
 src/           TypeScript 引擎（Bun 运行时，内置 bun:sqlite — 零 node_modules·构建）
-  cli.ts       CLI 调度器: init·index·reindex·refs·lint·search·update-*·skeleton·autoupdate·consolidate·topics·ingest·register-transcript·review·gaps·distill-verify·git-rules·overview·reconcile·doctor·context·digest·context-audit·config·conventions·migrate·quiz-*·bench·compare-arm·compare-verdict
+  cli.ts       CLI 调度器: init·index·reindex·refs·lint·search·update-*·skeleton·autoupdate·consolidate·topics·ingest·register-transcript·review·gaps·distill-verify·git-rules·overview·reconcile·doctor·context·digest·context-audit·config·conventions·migrate·quiz-*·capture-prune·bench·compare-arm·compare-verdict
   engine/
     schema.sql   按仓库的索引 schema（documents·chunks·FTS5·references）
     db.ts        WikiIndex: 索引（content_hash 增量）·搜索·图·staleness
@@ -183,7 +187,7 @@ src/           TypeScript 引擎（Bun 运行时，内置 bun:sqlite — 零 nod
 daemon/        install.sh（launchd/systemd/cron 自动检测）+ autoupdate-*.sh（无人值守事实通道）
 hooks/         sessionstart-inject.sh（冷启动注入）· userpromptsubmit-inject.sh（每轮指针注入）
 adapters/      codex/（原生钩子 hooks.json 模板）· opencode/（单文件插件）
-skill/         wiki-fast（快速会话收尾）·wiki-deep（周期深度整理）·wiki-ask·wiki-quiz（人的记忆）（/命令）
+skill/         wiki-save（会话收尾）·wiki-deep（周期深度整理）·wiki-ask·wiki-quiz（人的记忆）（/命令）
 examples/      sample-wiki/ — 一个完成态 wiki 示例（只读展示）。引擎不索引（IGNORE_DIRS）。**请勿复制** — 真实 wiki 会在各项目 docs/wiki 下自动生成。见 examples/README.md
 tests/         bun:test 套件（chunker·refs·lint·extract·capture·db·source·review-scope·overview·gaps·quiz·迁移）— `bun test`
 package.json·tsconfig.json   Bun 元数据（供 typecheck; 运行时直接执行 .ts）
@@ -241,7 +245,7 @@ cd llmwiki
 #    按仓库手动命令: bun <clone>/src/cli.ts init|index|search|lint <repo>
 
 # 3) 在智能体输入框里收尾会话
-/wiki-fast                               # 快速收尾（Codex: $wiki-fast）
+/wiki-save                               # 会话收尾（Codex: $wiki-save）
 /wiki-deep                               # 周期深度整理（Codex: $wiki-deep）
 /wiki-quiz                               # 人的记忆循环（Codex: $wiki-quiz）
 ```
@@ -264,7 +268,7 @@ cd llmwiki
 | `LLMWIKI_SEARCH_RELAX` | （开） | 设为 `off` 关闭宽松召回回退 — 自然语言查询在 strict AND 命中 0 行时，用同一批词 OR 连接只重试一次（trigram 安全·Unicode/CJK 感知·无停用词表）。A/B 测量用的开关。 |
 | `LLMWIKI_MAX_SOURCE_BYTES` | `262144`（256KB） | 每个来源文件的内容上限。超限文件（数 MB 的 yaml/json fixture 等）只登记元数据 — 按名字·路径可查，但不做全文索引。wiki 页面不受限。让 fixture 多的仓库索引依旧紧凑、搜索依旧快 — 搜索/turn-context 质量不变。 |
 | `LLMWIKI_REVIEW_MAX_PAGES` | `80` | 单次 `review` 的输入上限。wiki 超过时只审近期+标签相邻页面（防提示词溢出）。 |
-| `LLMWIKI_REVIEW_INTERVAL_DAYS` | `7` | `review --if-due` 的节奏门 — 距上次已提交 review 满这个天数才运行（之前约 0.03 秒即确定性跳过）。让快速收尾的 review 成本默认为零。 |
+| `LLMWIKI_REVIEW_INTERVAL_DAYS` | `7` | `review --if-due` 的节奏门 — 距上次已提交 review 满这个天数才运行（之前约 0.03 秒即确定性跳过）。让会话收尾的 review 成本默认为零。 |
 | `LLMWIKI_TOPIC_BUDGET` | `10000` | `5_topic` 页面的超大警告（`topic-oversize`，advisory）字符预算 — 超预算时深度整理会从其引用的 transcript 重写页面，由 `distill-verify` 把关（引用集不得缩小）。 |
 | `LLMWIKI_OVERVIEW_BUDGET` | `8000` | `overview --normalize` 发出警告的 overview.md 字符预算（监控入口膨胀）。 |
 | `LLMWIKI_L0_BUDGET` | `1600` | 冷启动 L0（current-state）的字符**基准**。注入**从不截断**: 超基准的页面也整页注入并附一行超额提示（推动下次收尾去修剪）; `oversized-l0` lint 从 1.25× 起警告。 |
@@ -295,7 +299,7 @@ cd llmwiki
     - wiki 提交与代码同分支、同 PR — **PR 评审就是 AI 所写页面的人工把关**
     - `gap-queue.md` / `overview.md` 冲突时: 任取一边，重跑 `llmwiki gaps` / `llmwiki overview --normalize`（会收敛）— 决不手工合并生成的正文
 - **两类已验证安全的冲突**
-    - `current-state.md`（L0）: 任取一边都安全 — 下次 `/wiki-fast` 会从 wiki 状态重推 Now/Next 并收敛 · 唯 **Next** 列表建议取双方并集（不丢待办动作）
+    - `current-state.md`（L0）: 任取一边都安全 — 下次 `/wiki-save` 会从 wiki 状态重推 Now/Next 并收敛 · 唯 **Next** 列表建议取双方并集（不丢待办动作）
     - 同一 `5_topic` 页面的并发追加: **保留双方全部条目** — 主题页按格式规则只增不改（既有行不可变·合并只做添加），并集永远是正确的合并
 
 ## 团队约定 — `llmwiki.config.toml`（可选）

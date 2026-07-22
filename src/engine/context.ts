@@ -26,7 +26,7 @@ import { detectConfigDrift } from "./migrate.ts";
 // NEVER cuts content. A blind tail cut was measured eating exactly what the next session needed
 // most (a 1,639-char L0 lost its final Next bullet — a pending-push reminder — at a 1,600 cut),
 // and any cut loses signal silently. An over-standard page injects WHOLE with a one-line notice
-// appended, so every session SEES the overage and the warm close-out (/wiki-fast) is nudged
+// appended, so every session SEES the overage and the warm close-out (/wiki-save) is nudged
 // into ONE structural trim (move detail to current-state-detail). Discipline comes from
 // visibility, not from loss; the oversized-l0 lint adds its structural nag from 1.25× (budgets.ts).
 import { L0_BUDGET } from "./budgets.ts";
@@ -49,21 +49,22 @@ const makeT = (lang: "ko" | "en", cfg: WikiConfig) =>
     ovDetail: (w: string) => `===== (details: ${w}/) =====`,
     csHead: (n: string) => `===== [llmwiki] ${n} — docs/wiki/current-state (cold-start) =====`,
     ovHead: (n: string) => `===== [llmwiki] ${n} — docs/wiki/overview (cold-start) =====`,
-    stale: "----- [llmwiki staleness] L0 (current-state) is older than recent pages — run /wiki-fast at session end to refresh -----",
+    stale: "----- [llmwiki staleness] L0 (current-state) is older than recent pages — run /wiki-save at session end to refresh -----",
     rulesHead: "----- [llmwiki operating rules] this wiki is maintained by THIS session (warm, human-present — not an unattended cron) -----",
     rules: [
       "1) Use the cold-start above as direction. If the wiki helps answer something, Read the relevant page (read the index first).",
       renderRuleCategories("en", cfg),
       "3) Humans don't hand-write docs — the LLM summarizes, grounded in evidence, what the human decided/realized this session. Routine judgment (filing, grounding-check, confirming decisions/insights) the model makes directly as status: ready (no human sign-off) — but never fabricate ungrounded opinions/decisions; omit instead.",
       renderRuleHumanQueue("en", cfg),
-      "4) Session end: if there was real work → close with /wiki-fast (fast: file this session + L0 freshness + overview·lint). Periodic deep pass = /wiki-deep (backlog·review·gaps·re-distill). Warm human-present condensing is primary; the unattended scheduler is off.",
+      "4) Session end: if there was real work → close with /wiki-save (file this session + L0 freshness + overview·lint). Periodic deep pass = /wiki-deep (backlog·review·gaps·re-distill). Warm human-present condensing is primary; the unattended scheduler is off.",
     ],
     indexHead: "----- [llmwiki index] recent pages in this repo's wiki (Read as needed) -----",
     spineHead: "----- [llmwiki synthesis] conceptual spine — most-referenced pages (the wiki's hubs; full view: llmwiki digest) -----",
-    pending: (n: number) => `[llmwiki] ${n} un-updated session(s) in this repo → drain the backlog with the deep pass:  /wiki-deep`,
+    pending: (n: number) =>
+      `[llmwiki] ${n} un-updated session(s) in this repo → drain the backlog with the deep pass:  /wiki-deep  (transcripts rotate per the agent's own retention — unfiled sessions eventually age out)`,
     quizDue: (n: number) => `[llmwiki quiz] ${n} review(s) due (day-granular forgetting curve) → reinforce YOUR memory with  /wiki-quiz`,
     l0Over: (n: number) =>
-      `----- [llmwiki] L0 is ${n} chars — over the ~${L0_BUDGET}-char standard; injected whole (nothing cut). Trim back at /wiki-fast -----`,
+      `----- [llmwiki] L0 is ${n} chars — over the ~${L0_BUDGET}-char standard; injected whole (nothing cut). Trim back at /wiki-save -----`,
     gapBacklog: (n: number) =>
       `----- [llmwiki gap backlog] ${n} open fact gap(s) — LLM-owned bookkeeping; the next /wiki-deep fills them (no human action needed) -----`,
     behind: (n: number) =>
@@ -74,21 +75,22 @@ const makeT = (lang: "ko" | "en", cfg: WikiConfig) =>
     ovDetail: (w: string) => `===== (상세: ${w}/) =====`,
     csHead: (n: string) => `===== [llmwiki] ${n} — docs/wiki/current-state (cold-start) =====`,
     ovHead: (n: string) => `===== [llmwiki] ${n} — docs/wiki/overview (cold-start) =====`,
-    stale: "----- [llmwiki 최신성 주의] L0(현재상태)가 최근 기록보다 낡음 — 세션 마감 시 /wiki-fast 로 갱신 권장 -----",
+    stale: "----- [llmwiki 최신성 주의] L0(현재상태)가 최근 기록보다 낡음 — 세션 마감 시 /wiki-save 로 갱신 권장 -----",
     rulesHead: "----- [llmwiki 운영 규칙] 이 위키는 '이 세션'이 유지한다 (사람 동석·웜 — 무인 cron 아님) -----",
     rules: [
       "1) 위 cold-start 를 방향 삼아 작업. 위키가 답에 도움되면 관련 페이지를 Read (read index first).",
       renderRuleCategories("ko", cfg),
       "3) 인간은 docs를 직접 쓰지 않는다. LLM이 '이 세션에서 인간이 결정·깨달은 것'을 근거 기반으로 요약 기록한다. 분류·근거검증·decision/insight 확정 같은 일상 판단은 강한 모델이 대신 내려 status: ready 로 확정한다(사람 확인 불필요) — 단 grounded 안 된 의견·결정은 지어내지 말고 기각.",
       renderRuleHumanQueue("ko", cfg),
-      "4) 세션 마감: 실질 작업이 있었으면 → /wiki-fast 로 닫는다 (fast: 이 세션 반영 + L0 신선도 + overview·lint). 주기 deep 패스 = /wiki-deep (백로그·리뷰·갭·재증류). 업데이트는 사람 동석 웜이 주력; 무인 스케줄러 비활성.",
+      "4) 세션 마감: 실질 작업이 있었으면 → /wiki-save 로 닫는다 (이 세션 반영 + L0 신선도 + overview·lint). 주기 deep 패스 = /wiki-deep (백로그·리뷰·갭·재증류). 업데이트는 사람 동석 웜이 주력; 무인 스케줄러 비활성.",
     ],
     indexHead: "----- [llmwiki 인덱스] 이 레포 위키 최근 페이지 (필요 시 Read) -----",
     spineHead: "----- [llmwiki 종합] 개념 spine — 가장 많이 참조된 페이지(위키 허브; 전체: llmwiki digest) -----",
-    pending: (n: number) => `[llmwiki] 이 레포 미update 세션 ${n}건 → deep 패스로 백로그 소진 권장:  /wiki-deep`,
+    pending: (n: number) =>
+      `[llmwiki] 이 레포 미update 세션 ${n}건 → deep 패스로 백로그 소진 권장:  /wiki-deep  (transcript 는 에이전트 보존정책대로 회전 — 마감 없이 두면 결국 소멸)`,
     quizDue: (n: number) => `[llmwiki quiz] 복습 due ${n}건 (망각곡선·일 단위) → /wiki-quiz 로 '사람 기억' 강화`,
     l0Over: (n: number) =>
-      `----- [llmwiki] L0 가 ${n}자 — 기준(~${L0_BUDGET}자) 초과; 전량 주입(자르지 않음). /wiki-fast 에서 기준 이하로 트리밍 권장 -----`,
+      `----- [llmwiki] L0 가 ${n}자 — 기준(~${L0_BUDGET}자) 초과; 전량 주입(자르지 않음). /wiki-save 에서 기준 이하로 트리밍 권장 -----`,
     gapBacklog: (n: number) =>
       `----- [llmwiki 갭 백로그] open ${n}건 — 사실 북키핑(LLM 소유), 다음 /wiki-deep 가 직접 채움 (사람 액션 불필요) -----`,
     behind: (n: number) =>

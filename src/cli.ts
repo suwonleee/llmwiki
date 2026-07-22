@@ -270,6 +270,14 @@ function cmdUpdateDone(p: Parsed) {
   console.log(`✓ watermark advanced to ${offset} (${skipped ? "skipped" : "distilled"})`);
 }
 
+function cmdCapturePrune(p: Parsed) {
+  const raw = p.flags["--older-than"];
+  const days = raw === undefined ? 30 : parseInt(raw as string, 10);
+  if (Number.isNaN(days) || days < 0) die("capture-prune [--older-than <days>] — days must be a non-negative number");
+  const r = capture.prune(days);
+  console.log(`✓ capture queue pruned: ${r.removed} dead pending row(s) removed, ${r.kept} pending kept (age guard ${days}d)`);
+}
+
 function cmdUpdateEnqueue(p: Parsed) {
   const ws = p.positionals[0] ?? die("update-enqueue <workspace> <transcript> required");
   const transcript = p.positionals[1] ?? die("update-enqueue <workspace> <transcript> required");
@@ -403,7 +411,7 @@ async function cmdIngest(p: Parsed) {
 // Register session transcript(s) as citable provenance sources so decision/insight pages can
 // cite the real session (not a repointed code file). With a transcript arg, registers that one;
 // otherwise registers every transcript the central queue has seen for this repo whose file still
-// exists. A warm /wiki-fast runs this before lint so `[^1]: <transcript>.jsonl` resolves.
+// exists. A warm /wiki-save runs this before lint so `[^1]: <transcript>.jsonl` resolves.
 function cmdRegisterTranscript(p: Parsed) {
   const ws = p.positionals[0] ?? die("register-transcript <workspace> [transcript] required");
   const idx = new WikiIndex(ws);
@@ -515,7 +523,7 @@ async function cmdReconcile(p: Parsed) {
 }
 
 // Topic consolidation: fold the per-session log into the per-concept topic encyclopedia
-// (docs/wiki/5_topic). Dry-run (default) surfaces candidate concepts for a warm /wiki-fast to
+// (docs/wiki/5_topic). Dry-run (default) surfaces candidate concepts for a warm /wiki-save to
 // merge by hand; --commit runs the gated unattended merge (write → independent verify →
 // grounding → lint), advancing consolidate's own watermark (NOT the log's capture queue).
 async function cmdConsolidate(p: Parsed) {
@@ -542,8 +550,8 @@ async function cmdConsolidate(p: Parsed) {
     }
     console.log(
       ko
-        ? "  → 웜 /wiki-fast 에서 재발·내구 개념만 선별해 5_topic 페이지로 병합 (또는 --commit 로 무인 게이트 실행)."
-        : "  → in a warm /wiki-fast, merge only durable/recurring concepts into 5_topic (or run --commit for the gated pass).",
+        ? "  → 웜 /wiki-save 에서 재발·내구 개념만 선별해 5_topic 페이지로 병합 (또는 --commit 로 무인 게이트 실행)."
+        : "  → in a warm /wiki-save, merge only durable/recurring concepts into 5_topic (or run --commit for the gated pass).",
     );
     return;
   }
@@ -840,8 +848,8 @@ function cmdQuizNext(p: Parsed) {
   if (!sel.picks.length) {
     console.log(
       ko
-        ? "  오늘 낼 문항 없음 — 작업을 /wiki-fast 로 쌓으면 신규 후보가 생긴다."
-        : "  nothing to ask today — file work with /wiki-fast to grow new candidates.",
+        ? "  오늘 낼 문항 없음 — 작업을 /wiki-save 로 쌓으면 신규 후보가 생긴다."
+        : "  nothing to ask today — file work with /wiki-save to grow new candidates.",
     );
     return;
   }
@@ -918,6 +926,7 @@ const HANDLERS: Record<string, (p: Parsed) => void | Promise<void>> = {
   digest: cmdDigest,
   "context-audit": cmdContextAudit,
   reconcile: cmdReconcile,
+  "capture-prune": cmdCapturePrune,
   "quiz-status": cmdQuizStatus,
   "quiz-next": cmdQuizNext,
   "quiz-record": cmdQuizRecord,

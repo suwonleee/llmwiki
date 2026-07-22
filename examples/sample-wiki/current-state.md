@@ -18,4 +18,4 @@ reports monthly spend. Storage is SQLite; import is the core path (parse→categ
 - No multi-currency support yet (everything assumes one account currency).
 
 ## Entry
-check `llmwiki doctor` · ask `/wiki-ask` · close out `/wiki-fast` · deep pass `/wiki-deep`
+check `llmwiki doctor` · ask `/wiki-ask` · close out `/wiki-save` · deep pass `/wiki-deep`

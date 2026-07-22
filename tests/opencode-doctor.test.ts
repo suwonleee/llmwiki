@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { inspectOpenCodeInstall } from "../src/engine/doctor.ts";
 
 const ROOT = join(import.meta.dir, "..");
-const COMMANDS = ["wiki-fast", "wiki-ask", "wiki-deep", "wiki-quiz"] as const;
+const COMMANDS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz"] as const;
 
 describe("OpenCode doctor status", () => {
   let dir: string;
@@ -52,11 +52,11 @@ describe("OpenCode doctor status", () => {
 
   test("detects stale command content", () => {
     writeFileSync(
-      join(opencodeRoot, "commands", "wiki-fast.md"),
+      join(opencodeRoot, "commands", "wiki-save.md"),
       "---\ndescription: stale\n---\n<!-- llmwiki-opencode-managed root=old source_sha256=old -->\n",
     );
 
-    expect(inspectOpenCodeInstall(configRoot, home).staleCommands).toEqual(["wiki-fast"]);
+    expect(inspectOpenCodeInstall(configRoot, home).staleCommands).toEqual(["wiki-save"]);
   });
 
   test("classifies the pre-installer plugin as stale instead of current", () => {

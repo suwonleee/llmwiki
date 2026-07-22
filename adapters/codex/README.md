@@ -10,8 +10,8 @@ This installs three user-level surfaces:
 
 - `$CODEX_HOME/hooks.json`: merges llmwiki `SessionStart` and `UserPromptSubmit`
   handlers while preserving unrelated hooks.
-- `$HOME/.agents/skills/wiki-{fast,deep,ask,quiz}/SKILL.md`: Codex-native
-  reusable workflows, invoked as `$wiki-fast`, `$wiki-deep`,
+- `$HOME/.agents/skills/wiki-{save,deep,ask,quiz}/SKILL.md`: Codex-native
+  reusable workflows, invoked as `$wiki-save`, `$wiki-deep`,
   `$wiki-ask`, and `$wiki-quiz`.
 - `$HOME/.local/bin/llmwiki`: a path-independent launcher for this clone.
 

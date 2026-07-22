@@ -199,7 +199,7 @@ export function _reviewWrapper(o: {
     `source: ${o.source}\n` +
     `---\n\n` +
     `Q. ${o.question}\n\n` +
-    `A. (write your decision below; on the next /wiki-fast or /wiki-deep the LLM applies it and deletes this file)\n\n\n` +
+    `A. (write your decision below; on the next /wiki-save or /wiki-deep the LLM applies it and deletes this file)\n\n\n` +
     `Draft (candidate page; moved into the chosen N_category once confirmed):\n${o.candidate}\n`
   );
 }

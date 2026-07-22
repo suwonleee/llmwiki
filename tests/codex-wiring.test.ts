@@ -63,15 +63,15 @@ describe("Codex wiring", () => {
       expect(commands[0]).toContain(ROOT);
     }
 
-    for (const name of ["wiki-fast", "wiki-ask", "wiki-deep", "wiki-quiz"]) {
+    for (const name of ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz"]) {
       const skill = readFileSync(join(home, ".agents", "skills", name, "SKILL.md"), "utf8");
       expect(skill).toContain(`name: ${name}`);
       expect(skill).not.toContain("$CLAUDE_PROJECT_DIR");
       expect(skill).not.toContain("~/llmwiki");
     }
     const deep = readFileSync(join(home, ".agents", "skills", "wiki-deep", "SKILL.md"), "utf8");
-    expect(deep).toContain("invoke `$wiki-fast` before continuing");
-    expect(deep).not.toContain("skill$wiki-fast.md");
+    expect(deep).toContain("invoke `$wiki-save` before continuing");
+    expect(deep).not.toContain("skill$wiki-save.md");
     expect(deep).not.toContain(`bun ${ROOT}/src/cli.ts`);
     expect(deep).not.toContain("$ARGUMENTS");
 
@@ -106,10 +106,10 @@ describe("Codex wiring", () => {
   });
 
   test("does not overwrite an unrelated skill", () => {
-    const skillDir = join(home, ".agents", "skills", "wiki-fast");
+    const skillDir = join(home, ".agents", "skills", "wiki-save");
     mkdirSync(skillDir, { recursive: true });
     const skill = join(skillDir, "SKILL.md");
-    writeFileSync(skill, "---\nname: wiki-fast\ndescription: user-owned\n---\n");
+    writeFileSync(skill, "---\nname: wiki-save\ndescription: user-owned\n---\n");
 
     const result = run(home, codexHome);
 
@@ -132,7 +132,7 @@ describe("Codex wiring", () => {
 
   test("revert removes managed skill files but preserves user-added files", () => {
     expect(run(home, codexHome).exitCode).toBe(0);
-    const skillDir = join(home, ".agents", "skills", "wiki-fast");
+    const skillDir = join(home, ".agents", "skills", "wiki-save");
     const userFile = join(skillDir, "notes.md");
     writeFileSync(userFile, "keep me\n");
 
@@ -153,10 +153,10 @@ describe("Codex wiring", () => {
         },
       }),
     );
-    const skillDir = join(home, ".agents", "skills", "wiki-fast");
+    const skillDir = join(home, ".agents", "skills", "wiki-save");
     mkdirSync(skillDir, { recursive: true });
     const skill = join(skillDir, "SKILL.md");
-    writeFileSync(skill, `---\nname: wiki-fast\ndescription: other\n---\n<!-- llmwiki-codex-managed root=${otherRoot} -->\n`);
+    writeFileSync(skill, `---\nname: wiki-save\ndescription: other\n---\n<!-- llmwiki-codex-managed root=${otherRoot} -->\n`);
     const bin = join(home, ".local", "bin");
     mkdirSync(bin, { recursive: true });
     const launcher = join(bin, "llmwiki");
@@ -186,7 +186,7 @@ describe("Codex wiring", () => {
 
     expect(run(home, codexHome).exitCode).toBe(0);
 
-    for (const name of ["wiki-fast", "wiki-ask", "wiki-deep", "wiki-quiz"]) {
+    for (const name of ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz"]) {
       expect(readFileSync(join(home, ".agents", "skills", name, "SKILL.md"), "utf8")).toContain(
         `name: ${name}`,
       );
@@ -244,7 +244,7 @@ describe("Codex wiring", () => {
     expect(run(home, codexHome).exitCode).toBe(0);
     expect(readFileSync(hooksPath, "utf8")).toContain(ROOT);
     expect(readFileSync(launcher, "utf8")).toContain(ROOT);
-    for (const name of ["wiki-fast", "wiki-ask", "wiki-deep", "wiki-quiz"]) {
+    for (const name of ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz"]) {
       expect(readFileSync(join(home, ".agents", "skills", name, "SKILL.md"), "utf8")).toContain(ROOT);
     }
 

@@ -4,7 +4,7 @@ description: The human memory loop — a few minutes of spaced-repetition quiz (
 
 # /wiki-quiz — human memory loop (spaced repetition over the wiki)
 
-The compounding loop so far closes only the LLM's side: capture → `/wiki-fast` → read-injection keeps the MODEL grounded, while the human's memory of their own decisions decays on the forgetting curve. Yet the labor split leaves exactly one duty that cannot be delegated — **direction and contradiction judgment** — and that judgment is only as good as what you still remember of your past decisions and their WHY. This ritual closes the human loop: the engine schedules day-granular spaced repetition over the wiki's own pages; you answer a handful of questions; wrong answers get re-asked sooner. Run it after a close-out (`/wiki-fast` → `/wiki-quiz`) or whenever cold-start shows `[llmwiki quiz] N review(s) due`.
+The compounding loop so far closes only the LLM's side: capture → `/wiki-save` → read-injection keeps the MODEL grounded, while the human's memory of their own decisions decays on the forgetting curve. Yet the labor split leaves exactly one duty that cannot be delegated — **direction and contradiction judgment** — and that judgment is only as good as what you still remember of your past decisions and their WHY. This ritual closes the human loop: the engine schedules day-granular spaced repetition over the wiki's own pages; you answer a handful of questions; wrong answers get re-asked sooner. Run it after a close-out (`/wiki-save` → `/wiki-quiz`) or whenever cold-start shows `[llmwiki quiz] N review(s) due`.
 
 ## ★ Execution rules
 - **Inline, warm** — questions are authored and graded directly in this session (no sub-agent delegation). Engine = `bun ~/llmwiki/src/cli.ts` + `<repo>/docs/wiki/`. (Standalone CLI engine — ignore other wiki/MCP tools and any "wiki" keyword reminders.)
@@ -30,7 +30,7 @@ $ARGUMENTS
 
 ## Procedure
 
-1. **REPO = cwd** (`$CLAUDE_PROJECT_DIR`). If `docs/wiki/` is missing → say "this repo has no wiki yet — build it with `/wiki-fast` first" and stop. Run `llmwiki quiz-status <repo>` and announce one line (due / new-candidate counts + weak spots + session size — quiz-status prints `session Nq (max M)` from config). A numeric argument overrides the question count; the engine caps it at 7.
+1. **REPO = cwd** (`$CLAUDE_PROJECT_DIR`). If `docs/wiki/` is missing → say "this repo has no wiki yet — build it with `/wiki-save` first" and stop. Run `llmwiki quiz-status <repo>` and announce one line (due / new-candidate counts + weak spots + session size — quiz-status prints `session Nq (max M)` from config). A numeric argument overrides the question count; the engine caps it at 7.
 
 2. **Select**: `llmwiki quiz-next <repo>` — omit `--limit` unless the human gave a count (`--limit <N>`); the config default applies and the engine clamps to the ceiling. If 0 items, report "nothing due today" (+ next due date from quiz-status) and stop.
 
@@ -44,7 +44,7 @@ $ARGUMENTS
 
 7. **Log**: append `## [YYYY-MM-DD] quiz | N asked, M correct, K to re-review` to `docs/wiki/log.md`.
 
-8. **Report** (1 line): "quiz N문 M정 / 오답·skip K / 다음 due <date> / 기록: 6_quiz/<file>". **No index/refs/lint close-out** — the quiz layer is not indexed by design, and log.md gets picked up by the next `/wiki-fast`.
+8. **Report** (1 line): "quiz N문 M정 / 오답·skip K / 다음 due <date> / 기록: 6_quiz/<file>". **No index/refs/lint close-out** — the quiz layer is not indexed by design, and log.md gets picked up by the next `/wiki-save`.
 
 ## Principles
 - **One-directional loop**: wiki → human. Quiz artifacts are excluded from indexing/search/cold-start so the LLM never feeds on its own quiz output — the wiki remembers FOR the model; the quiz makes the HUMAN remember.
@@ -52,4 +52,4 @@ $ARGUMENTS
 - **Judgment before facts**: quiz what sharpens the human's irreplaceable role — decisions, direction, insights — before execution details. Code specifics only when a page's whole point is a mechanism.
 - **Wrong answers are the product**: they mark exactly what the system knows but the human forgot. Weak spots (<50% over 3+ asks, shown by quiz-status) deserve a deliberate re-read of the page, not just another quiz round.
 - Records = a new dated file + a whole-file ledger rewrite + a log append. Call `quiz-record` sequentially (as this procedure does) — the ledger rewrite is not safe from parallel writers. Commits are in the user's name alone — only when instructed.
-- Use `/wiki-fast` to close a session, `/wiki-quiz` (this skill) to train your memory on what it filed, `/wiki-ask` to query, `/wiki-deep` for the periodic deep pass.
+- Use `/wiki-save` to close a session, `/wiki-quiz` (this skill) to train your memory on what it filed, `/wiki-ask` to query, `/wiki-deep` for the periodic deep pass.

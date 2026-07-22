@@ -40,7 +40,7 @@ cd /path/to/your-project
 claude
 ```
 
-- 意味のあるセッションの締めは **`/wiki-fast`** — 定期のdeepパス `/wiki-deep` · 質問と書き戻し `/wiki-ask` · 復習 `/wiki-quiz`
+- 意味のあるセッションの締めは **`/wiki-save`** — 定期のdeepパス `/wiki-deep` · 質問と書き戻し `/wiki-ask` · 復習 `/wiki-quiz`
 - 自動配線: キャプチャデーモン · SessionStart/UserPromptSubmit読み込み注入 · `/wiki-*` コマンド
 - 健全性チェック: `bun src/cli.ts doctor`
     - `llmwiki` ユーザーコマンドの実体はCodex/OpenCode配線が導入 — Claude単独インストールではCLIを `bun <clone>/src/cli.ts …` の形で使用
@@ -59,7 +59,7 @@ llmwiki init .
 codex
 ```
 
-- Codexプロンプトで: 意味のあるセッションの締め **`$wiki-fast`** · 定期的に `$wiki-deep` · 質問と書き戻し `$wiki-ask` · 復習 `$wiki-quiz`
+- Codexプロンプトで: 意味のあるセッションの締め **`$wiki-save`** · 定期的に `$wiki-deep` · 質問と書き戻し `$wiki-ask` · 復習 `$wiki-quiz`
 - setupが導入するもの
     - `~/.agents/skills` 配下の `$wiki-*` スキル4つ — 再実行時は旧 `$llmwiki-*` を短い名前へ安全に移行
     - `$CODEX_HOME/hooks.json` へのnative `SessionStart`/`UserPromptSubmit` フックのマージ — 無関係な既存フックは保持
@@ -80,7 +80,7 @@ llmwiki init .
 opencode
 ```
 
-- Claude Codeと同じ構文: **`/wiki-fast`** · `/wiki-deep` · `/wiki-ask` · `/wiki-quiz`
+- Claude Codeと同じ構文: **`/wiki-save`** · `/wiki-deep` · `/wiki-ask` · `/wiki-quiz`
 - setupが導入するもの
     - `$XDG_CONFIG_HOME/opencode/`（既定 `~/.config/opencode/`）へのグローバル `/wiki-*` カスタムコマンド + 読み込み注入プラグイン
     - `~/.local/bin` の共有 `llmwiki` コマンド
@@ -92,11 +92,15 @@ opencode
 | 輪 | 内容 | 自動? | 実装 |
 |------|------|:---:|------|
 | **キャプチャ** | 全セッショントランスクリプト → 中央キュー | ✔ | `src/daemon/watch.ts`（ターミナル/プロファイル非依存） |
-| **凝縮（update）** | キュー → そのリポジトリの `docs/wiki/` **ログ層**（増分append） | 1コマンド | Codex: `$wiki-fast` / `$wiki-deep` · Claude/OpenCode: `/wiki-fast` / `/wiki-deep` + `src/engine/update.ts` |
-| **統合（consolidate）** | ログ → 概念別**トピック百科** `5_topic/`（in-placeマージ·raw再グラウンディング） | 1コマンド | Codex: `$wiki-fast` / `$wiki-deep` · Claude/OpenCode: `/wiki-fast` / `/wiki-deep` + `src/engine/consolidate.ts` |
+| **凝縮（update）** | キュー → そのリポジトリの `docs/wiki/` **ログ層**（増分append） | 1コマンド | Codex: `$wiki-save` / `$wiki-deep` · Claude/OpenCode: `/wiki-save` / `/wiki-deep` + `src/engine/update.ts` |
+| **統合（consolidate）** | ログ → 概念別**トピック百科** `5_topic/`（in-placeマージ·raw再グラウンディング） | 1コマンド | Codex: `$wiki-save` / `$wiki-deep` · Claude/OpenCode: `/wiki-save` / `/wiki-deep` + `src/engine/consolidate.ts` |
 | **読み込み** | コールドスタート注入 + ターン毎の関連ページポインタ | ✔ | `hooks/sessionstart-inject.sh` · `hooks/userpromptsubmit-inject.sh`（Claude Code; Codex/OpenCodeは `adapters/`） |
 | **クイズ（人間の記憶）** | wikiの判断層 → **人間のための**日次・忘却曲線の間隔反復クイズ（`6_quiz/` 記録 — インデックス/検索から除外; コールドスタートにdue件数1行） | 1コマンド | Codex: `$wiki-quiz` · Claude/OpenCode: `/wiki-quiz` + `src/engine/quiz.ts`（`quiz-status`·`quiz-next`·`quiz-record`） |
 | **自己治癒** | 構造（orphan·stale·dangling）= 決定的 `lint` / 意味（矛盾·古い主張·概念欠落）= 生成的 `review`（sync時自動 — エンジン管理の周期 `--if-due` 既定7日·範囲限定+キャッシュ）→ ギャップは `gaps` の自己終了キュー（`0_review/gap-queue.md`） | 1コマンド → 自動 | `lint`·`review`·`gaps`（`src/engine/{lint,review,gaps}.ts`） |
+
+- **transcriptの保存** — transcriptはllmwikiではなくエージェントのファイル
+    - 各エージェントの保存ポリシーでローテーション（Claude Codeは既定~30日 · Codexは終了セッションを`.zst`圧縮）— llmwikiはコピーを持たない
+    - 残したいセッションはローテーション前に`/wiki-save`で締める · transcriptが既に消えたキュー行はdeepパスが整理（`capture-prune`、30日ガード）
 
 ### 人間の記憶ループ（`/wiki-quiz`）
 
@@ -141,7 +145,7 @@ opencode
 
 wikiが何が欠けているかを自分で報告し、人間は埋める判断だけを行います。
 
-- **締め（`/wiki-fast`）· deepパス（`/wiki-deep`）の際**
+- **締め（`/wiki-save`）· deepパス（`/wiki-deep`）の際**
     - ① 決定的 `lint` — 構造（orphan · stale · dangling）
     - ② 生成的 `review` — 意味（矛盾 · 古い主張 · 概念欠落）; `--if-due` で自動実行しつつエンジンが周期を強制（既定7日、`LLMWIKI_REVIEW_INTERVAL_DAYS`）· 入力は直近+タグ隣接ページに限定 · 無変更ならスキップ · deepパスは無条件実行
     - ③ `gaps` — `review` が見つけた*概念欠落 · 次の問い*を追跡キュー（`0_review/gap-queue.md`）へ積載
@@ -155,7 +159,7 @@ wikiが何が欠けているかを自分で報告し、人間は埋める判断�
 ```
 setup.sh       ワンクリック導入（パス非依存: doctor→デーモン→フック·コマンド→インデックス）
 src/           TypeScriptエンジン（Bunランタイム、bun:sqlite内蔵 — node_modules·ビルド 0）
-  cli.ts       CLIディスパッチャ: init·index·reindex·refs·lint·search·update-*·skeleton·autoupdate·consolidate·topics·ingest·register-transcript·review·gaps·distill-verify·git-rules·overview·reconcile·doctor·context·digest·context-audit·config·conventions·migrate·quiz-*·bench·compare-arm·compare-verdict
+  cli.ts       CLIディスパッチャ: init·index·reindex·refs·lint·search·update-*·skeleton·autoupdate·consolidate·topics·ingest·register-transcript·review·gaps·distill-verify·git-rules·overview·reconcile·doctor·context·digest·context-audit·config·conventions·migrate·quiz-*·capture-prune·bench·compare-arm·compare-verdict
   engine/
     schema.sql   リポジトリ毎のインデックススキーマ（documents·chunks·FTS5·references）
     db.ts        WikiIndex: インデックス（content_hash増分）·検索·グラフ·staleness
@@ -183,7 +187,7 @@ src/           TypeScriptエンジン（Bunランタイム、bun:sqlite内蔵 �
 daemon/        install.sh（launchd/systemd/cron自動検出）+ autoupdate-*.sh（無人の事実パス）
 hooks/         sessionstart-inject.sh（コールドスタート注入）· userpromptsubmit-inject.sh（ターン毎ポインタ注入）
 adapters/      codex/（ネイティブフック hooks.json テンプレート）· opencode/（プラグイン1ファイル）
-skill/         wiki-fast（fastセッション締め）·wiki-deep（deep定期パス）·wiki-ask·wiki-quiz（人間の記憶）（/コマンド）
+skill/         wiki-save（セッション締め）·wiki-deep（deep定期パス）·wiki-ask·wiki-quiz（人間の記憶）（/コマンド）
 examples/      sample-wiki/ — 完成wikiの例（読み取り専用）。エンジンは非インデックス（IGNORE_DIRS）。**コピー禁止** — 実wikiは各プロジェクトの docs/wiki に自動生成。examples/README.md 参照
 tests/         bun:testスイート（chunker·refs·lint·extract·capture·db·source·review-scope·overview·gaps·quiz·マイグレーション）— `bun test`
 package.json·tsconfig.json   Bunメタデータ（typecheck用; ランタイムは .ts を直接実行）
@@ -241,7 +245,7 @@ cd llmwiki
 #    リポジトリ毎の手動コマンド: bun <clone>/src/cli.ts init|index|search|lint <repo>
 
 # 3) エージェントのプロンプトでセッションを締める
-/wiki-fast                               # fast締め（Codex: $wiki-fast）
+/wiki-save                               # セッションの締め（Codex: $wiki-save）
 /wiki-deep                               # deep定期パス（Codex: $wiki-deep）
 /wiki-quiz                               # 人間の記憶ループ（Codex: $wiki-quiz）
 ```
@@ -264,7 +268,7 @@ cd llmwiki
 | `LLMWIKI_SEARCH_RELAX` | （on） | `off` で緩和フォールバック無効 — 自然文クエリがstrict ANDで0件のとき、同じ語をORで1回だけ再試行（trigram安全·Unicode/CJK対応·stopwordリスト無し）。A/B測定用キルスイッチ。 |
 | `LLMWIKI_MAX_SOURCE_BYTES` | `262144`（256KB） | ソースファイル毎のコンテンツ上限。超過ファイル（数MBのyaml/jsonフィクスチャ等）はメタデータのみ登録 — 名前·パスでは見つかるが全文インデックスは除外。wikiページは対象外。フィクスチャの多いリポジトリでもインデックスを小さく、検索を速く — 検索/turn-context品質は不変。 |
 | `LLMWIKI_REVIEW_MAX_PAGES` | `80` | `review` 1パスの入力上限。wikiがこれを超えると直近+タグ隣接ページのみレビュー（プロンプト溢れ防止）。 |
-| `LLMWIKI_REVIEW_INTERVAL_DAYS` | `7` | `review --if-due` の周期ゲート — 最後にコミットされたreviewからこの日数が経って初めて実行（それまでは約0.03秒で決定的にskip）。fast締めのreviewコストを既定でゼロに。 |
+| `LLMWIKI_REVIEW_INTERVAL_DAYS` | `7` | `review --if-due` の周期ゲート — 最後にコミットされたreviewからこの日数が経って初めて実行（それまでは約0.03秒で決定的にskip）。セッション締めのreviewコストを既定でゼロに。 |
 | `LLMWIKI_TOPIC_BUDGET` | `10000` | `5_topic` ページ肥大警告（`topic-oversize`、advisory）の文字予算 — 超過時はdeepパスが引用トランスクリプトから書き直し、`distill-verify`（引用セット縮小禁止）でゲート。 |
 | `LLMWIKI_OVERVIEW_BUDGET` | `8000` | `overview --normalize` が警告を出す overview.md の文字予算（エントリポイント肥大の監視）。 |
 | `LLMWIKI_L0_BUDGET` | `1600` | コールドスタートL0（current-state）の文字**基準**。注入は**切らない** — 基準超過ページも全量注入し超過通知1行を付加（次の締めにトリムを促す）; `oversized-l0` lintは1.25×から警告。 |
@@ -295,7 +299,7 @@ cd llmwiki
     - wikiコミットはコードと同じブランチ·同じPR — **PRレビューこそがAI作成ページの人間ゲート**
     - `gap-queue.md`/`overview.md` が衝突したら: どちらか一方を取り `llmwiki gaps` / `llmwiki overview --normalize` を再実行（収束する）— 生成された本文の手動マージは禁止
 - **安全と確認済みの衝突2種**
-    - `current-state.md`（L0）: どちらを取っても安全 — 次の `/wiki-fast` がwiki状態からNow/Nextを再導出して収束 · ただし**Next**の箇条書きだけは両側の和集合を推奨（保留アクションを失わない）
+    - `current-state.md`（L0）: どちらを取っても安全 — 次の `/wiki-save` がwiki状態からNow/Nextを再導出して収束 · ただし**Next**の箇条書きだけは両側の和集合を推奨（保留アクションを失わない）
     - 同じ `5_topic` ページへの同時追記: **両側の箇条書きを全部保持** — トピックページはフォーマット規則上追記専用（既存行は不変·マージは追加のみ）で、和集合が常に正しいマージ
 
 ## チーム規約 — `llmwiki.config.toml`（任意）

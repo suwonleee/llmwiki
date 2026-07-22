@@ -40,8 +40,11 @@ const SESSION_MARK = "hooks/sessionstart-inject.sh";
 const TURN_MARK = "hooks/userpromptsubmit-inject.sh";
 const SESSION_CMD = `bash ${shellQuote(`${CLONE_ROOT}/${SESSION_MARK}`)}`;
 const TURN_CMD = `bash ${shellQuote(`${CLONE_ROOT}/${TURN_MARK}`)}`;
-const SKILLS = ["wiki-fast", "wiki-ask", "wiki-deep", "wiki-quiz"] as const;
-const LEGACY_SKILLS = SKILLS.map((name) => `llmwiki-${name.slice("wiki-".length)}`);
+const SKILLS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz"] as const;
+// Every name this wiring may have installed in the past. An explicit list, NOT derived from
+// SKILLS: deriving history from current names breaks on a rename (it would fabricate names
+// that were never installed and stop pruning the ones that were — e.g. llmwiki-fast).
+const LEGACY_SKILLS = ["llmwiki-fast", "llmwiki-ask", "llmwiki-deep", "llmwiki-quiz", "wiki-fast"];
 
 interface HookHandler {
   type?: string;
@@ -255,7 +258,7 @@ function codexSkill(sourceName: (typeof SKILLS)[number]): string {
   let body = readFileSync(join(CLONE_ROOT, "skill", `${sourceName}.md`), "utf8");
   body = body.replace(/^---\n/, `---\nname: ${name}\n`);
   body = body
-    .replaceAll("Read `~/llmwiki/skill/wiki-fast.md`", "invoke `$wiki-fast` before continuing")
+    .replaceAll("Read `~/llmwiki/skill/wiki-save.md`", "invoke `$wiki-save` before continuing")
     .replaceAll("bun ~/llmwiki/src/cli.ts", "llmwiki")
     .replace(/^\$ARGUMENTS$/gm, "Use any text supplied with this skill invocation as arguments and task context.")
     .replaceAll("$CLAUDE_PROJECT_DIR", "$PWD")

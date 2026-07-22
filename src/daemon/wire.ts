@@ -27,7 +27,7 @@ const HOME = process.env.HOME?.trim() || homedir();
 const ROOT = CLONE_ROOT; // resolved from this file's location — path/name-agnostic
 const INJECT = `bash ${ROOT}/hooks/sessionstart-inject.sh`;
 const TURN_INJECT = `bash ${ROOT}/hooks/userpromptsubmit-inject.sh`;
-const SKILLS = ["wiki-fast.md", "wiki-ask.md", "wiki-deep.md", "wiki-quiz.md"];
+const SKILLS = ["wiki-save.md", "wiki-ask.md", "wiki-deep.md", "wiki-quiz.md"];
 // When the clone IS ~/llmwiki, the skills' `~/llmwiki` references resolve correctly at runtime
 // (shell ~-expansion), so we can SYMLINK the installed commands to the repo skills instead of
 // copying. That eliminates installed-vs-repo drift (an edit to skill/*.md is immediately live, no
@@ -40,8 +40,8 @@ const NEW_MARK = "hooks/sessionstart-inject.sh";
 const TURN_MARK = "hooks/userpromptsubmit-inject.sh";
 const OLD_MARKS = ["wiki-distill-check.sh", "wiki-distill-enqueue.py"];
 // retired slash commands — removed from <profile>/commands on re-wire so a hard rename
-// doesn't strand a broken command (wiki-update→wiki-fast, wiki-sync→wiki-deep).
-const RETIRED_COMMANDS = ["wiki-update.md", "wiki-sync.md"];
+// doesn't strand a broken command (wiki-update→wiki-fast→wiki-save, wiki-sync→wiki-deep).
+const RETIRED_COMMANDS = ["wiki-update.md", "wiki-sync.md", "wiki-fast.md"];
 
 interface HookEntry {
   type?: string;

@@ -62,7 +62,7 @@ describe("fresh OpenCode setup", () => {
 
     expect(result.exitCode).toBe(0);
     expect(output).toContain("setup installed");
-    expect(output).toContain("OpenCode close-out: /wiki-fast");
+    expect(output).toContain("OpenCode close-out: /wiki-save");
     const plist = readFileSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"), "utf8");
     expect(plist).toContain(`<key>XDG_DATA_HOME</key><string>${dataRoot.replaceAll("&", "&amp;")}</string>`);
     expect(plist).toContain(`<key>OPENCODE_DB</key><string>${dbPath.replaceAll("&", "&amp;")}</string>`);
@@ -71,7 +71,7 @@ describe("fresh OpenCode setup", () => {
     expect(readFileSync(join(opencodeRoot, "plugin", "llmwiki.ts"), "utf8")).toContain(
       `llmwiki-opencode-managed root=${ROOT}`,
     );
-    for (const name of ["wiki-fast", "wiki-ask", "wiki-deep", "wiki-quiz"]) {
+    for (const name of ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz"]) {
       expect(readFileSync(join(opencodeRoot, "commands", `${name}.md`), "utf8")).toContain(`# /${name}`);
     }
     const cli = Bun.spawnSync([join(home, ".local", "bin", "llmwiki"), "--help"], {

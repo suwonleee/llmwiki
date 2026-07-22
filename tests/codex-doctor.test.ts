@@ -32,7 +32,7 @@ describe("Codex doctor status", () => {
         },
       }),
     );
-    for (const name of ["wiki-fast", "wiki-ask", "wiki-deep", "wiki-quiz"]) {
+    for (const name of ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz"]) {
       const skillDir = join(home, ".agents", "skills", name);
       mkdirSync(skillDir, { recursive: true });
       const hash = createHash("sha256")
@@ -98,11 +98,11 @@ describe("Codex doctor status", () => {
 
   test("detects an installed skill generated from stale source content", () => {
     writeFileSync(
-      join(home, ".agents", "skills", "wiki-fast", "SKILL.md"),
-      "---\nname: wiki-fast\ndescription: stale\n---\n<!-- llmwiki-codex-managed root=old -->\n",
+      join(home, ".agents", "skills", "wiki-save", "SKILL.md"),
+      "---\nname: wiki-save\ndescription: stale\n---\n<!-- llmwiki-codex-managed root=old -->\n",
     );
 
-    expect(inspectCodexInstall(codexHome, home).staleSkills).toEqual(["wiki-fast"]);
+    expect(inspectCodexInstall(codexHome, home).staleSkills).toEqual(["wiki-save"]);
   });
 
   test("reports legacy $llmwiki-* skill names for migration", () => {

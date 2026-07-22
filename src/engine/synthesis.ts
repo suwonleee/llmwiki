@@ -28,7 +28,7 @@ const T = {
   en: {
     head: (n: string) => `===== [llmwiki] ${n} — synthesis (auto·regenerable, LLM-0) =====`,
     note: "> Derived view assembled deterministically from the citation graph — links · hubs · freshness only, no new claims, rebuild anytime. (Interpretive synthesis stays human/warm.)",
-    empty: "\nNo category pages yet — start condensing with /wiki-fast.",
+    empty: "\nNo category pages yet — start condensing with /wiki-save.",
     cat: {
       "1_direction": "Direction",
       "2_milestone": "Milestone",
@@ -43,7 +43,7 @@ const T = {
   ko: {
     head: (n: string) => `===== [llmwiki] ${n} — synthesis (auto·재생성, LLM-0) =====`,
     note: "> 인용 그래프에서 결정적으로 조립한 파생 뷰 — 링크·허브·신선도만, 새 주장 0. 언제든 재생성. (해석적 종합은 사람·웜 영역)",
-    empty: "\n아직 카테고리 페이지가 없음 — /wiki-fast 로 업데이트를 시작하세요.",
+    empty: "\n아직 카테고리 페이지가 없음 — /wiki-save 로 업데이트를 시작하세요.",
     cat: {
       "1_direction": "방향성 (direction)",
       "2_milestone": "마일스톤 (milestone)",
@@ -248,8 +248,8 @@ const makeT2 = (lang: "ko" | "en", cfg: WikiConfig) =>
   ({
     en: {
       head: (n: string) => `===== [llmwiki] ${n} — topic view (auto·regenerable, LLM-0) =====`,
-      note: `> Deterministic view of the topic layer — materialized ${cfg.topicDir} pages + emergent clusters by shared tag. No new claims; rebuild anytime. (Generative topic merge is /wiki-fast·/wiki-deep.)`,
-      empty: "\nNo topic pages or taggable wiki pages yet — consolidate with /wiki-fast.",
+      note: `> Deterministic view of the topic layer — materialized ${cfg.topicDir} pages + emergent clusters by shared tag. No new claims; rebuild anytime. (Generative topic merge is /wiki-save·/wiki-deep.)`,
+      empty: "\nNo topic pages or taggable wiki pages yet — consolidate with /wiki-save.",
       materialized: `## Topic pages (${cfg.topicDir} — most-referenced first)`,
       clusters: "## Emergent clusters (pages sharing a tag — consolidation candidates)",
       inbound: (n: number) => `${n} inbound`,
@@ -258,8 +258,8 @@ const makeT2 = (lang: "ko" | "en", cfg: WikiConfig) =>
     },
     ko: {
       head: (n: string) => `===== [llmwiki] ${n} — 주제 뷰 (auto·재생성, LLM-0) =====`,
-      note: `> 주제층의 결정적 뷰 — 실체화된 ${cfg.topicDir} 페이지 + 공유 태그로 묶인 잠재 클러스터. 새 주장 0, 언제든 재생성. (생성형 주제 병합은 /wiki-fast·/wiki-deep.)`,
-      empty: "\n아직 주제 페이지나 태그된 위키 페이지가 없음 — /wiki-fast 로 통합하세요.",
+      note: `> 주제층의 결정적 뷰 — 실체화된 ${cfg.topicDir} 페이지 + 공유 태그로 묶인 잠재 클러스터. 새 주장 0, 언제든 재생성. (생성형 주제 병합은 /wiki-save·/wiki-deep.)`,
+      empty: "\n아직 주제 페이지나 태그된 위키 페이지가 없음 — /wiki-save 로 통합하세요.",
       materialized: `## 주제 페이지 (${cfg.topicDir} — 참조 많은 순)`,
       clusters: "## 잠재 클러스터 (같은 태그를 공유하는 페이지 — 통합 후보)",
       inbound: (n: number) => `${n} inbound`,
