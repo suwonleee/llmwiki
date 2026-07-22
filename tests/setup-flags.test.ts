@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, mkdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const ROOT = join(import.meta.dir, "..");
 
@@ -9,12 +9,32 @@ describe("setup command contract", () => {
   let dir: string;
   let home: string;
   let codexHome: string;
+  let stubBin: string;
+  let stubPath: string;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "llmwiki-setup-flags-"));
     home = join(dir, "home");
     codexHome = join(dir, "codex");
+    stubBin = join(dir, "stub-bin");
     mkdirSync(home, { recursive: true });
+    mkdirSync(stubBin, { recursive: true });
+    // stub harness CLIs: the contract must hold no matter what is installed on the developer machine
+    for (const [name, body] of [
+      [
+        "codex",
+        "#!/bin/sh\nif [ \"${1:-}\" = --help ]; then printf '%s\\n' --dangerously-bypass-hook-trust; fi\nif [ \"${1:-}\" = features ] && [ \"${2:-}\" = list ]; then printf 'hooks stable true\\n'; fi\nexit 0\n",
+      ],
+      [
+        "opencode",
+        "#!/bin/sh\nif [ \"${1:-}\" = run ]; then printf '%s\\n' --command; fi\nexit 0\n",
+      ],
+    ] as const) {
+      const file = join(stubBin, name);
+      writeFileSync(file, body);
+      chmodSync(file, 0o755);
+    }
+    stubPath = [stubBin, dirname(process.execPath), "/usr/bin", "/bin"].join(":");
   });
 
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
@@ -22,7 +42,7 @@ describe("setup command contract", () => {
   function run(args: string[]) {
     return Bun.spawnSync(["bash", join(ROOT, "setup.sh"), ...args], {
       cwd: ROOT,
-      env: { ...process.env, HOME: home, CODEX_HOME: codexHome, CLAUDE_CONFIG_DIR: join(dir, "claude") },
+      env: { ...process.env, HOME: home, CODEX_HOME: codexHome, CLAUDE_CONFIG_DIR: join(dir, "claude"), PATH: stubPath },
       stdout: "pipe",
       stderr: "pipe",
     });
