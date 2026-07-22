@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-# llmwiki · Quiz_wiki — 로컬에서 가볍게 돌아가는 선순환 프로젝트 위키, 퀴즈를 곁들인
+# llmwiki · Quiz_wiki — 로컬에서 가볍게 돌아가는 선순환 프로젝트 위키, 근데 이제 퀴즈를 곁들인
 
 *다른 이름: quiz wiki · llmwiki quiz · Quiz_wiki — 내가 내린 결정을 다시 물어보는 간격 반복(spaced repetition) 레이어.*
 
