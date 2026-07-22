@@ -7,6 +7,8 @@
 
 어느 터미널(기본/tmux/iTerm2)·폴더에서 작업하든 transcript는 이 경로로 떨어지므로, 클라이언트별
 훅 없이도 캡처가 된다. 50줄 미만의 짧은 Q&A 세션은 작업량 신호로 보아 건너뛴다(`src/daemon/watch.ts`).
+`watch.ts --once` 요약은 `discovered`·`enqueued`·`skipped_short`를 각각 출력하므로,
+“발견하지 못함”과 “짧아서 제외됨”을 구분할 수 있다.
 
 > **주의**: `~`(홈) 에서 시작한 세션은 프로젝트가 특정되지 않아 per-project 누적이 안 된다.
 > 누적을 원하면 **그 프로젝트 폴더 안에서** 세션을 시작하라.
@@ -20,7 +22,8 @@
 
 `install.sh` 가 `~/Library/LaunchAgents/com.llmwiki.daemon.plist` 를 생성하고
 `launchctl load` 한다. 해석된 `bun` 절대경로를 plist에 박아넣어 launchd의 최소 PATH
-문제를 피한다.
+문제를 피한다. 설치 시점의 `CODEX_HOME`·`CLAUDE_CONFIG_DIR`도 서비스 환경에 고정하므로
+기본 경로가 아닌 Codex/Claude 프로필의 transcript도 재부팅 후 계속 캡처된다.
 
 ```bash
 launchctl list | grep llmwiki          # 상태
@@ -69,8 +72,9 @@ bun <clone>/src/cli.ts doctor          # 데몬·훅 배선 종합 점검
 bun <clone>/src/daemon/watch.ts --once # 1회 스윕(데몬 없이 즉시 캡처 + 큐 통계 출력)
 ```
 
-- **캡처가 안 됨**: ① 50줄 미만 세션은 의도적으로 드랍 ② `~` 에서 시작한 세션은 `_home` 으로
-  라우팅(위 주의) ③ `.state/daemon.log` 확인.
+- **캡처가 안 됨**: `watch.ts --once`의 `skipped_short`를 먼저 확인한다. ① 50줄 미만 세션은
+  의도적으로 제외 ② `~` 에서 시작한 세션은 `_home` 으로 라우팅(위 주의)
+  ③ `.state/daemon.log` 확인.
 - **launchd/cron의 최소 PATH**: 생성된 유닛/plist엔 `bun` 절대경로가 박혀 있으나, `claude`
   CLI까지 쓰는 생성 패스(`autoupdate` 등)를 데몬 맥락에서 돌릴 일이 있으면 PATH 주입이 필요할 수
   있다. 캡처 자체는 LLM을 안 쓰므로 영향 없음.

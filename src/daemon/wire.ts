@@ -23,7 +23,7 @@ import { join } from "node:path";
 import { CLONE_ROOT } from "../engine/paths.ts";
 import { claudeConfigDirs } from "../engine/sources/claude.ts";
 
-const HOME = homedir();
+const HOME = process.env.HOME?.trim() || homedir();
 const ROOT = CLONE_ROOT; // resolved from this file's location — path/name-agnostic
 const INJECT = `bash ${ROOT}/hooks/sessionstart-inject.sh`;
 const TURN_INJECT = `bash ${ROOT}/hooks/userpromptsubmit-inject.sh`;

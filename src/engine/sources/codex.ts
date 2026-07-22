@@ -19,7 +19,7 @@ import { join } from "node:path";
 import type { DiscoveredSession, ParseOpts, TranscriptSource } from "../source.ts";
 import { readTail, type Increment, type Turn } from "../extract.ts";
 
-const HOME = homedir();
+const HOME = process.env.HOME?.trim() || homedir();
 // Codex honors $CODEX_HOME (falling back to ~/.codex) for its state dir — mirror that so a
 // user who relocates CODEX_HOME is still captured. (openai/codex utils/home-dir.)
 const CODEX_HOME = process.env.CODEX_HOME?.trim() || join(HOME, ".codex");

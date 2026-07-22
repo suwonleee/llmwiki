@@ -9,7 +9,7 @@ import { CLONE_ROOT } from "./paths.ts";
 
 // Mutable module state (STATE_DIR/DB_PATH module globals that tests
 // monkeypatch). Use setStateDir() in tests to redirect away from the real .state.
-let STATE_DIR = join(CLONE_ROOT, ".state");
+let STATE_DIR = process.env.LLMWIKI_STATE_DIR?.trim() || join(CLONE_ROOT, ".state");
 let DB_PATH = join(STATE_DIR, "capture.db");
 
 export function setStateDir(dir: string): void {

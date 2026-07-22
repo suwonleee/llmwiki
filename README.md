@@ -23,15 +23,56 @@ increments — with **an automatic capture daemon + transcript compounding + lab
 
 The core idea — a project wiki that the LLM maintains and the human only steers — comes from [Andrej Karpathy's LLM-wiki note](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). That note is the only outside reference: the design and code here are original.
 
+## Codex quick start (5 minutes)
+
+```bash
+git clone https://github.com/suwonleee/llmwiki-runtime.git llmwiki_runtime
+cd llmwiki_runtime
+./setup.sh --harness codex
+export PATH="$HOME/.local/bin:$PATH"  # setup prints this only when your PATH needs it
+
+# One-time activation: start Codex in any project, open /hooks, and trust both llmwiki hooks.
+cd /path/to/your-project
+llmwiki init .
+codex
+```
+
+Inside Codex, type **`$wiki-fast`** after a meaningful work session. Use
+`$wiki-deep` periodically, `$wiki-ask` to query/file back, and `$wiki-quiz`
+for recall. `setup.sh` installs these as Codex skills under `~/.agents/skills`, merges
+the native hooks without replacing unrelated hooks, and installs `llmwiki` in
+`~/.local/bin`. If that directory is not on `PATH`, setup prints the exact fix.
+Re-running setup safely migrates earlier `$llmwiki-*` installs to the shorter `$wiki-*` names.
+
+Verify with `llmwiki doctor`. Before hook review it reports **one-time action required**;
+it does not claim that injection is already active. Codex owns the current hook-trust
+verdict, so `/hooks` is the source of truth after hook changes.
+
+## OpenCode quick start (5 minutes)
+
+```bash
+git clone https://github.com/suwonleee/llmwiki-runtime.git llmwiki_runtime
+cd llmwiki_runtime
+./setup.sh --harness opencode
+
+cd /path/to/your-project
+llmwiki init .
+opencode
+```
+
+OpenCode uses the same **`/wiki-fast`**, `/wiki-deep`, `/wiki-ask`, and `/wiki-quiz`
+syntax as Claude Code. Setup installs global custom commands and the read-injection
+plugin under `$XDG_CONFIG_HOME/opencode/` (default `~/.config/opencode/`).
+
 ## The Compounding Loop
 
 | Stage | What | Automatic? | Implementation |
 |------|------|:---:|------|
 | **Capture** | Every session transcript → central queue | ✔ | `src/daemon/watch.ts` (terminal/profile-agnostic) |
-| **Condense (update)** | Queue → that repo's `docs/wiki/` **log layer** (incremental append) | 1 command | `/wiki-fast` (this session, fast) · `/wiki-deep` (backlog, deep) + `src/engine/update.ts` |
-| **Consolidate** | Log → per-concept **topic encyclopedia** `5_topic/` (in-place merge·raw re-grounding) | 1 command | `/wiki-fast` (this session) · `/wiki-deep` (gaps·re-condense) + `src/engine/consolidate.ts` |
+| **Condense (update)** | Queue → that repo's `docs/wiki/` **log layer** (incremental append) | 1 command | Codex: `$wiki-fast` / `$wiki-deep` · Claude/OpenCode: `/wiki-fast` / `/wiki-deep` + `src/engine/update.ts` |
+| **Consolidate** | Log → per-concept **topic encyclopedia** `5_topic/` (in-place merge·raw re-grounding) | 1 command | Codex: `$wiki-fast` / `$wiki-deep` · Claude/OpenCode: `/wiki-fast` / `/wiki-deep` + `src/engine/consolidate.ts` |
 | **Read** | Cold-start injection + per-turn related-page pointers | ✔ | `hooks/sessionstart-inject.sh` · `hooks/userpromptsubmit-inject.sh` (Claude Code; Codex/OpenCode → `adapters/`) |
-| **Quiz (human memory)** | Wiki's judgment layer → day-granular spaced-repetition quiz **for the human** (`6_quiz/` records — never indexed/searched; cold-start shows a due-count line) | 1 command | `/wiki-quiz` + `src/engine/quiz.ts` (`quiz-status`·`quiz-next`·`quiz-record`) |
+| **Quiz (human memory)** | Wiki's judgment layer → day-granular spaced-repetition quiz **for the human** (`6_quiz/` records — never indexed/searched; cold-start shows a due-count line) | 1 command | Codex: `$wiki-quiz` · Claude/OpenCode: `/wiki-quiz` + `src/engine/quiz.ts` (`quiz-status`·`quiz-next`·`quiz-record`) |
 | **Self-healing** | Structural (orphan·stale·dangling) = deterministic `lint` / semantic (contradiction·stale claim·missing concept) = generative `review` (auto on sync — engine-gated cadence `--if-due`, default 7d·scoped+cached) → gaps land in `gaps`'s self-closing queue (`0_review/gap-queue.md`) | 1 command → auto | `lint`·`review`·`gaps` (`src/engine/{lint,review,gaps}.ts`) |
 
 ### The human memory loop (`/wiki-quiz`)
@@ -80,7 +121,9 @@ src/           TypeScript engine (Bun runtime, bun:sqlite built in — zero node
     migrate.ts   restructure wiki to the config (dry-run default·link rewriting·.schema-version·drift detection)
   daemon/
     watch.ts     capture daemon (sweeps sources() — default Claude profile transcripts)
-    wire.ts      hook·command wiring (~/.claude* + $CLAUDE_CONFIG_DIR)
+    wire.ts      Claude hook·command wiring (~/.claude* + $CLAUDE_CONFIG_DIR)
+    wire-codex.ts Codex hook merge + ~/.agents/skills + ~/.local/bin/llmwiki
+    wire-opencode.ts OpenCode global plugin + /wiki-* + shared CLI
     list-pending-repos.ts  print only pending repos from the queue (for schedulers)
 daemon/        install.sh (launchd/systemd/cron auto-detect) + autoupdate-*.sh (unattended fact pass)
 hooks/         sessionstart-inject.sh (cold-start) · userpromptsubmit-inject.sh (per-turn pointers)
@@ -98,42 +141,45 @@ Storage principle: **capture queue = central (`<clone>/.state/capture.db`) / con
 | | Required | Notes |
 |---|---|---|
 | **Bun ≥ 1.1** | ✔ required | Single binary (`curl -fsSL https://bun.sh/install \| bash`). Runs `.ts` directly, and `bun:sqlite` bundles FTS5 — zero build·`node_modules`. Running the engine and `bun test` work with no install; only `bun run typecheck` (tsc) needs a one-time `bun install` (dev-only). |
+| **Codex CLI** | ✔ for the Codex quick start | `codex` must be on `PATH` with lifecycle-hook support and the stable `hooks` feature enabled. Setup checks support—and an existing feature setting—before changing hooks, skills, or services. |
 | **LLM CLI** | only for the generative pass | Capture·read-injection·`/wiki-*`·`ingest` (capture-only, queues pending updates) work without it. `autoupdate·review` and `ingest`'s consolidation call an LLM CLI, so they need one — default `claude -p` ([install](https://docs.claude.com/en/docs/claude-code/setup)), or point `LLMWIKI_LLM_CMD` at a different CLI/provider. |
 | **OS** | macOS / Linux | macOS=launchd, Linux=systemd (`--user`), falls back to cron+nohup if systemd is unavailable. Daemon details in [`daemon/README.md`](daemon/README.md) |
 
 ### Harness·OS notes (Claude Code / Codex / Windows)
 
 - **Claude Code**: `git clone … && ./setup.sh` → done. Capture·read-injection·`/wiki-*` are all wired automatically.
-- **Codex (OpenAI)**: Capture is automatic — the daemon watches `$CODEX_HOME/sessions/**/*.jsonl[.zst]` (default `~/.codex`, current/legacy/compressed formats) via an adapter. **Read-injection is native** on recent Codex (0.142.0 verified): copy `adapters/codex/hooks.json.example` → `$CODEX_HOME/hooks.json` and trust it once (interactive `codex` → "Trust all"); the same `sessionstart-inject.sh`/`userpromptsubmit-inject.sh` scripts run as-is. For the **generative pass** (autoupdate/review), if you don't have the claude CLI, point `LLMWIKI_LLM_CMD` at your own CLI (e.g. codex).
-- **OpenCode**: Capture reads its SQLite session store; read-injection via the one-file plugin in `adapters/opencode/` (`experimental.chat.system.transform`, verified on 1.3.0). Set `LLMWIKI_ROOT` to the clone path.
+- **Codex (OpenAI)**: `./setup.sh --harness codex` installs the user CLI, four `$wiki-*` skills, and merges native `SessionStart`/`UserPromptSubmit` hooks into `$CODEX_HOME/hooks.json`. Start Codex once and use `/hooks` to review the exact commands; new or changed hooks stay skipped until trusted. Capture watches `$CODEX_HOME/sessions/**/*.jsonl[.zst]`. Warm skills work with Codex itself; unattended `autoupdate`/`review` still need `LLMWIKI_LLM_CMD` when Claude CLI is absent.
+- **OpenCode**: `./setup.sh --harness opencode` installs global `/wiki-*` custom commands, a clone-pinned read-injection plugin, and the user CLI. Capture reads the SQLite session store; setup preserves `XDG_DATA_HOME`/`OPENCODE_DB` in the daemon environment.
 - **Windows**: Bun·`bun:sqlite` run natively and path matching normalizes backslashes. But native Windows needs (a) **Git Bash** for the `.sh` scripts, and (b) manual **Task Scheduler/NSSM** registration since there's no launchd/systemd/cron for the daemon. → **WSL2 is recommended** (launchd→systemd·bash·paths all work unmodified; this also matches the official Claude Code·Codex recommendation).
 
 ## Install / Usage
 
-**Clone this repo anywhere, under any name, and run `./setup.sh` once** — that makes it the engine for that machine.
+**Clone this repo anywhere, under any name, and run `./setup.sh`** — that makes it the engine for that machine. Re-run setup after moving or updating the clone; it refreshes generated skills and wiring idempotently.
 All wiring (daemon·hooks·CLI·`/wiki-*` commands) is **derived from the clone location itself**, so there's no need
 for a fixed path like `~/llmwiki` (the clone folder can have any name). With just Bun, `.ts` runs as-is via `bun` with no extra dependencies (no bundle·build step).
 
 ```bash
-# 0) clone the engine (once, one per machine) — location/name doesn't matter
-git clone https://github.com/suwonleee/llmwiki
-cd llmwiki
+# 0) clone the runtime engine (once, one per machine) — location/name doesn't matter
+git clone https://github.com/suwonleee/llmwiki-runtime.git llmwiki_runtime
+cd llmwiki_runtime
 
-# 1) one-shot install — doctor → capture daemon (OS auto-detect) → SessionStart hook + /wiki-* commands → index → doctor
-./setup.sh                               # idempotent: safe to re-run after moving the clone or pulling engine updates
+# 1) one-shot install — doctor → capture daemon (OS auto-detect) → Codex hooks + skills + CLI → doctor
+./setup.sh --harness codex               # use --harness auto when Claude Code is also installed
+# OpenCode only: ./setup.sh --harness opencode
 
 # 2) just work — sessions are captured automatically in any folder/terminal
 #    to use it manually in another project, from that folder:
 #    bun <clone>/src/cli.ts init|index|search|lint <repo>
 
-# 3) close out/tidy up the session (in that repo)
-/wiki-fast                             # FAST close-out (every session): this session only + 5_topic + L0 + lint — minutes, O(session) (warm, human-present)
-/wiki-deep                               # periodic DEEP pass (day end/~weekly): drain the backlog + semantic review + gap queue + re-condense oversized topic pages. Deferral is lossless (immutable transcripts·durable watermarks/queues)
-/wiki-quiz                               # HUMAN memory loop (after a close-out / when cold-start says reviews are due): ~5 spaced-repetition questions on your own decisions·direction — wrong answers return the next day
+# 3) in Codex, close out/tidy up the session (type these in the Codex prompt)
+$wiki-fast                              # FAST close-out: this meaningful session + topics + L0 + lint
+$wiki-deep                              # periodic DEEP pass: backlog + review + gaps + re-distill
+$wiki-quiz                              # human memory loop over your own decisions/direction
 ```
 
 > To run individual steps: `bun <clone>/src/cli.ts doctor` · `bash <clone>/daemon/install.sh` ·
-> `bun <clone>/src/daemon/wire.ts`. To revert: `install.sh --uninstall` · `wire.ts --revert`.
+> `bun <clone>/src/daemon/wire-codex.ts`. To revert Codex wiring:
+> `bun <clone>/src/daemon/wire-codex.ts --revert`. Claude Code uses `wire.ts` separately.
 
 ## Configuration (environment variables) — provider·model·CLI agnostic
 

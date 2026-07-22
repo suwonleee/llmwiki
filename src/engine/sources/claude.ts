@@ -10,7 +10,10 @@ import { join } from "node:path";
 import type { DiscoveredSession, ParseOpts, TranscriptSource } from "../source.ts";
 import { extractIncrement, type Increment } from "../extract.ts";
 
-const HOME = homedir();
+// Respect an explicitly isolated HOME (fresh-install tests, containers, CI). On macOS
+// os.homedir() can resolve the account database home even when HOME was overridden,
+// which made a disposable setup test discover and rewrite the real user profile.
+const HOME = process.env.HOME?.trim() || homedir();
 
 // Every Claude config dir: ~/.claude* plus an explicit $CLAUDE_CONFIG_DIR override
 // (which may live outside $HOME or not match the .claude* naming). Without the env

@@ -24,15 +24,56 @@
 
 핵심 아이디어 — LLM이 유지하고 사람은 방향만 잡는 프로젝트 위키 — 는 [Andrej Karpathy의 LLM-wiki 노트](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)에서 왔습니다. 참고한 외부 자료는 그 노트 하나뿐이며, 설계와 코드는 자체 구현입니다.
 
+## Codex 5분 빠른 시작
+
+```bash
+git clone https://github.com/suwonleee/llmwiki-runtime.git llmwiki_runtime
+cd llmwiki_runtime
+./setup.sh --harness codex
+export PATH="$HOME/.local/bin:$PATH"  # PATH에 없을 때만(setup이 정확한 명령을 출력함)
+
+# 최초 1회: 프로젝트에서 Codex를 시작하고 /hooks를 열어 llmwiki 훅 2개를 신뢰한다.
+cd /path/to/your-project
+llmwiki init .
+codex
+```
+
+의미 있는 작업 세션이 끝나면 Codex 입력창에 **`$wiki-fast`**를 입력합니다.
+주기적으로 `$wiki-deep`, 질문·재기록에는 `$wiki-ask`, 사람 복습에는
+`$wiki-quiz`를 사용합니다. setup은 Codex 스킬을 `~/.agents/skills`에 설치하고,
+기존 훅을 보존하면서 native hook을 병합하며, `~/.local/bin/llmwiki` 명령을 설치합니다.
+해당 디렉터리가 `PATH`에 없으면 setup이 현재 셸에 바로 붙여 넣을 명령을 출력합니다.
+이전 `$llmwiki-*` 스킬이 설치돼 있으면 setup 재실행 시 `$wiki-*`로 안전하게 옮깁니다.
+
+`llmwiki doctor`로 확인할 수 있습니다. 훅 검토 전에는 “최초 1회 조치 필요”라고
+표시하며 주입이 활성화됐다고 단정하지 않습니다. 훅 변경 후 현재 신뢰 상태의 진실원은
+Codex의 `/hooks` 화면입니다.
+
+## OpenCode 5분 빠른 시작
+
+```bash
+git clone https://github.com/suwonleee/llmwiki-runtime.git llmwiki_runtime
+cd llmwiki_runtime
+./setup.sh --harness opencode
+
+cd /path/to/your-project
+llmwiki init .
+opencode
+```
+
+OpenCode 입력창에서는 Claude Code와 같은 **`/wiki-fast`**, `/wiki-deep`, `/wiki-ask`,
+`/wiki-quiz`를 사용합니다. setup은 전역 custom command와 읽기 주입 플러그인을
+`$XDG_CONFIG_HOME/opencode/`(기본 `~/.config/opencode/`)에 설치합니다.
+
 ## 선순환 루프
 
 | 고리 | 무엇 | 자동? | 구현 |
 |------|------|:---:|------|
 | **캡처** | 모든 세션 transcript → 중앙 큐 | ✔ | `src/daemon/watch.ts` (터미널·프로필 무관) |
-| **업데이트(update)** | 큐 → 그 레포 `docs/wiki/` **로그층**(증분 append) | 1커맨드 | `/wiki-fast`(이 세션, fast)·`/wiki-deep`(백로그, deep) + `src/engine/update.ts` |
-| **통합(consolidate)** | 로그 → 개념별 **주제 백과** `5_topic/`(in-place 병합·raw 재-grounding) | 1커맨드 | `/wiki-fast`(이 세션)·`/wiki-deep`(갭·비대 토픽 재작성) + `src/engine/consolidate.ts` |
+| **업데이트(update)** | 큐 → 그 레포 `docs/wiki/` **로그층**(증분 append) | 1커맨드 | Codex: `$wiki-fast` / `$wiki-deep` · Claude·OpenCode: `/wiki-fast` / `/wiki-deep` + `src/engine/update.ts` |
+| **통합(consolidate)** | 로그 → 개념별 **주제 백과** `5_topic/`(in-place 병합·raw 재-grounding) | 1커맨드 | Codex: `$wiki-fast` / `$wiki-deep` · Claude·OpenCode: `/wiki-fast` / `/wiki-deep` + `src/engine/consolidate.ts` |
 | **읽기** | cold-start 주입 + 턴별 관련 페이지 포인터 | ✔ | `hooks/sessionstart-inject.sh` · `hooks/userpromptsubmit-inject.sh` (Claude Code; Codex/OpenCode 는 `adapters/`) |
-| **퀴즈(사람 기억)** | 위키의 판단층 → **사람을 위한** 망각곡선(일 단위) 간격반복 퀴즈 (`6_quiz/` 기록 — 인덱스·검색 제외; cold-start 에 due 카운트 1줄) | 1커맨드 | `/wiki-quiz` + `src/engine/quiz.ts` (`quiz-status`·`quiz-next`·`quiz-record`) |
+| **퀴즈(사람 기억)** | 위키의 판단층 → **사람을 위한** 망각곡선(일 단위) 간격반복 퀴즈 (`6_quiz/` 기록 — 인덱스·검색 제외; cold-start 에 due 카운트 1줄) | 1커맨드 | Codex: `$wiki-quiz` · Claude·OpenCode: `/wiki-quiz` + `src/engine/quiz.ts` (`quiz-status`·`quiz-next`·`quiz-record`) |
 | **자가치유** | 구조(orphan·stale·dangling)=결정적 `lint` / 의미(모순·낡은주장·개념누락)=생성적 `review`(sync 자동 — 주기 게이트 `--if-due` 기본 7일·범위한정+캐시) → 갭은 `gaps` 자가종료 큐(`0_review/gap-queue.md`) | 1커맨드 → 자동 | `lint`·`review`·`gaps` (`src/engine/{lint,review,gaps}.ts`) |
 
 ### 사람 기억 루프 (`/wiki-quiz`)
@@ -81,7 +122,9 @@ src/           TypeScript 엔진 (Bun 런타임, bun:sqlite 내장 — node_modu
     migrate.ts   위키를 config 구조로 이관 (dry-run 기본·링크 재작성·.schema-version·드리프트 감지)
   daemon/
     watch.ts     캡처 데몬 (sources() 스윕 — 기본 Claude 프로필 transcript)
-    wire.ts      훅·커맨드 배선 (~/.claude* + $CLAUDE_CONFIG_DIR)
+    wire.ts      Claude 훅·커맨드 배선 (~/.claude* + $CLAUDE_CONFIG_DIR)
+    wire-codex.ts Codex 훅 병합 + ~/.agents/skills + ~/.local/bin/llmwiki
+    wire-opencode.ts OpenCode 전역 플러그인 + /wiki-* + 공유 CLI
     list-pending-repos.ts  큐에서 pending 레포만 출력 (스케줄러용)
 daemon/        install.sh (launchd/systemd/cron 자동감지) + autoupdate-*.sh (무인 사실 패스)
 hooks/         sessionstart-inject.sh (cold-start 주입) · userpromptsubmit-inject.sh (턴별 포인터 주입)
@@ -99,42 +142,46 @@ package.json·tsconfig.json   Bun 메타(typecheck용; 런타임은 .ts 직접 �
 | | 필요 | 비고 |
 |---|---|---|
 | **Bun ≥ 1.1** | ✔ 필수 | 단일 바이너리 (`curl -fsSL https://bun.sh/install \| bash`). `.ts` 를 그대로 실행, `bun:sqlite` 가 FTS5 까지 번들 — 빌드·`node_modules` 0. 엔진 실행·`bun test` 는 무설치로 동작; `bun run typecheck`(tsc) 만 `bun install` 1회 필요 (dev 전용). |
+| **Codex CLI** | Codex 빠른 시작에 필수 | `codex` 명령이 `PATH`에 있고 lifecycle hook을 지원하며 stable `hooks` 기능이 활성화돼 있어야 합니다. setup은 훅·스킬·서비스 변경 전에 지원 여부와 기존 기능 설정을 확인합니다. |
 | **LLM CLI** | 생성 패스에만 | 캡처·읽기 주입·`/wiki-*`·`ingest`(capture-only, 대기 목록만 기록) 는 없어도 동작. `autoupdate·review` 와 `ingest` 의 업데이트는 LLM CLI 를 호출하므로 필요 — 기본 `claude -p`([설치](https://docs.claude.com/en/docs/claude-code/setup)), 또는 `LLMWIKI_LLM_CMD` 로 다른 CLI/provider. |
 | **OS** | macOS / Linux | macOS=launchd, Linux=systemd(`--user`), systemd 없으면 cron+nohup 폴백. 데몬 세부는 [`daemon/README.md`](daemon/README.md) |
 
 ### 하네스·OS 노트 (Claude Code / Codex / Windows)
 
 - **Claude Code**: `git clone … && ./setup.sh` → 끝. 캡처·읽기 주입·`/wiki-*` 전부 자동 배선.
-- **Codex (OpenAI)**: 캡처는 자동 — 데몬이 `$CODEX_HOME/sessions/**/*.jsonl[.zst]`(기본 `~/.codex`, current/legacy/압축 포맷) 어댑터로 감시. **읽기 주입은 네이티브**(0.142.0 확인): `adapters/codex/hooks.json.example` → `$CODEX_HOME/hooks.json` 복사 후 1회 신뢰(대화형 `codex` → "Trust all"), 동일한 `sessionstart-inject.sh`/`userpromptsubmit-inject.sh`가 그대로 실행됨. **생성 패스**(autoupdate/review)는 claude CLI가 없으면 `LLMWIKI_LLM_CMD`를 codex 등 자기 CLI로 지정.
-- **OpenCode**: 캡처는 SQLite 세션 저장소를 읽음; 읽기 주입은 `adapters/opencode/`의 1파일 플러그인(`experimental.chat.system.transform`, 1.3.0 확인). `LLMWIKI_ROOT`를 clone 경로로 설정.
+- **Codex (OpenAI)**: `./setup.sh --harness codex`가 사용자 CLI, `$wiki-*` 스킬 4개, native `SessionStart`/`UserPromptSubmit` 훅을 설치·병합합니다. Codex를 시작해 `/hooks`에서 정확한 명령을 1회 검토해야 하며, 새 훅이나 변경된 훅은 신뢰 전까지 실행되지 않습니다. 캡처는 `$CODEX_HOME/sessions/**/*.jsonl[.zst]`를 감시합니다. 웜 스킬은 Codex 자체로 동작하지만 무인 `autoupdate`/`review`는 Claude CLI가 없을 때 `LLMWIKI_LLM_CMD`가 필요합니다.
+- **OpenCode**: `./setup.sh --harness opencode`가 `/wiki-*` 전역 custom command, clone 경로가 내장된 읽기 주입 플러그인, 사용자 CLI를 설치합니다. 캡처는 SQLite 세션 저장소를 읽으며 `XDG_DATA_HOME`/`OPENCODE_DB`도 데몬 환경에 보존합니다.
 - **Windows**: Bun·`bun:sqlite`는 네이티브 동작하고 경로 매칭은 backslash 정규화됨. 단 네이티브 Windows는 (a) `.sh` 스크립트에 **Git Bash** 필요, (b) 데몬에 launchd/systemd/cron이 없어 **Task Scheduler/NSSM** 수동 등록 필요. → **WSL2 권장**(launchd→systemd·bash·경로가 무수정 동작; Claude Code·Codex 공식 권장도 동일).
 
 ## 설치 / 사용
 
-**이 레포를 아무 데나·아무 이름으로 clone 한 뒤 `./setup.sh` 한 번** 돌리면 그 머신의 엔진이 됩니다.
+**이 레포를 아무 데나·아무 이름으로 clone 한 뒤 `./setup.sh`를 실행**하면 그 머신의 엔진이 됩니다.
+clone을 이동하거나 업데이트한 뒤에는 setup을 다시 실행하면 생성 스킬과 배선을 멱등하게 갱신합니다.
 모든 배선(데몬·훅·CLI·`/wiki-*` 커맨드)이 **clone 위치 자체에서 유도**되므로 `~/llmwiki` 같은 고정 경로가
 필요 없습니다 (폴더 이름은 무엇이든 OK). Bun 만 있으면 추가 의존성 없이 `bun` 으로 `.ts` 가 그대로 돌아갑니다 (번들·빌드 단계 없음).
 
 ```bash
-# 0) 엔진 clone (한 번, 머신당 1개) — 위치·이름 무관
-git clone https://github.com/suwonleee/llmwiki
-cd llmwiki
+# 0) runtime 엔진 clone (한 번, 머신당 1개) — 위치·이름 무관
+git clone https://github.com/suwonleee/llmwiki-runtime.git llmwiki_runtime
+cd llmwiki_runtime
 
-# 1) 한 방 설치 — doctor → 캡처 데몬(OS 자동감지) → SessionStart 훅 + /wiki-* 커맨드 → 인덱스 → doctor
-./setup.sh                               # idempotent: clone 이동·엔진 업데이트(git pull) 후 재실행해도 안전
+# 1) 한 방 설치 — doctor → 캡처 데몬(OS 자동감지) → Codex 훅 + 스킬 + CLI → doctor
+./setup.sh --harness codex               # Claude Code도 함께 쓰면 --harness auto
+# OpenCode만 쓰면: ./setup.sh --harness opencode
 
 # 2) 그냥 작업한다 — 어느 폴더·터미널이든 세션이 자동 캡처됨
 #    다른 프로젝트에서 수동으로 쓰려면 그 폴더에서:
 #    bun <clone>/src/cli.ts init|index|search|lint <repo>
 
-# 3) 세션 마감/정리 (그 레포에서)
-/wiki-fast                             # fast 마감(세션 끝마다): 이 세션만 반영 + 5_topic 통합 + L0 신선도 + lint — 분 단위, O(세션) (웜·사람동석)
-/wiki-deep                               # deep 주기 패스(하루 마무리/주 1회쯤): 백로그 소진 + 의미 review + 갭 큐 + 비대 토픽 재작성. 미루기=무손실(transcript 불변·워터마크/큐 영속)
-/wiki-quiz                               # 사람 기억 루프(마감 후 / cold-start 가 복습 due 알릴 때): 내 결정·방향성에 대한 간격반복 ~5문항 — 틀린 건 다음 날 다시
+# 3) Codex 입력창에서 세션 마감/정리
+$wiki-fast                              # fast 마감: 의미 있는 현재 세션 + 토픽 + L0 + lint
+$wiki-deep                              # deep 주기 패스: 백로그 + 의미 review + 갭 + 재증류
+$wiki-quiz                              # 내 결정·방향성에 대한 사람 기억 루프
 ```
 
 > 개별 단계로 돌리려면: `bun <clone>/src/cli.ts doctor` · `bash <clone>/daemon/install.sh` ·
-> `bun <clone>/src/daemon/wire.ts`. 되돌리기: `install.sh --uninstall` · `wire.ts --revert`.
+> `bun <clone>/src/daemon/wire-codex.ts`. Codex 배선 되돌리기:
+> `bun <clone>/src/daemon/wire-codex.ts --revert`. Claude Code 배선은 별도 `wire.ts`가 담당합니다.
 
 ## 설정 (환경 변수) — provider·모델·CLI 무관
 

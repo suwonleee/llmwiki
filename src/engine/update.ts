@@ -6,7 +6,8 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import * as capture from "./capture.ts";
 import { effectiveKo, getConfig, logDirs, type WikiConfig } from "./config.ts";
-import { extractIncrement, render } from "./extract.ts";
+import { render } from "./extract.ts";
+import { sourceForKind, sourceForPath } from "./source.ts";
 import { WikiIndex } from "./db.ts";
 
 // Wiki categories: numbered by reading order.
@@ -28,7 +29,8 @@ function basename(p: string): string {
 }
 
 export function enqueue(ws: string, transcriptPath: string, sessionId: string | null): void {
-  capture.enqueue(transcriptPath, sessionId, resolve(ws));
+  const source = sourceForPath(transcriptPath);
+  capture.enqueue(transcriptPath, sessionId, resolve(ws), 0, source.kind);
 }
 
 export function pending(ws: string): capture.CaptureRow[] {
@@ -46,7 +48,10 @@ export interface NextIncrement {
 
 export function nextIncrement(ws: string, transcriptPath: string): NextIncrement {
   const offset = capture.getOffset(transcriptPath);
-  const inc = extractIncrement(transcriptPath, offset);
+  // Capture-time source_kind is the queue contract. This keeps update-next harness-neutral
+  // even after a transcript moves or the user's active harness profile changes.
+  const source = sourceForKind(capture.getSourceKind(transcriptPath));
+  const inc = source.parse(transcriptPath, offset);
   new WikiIndex(ws).registerTranscript(transcriptPath, inc.sessionId);
   return {
     rendered: render(inc),

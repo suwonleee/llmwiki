@@ -5,12 +5,13 @@
 // safely re-registers the SessionStart inject hook (timestamped backup → parse →
 // append → re-parse validation → write).
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { CLONE_ROOT } from "./paths.ts";
 import { claudeConfigDirs } from "./sources/claude.ts";
 
-const HOME = homedir();
+const HOME = process.env.HOME?.trim() || homedir();
 const CORE = [
   "src/engine/db.ts",
   "src/engine/lint.ts",
@@ -27,6 +28,9 @@ const CORE = [
   "src/cli.ts",
   "src/daemon/watch.ts",
   "src/daemon/wire.ts",
+  "src/daemon/wire-codex.ts",
+  "src/daemon/wire-opencode.ts",
+  "adapters/opencode/llmwiki.ts",
   "daemon/install.sh",
   "hooks/sessionstart-inject.sh",
   "hooks/userpromptsubmit-inject.sh",
@@ -47,9 +51,188 @@ const LABEL = "com.llmwiki.daemon";
 // (e.g. an OMC update regenerated settings.json). Presence keys on the hook script
 // filename (survives any clone path/name — decision: path-agnostic setup), then the
 // full command below distinguishes "wired to THIS clone" from "wired to another clone".
-const SESSIONSTART_CMD = `bash ${CLONE_ROOT}/hooks/sessionstart-inject.sh`;
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+const SESSIONSTART_CMD = `bash ${shellQuote(`${CLONE_ROOT}/hooks/sessionstart-inject.sh`)}`;
 // per-turn read-injection hook — same self-heal contract as SessionStart
-const TURNCTX_CMD = `bash ${CLONE_ROOT}/hooks/userpromptsubmit-inject.sh`;
+const TURNCTX_CMD = `bash ${shellQuote(`${CLONE_ROOT}/hooks/userpromptsubmit-inject.sh`)}`;
+const WIRE_CLAUDE_CMD = `bun ${shellQuote(join(CLONE_ROOT, "src", "daemon", "wire.ts"))}`;
+const WIRE_CODEX_CMD = `bun ${shellQuote(join(CLONE_ROOT, "src", "daemon", "wire-codex.ts"))}`;
+const WIRE_OPENCODE_CMD = `bun ${shellQuote(join(CLONE_ROOT, "src", "daemon", "wire-opencode.ts"))}`;
+const CODEX_SKILLS = ["wiki-fast", "wiki-ask", "wiki-deep", "wiki-quiz"] as const;
+const LEGACY_CODEX_SKILLS = CODEX_SKILLS.map((name) => `llmwiki-${name.slice("wiki-".length)}`);
+const CODEX_MANAGED = "llmwiki-codex-managed";
+const OPENCODE_COMMANDS = ["wiki-fast", "wiki-ask", "wiki-deep", "wiki-quiz"] as const;
+const OPENCODE_MANAGED = "llmwiki-opencode-managed";
+
+export interface CodexInstallStatus {
+  installed: boolean;
+  hooksPath: string;
+  hooksValid: boolean;
+  sessionHook: boolean;
+  turnHook: boolean;
+  reviewRecords: boolean;
+  missingSkills: string[];
+  staleSkills: string[];
+  legacySkills: string[];
+  launcher: "missing" | "managed" | "foreign";
+  launcherOnPath: boolean;
+}
+
+export interface OpenCodeInstallStatus {
+  installed: boolean;
+  plugin: "missing" | "current" | "stale" | "foreign";
+  missingCommands: string[];
+  staleCommands: string[];
+  launcher: "missing" | "managed" | "foreign";
+  launcherOnPath: boolean;
+}
+
+function commandLocation(
+  hooks: Record<string, any[]> | undefined,
+  event: string,
+  expected: string,
+): { group: number; hook: number } | null {
+  const groups = hooks?.[event];
+  if (!Array.isArray(groups)) return null;
+  for (const [groupIndex, group] of groups.entries()) {
+    const handlers = Array.isArray(group?.hooks) ? group.hooks : [];
+    for (const [hookIndex, hook] of handlers.entries()) {
+      if (hook?.type === "command" && hook?.command === expected) return { group: groupIndex, hook: hookIndex };
+    }
+  }
+  return null;
+}
+
+// Structural inspection only. Codex owns the current-hash verdict, so a matching config
+// record is reported as "review record present", never as an authoritative trust claim.
+// `/hooks` remains the source of truth for new/changed handlers.
+export function inspectCodexInstall(
+  codexHome: string,
+  home: string = HOME,
+  binDir: string = process.env.LLMWIKI_BIN_DIR?.trim() || join(home, ".local", "bin"),
+): CodexInstallStatus {
+  const hooksPath = join(codexHome, "hooks.json");
+  const result: CodexInstallStatus = {
+    installed: existsSync(codexHome),
+    hooksPath,
+    hooksValid: false,
+    sessionHook: false,
+    turnHook: false,
+    reviewRecords: false,
+    missingSkills: [],
+    staleSkills: [],
+    legacySkills: [],
+    launcher: "missing",
+    launcherOnPath: false,
+  };
+  let parsed: any;
+  try {
+    parsed = JSON.parse(readFileSync(hooksPath, "utf8"));
+    result.hooksValid = !!parsed && typeof parsed === "object" && !Array.isArray(parsed);
+  } catch {
+    parsed = null;
+  }
+  const session = commandLocation(parsed?.hooks, "SessionStart", SESSIONSTART_CMD);
+  const turn = commandLocation(parsed?.hooks, "UserPromptSubmit", TURNCTX_CMD);
+  result.sessionHook = session !== null;
+  result.turnHook = turn !== null;
+  if (session && turn) {
+    try {
+      const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+      const sessionKey = `[hooks.state."${hooksPath}:session_start:${session.group}:${session.hook}"]`;
+      const turnKey = `[hooks.state."${hooksPath}:user_prompt_submit:${turn.group}:${turn.hook}"]`;
+      result.reviewRecords = config.includes(sessionKey) && config.includes(turnKey);
+    } catch {
+      /* no review records yet */
+    }
+  }
+  result.missingSkills = CODEX_SKILLS.filter(
+    (name) => !existsSync(join(home, ".agents", "skills", name, "SKILL.md")),
+  );
+  result.staleSkills = CODEX_SKILLS.filter((name) => {
+    const installed = join(home, ".agents", "skills", name, "SKILL.md");
+    if (!existsSync(installed)) return false;
+    const source = join(CLONE_ROOT, "skill", `${name}.md`);
+    try {
+      const hash = createHash("sha256").update(readFileSync(source)).digest("hex");
+      const owner = `${CODEX_MANAGED} root=${CLONE_ROOT} source_sha256=${hash}`;
+      return !readFileSync(installed, "utf8").includes(owner);
+    } catch {
+      return true;
+    }
+  });
+  result.legacySkills = LEGACY_CODEX_SKILLS.filter((name) =>
+    existsSync(join(home, ".agents", "skills", name, "SKILL.md")),
+  );
+  const launcher = join(binDir, "llmwiki");
+  try {
+    const text = readFileSync(launcher, "utf8");
+    result.launcher = text.includes("# llmwiki launcher") && text.includes(CLONE_ROOT) ? "managed" : "foreign";
+  } catch {
+    result.launcher = "missing";
+  }
+  result.launcherOnPath = (process.env.PATH ?? "").split(":").includes(dirname(launcher));
+  return result;
+}
+
+export function inspectOpenCodeInstall(
+  configRoot: string,
+  home: string = HOME,
+  binDir: string = process.env.LLMWIKI_BIN_DIR?.trim() || join(home, ".local", "bin"),
+): OpenCodeInstallStatus {
+  const opencodeRoot = join(configRoot, "opencode");
+  const plugin = join(opencodeRoot, "plugin", "llmwiki.ts");
+  const commandsRoot = join(opencodeRoot, "commands");
+  const result: OpenCodeInstallStatus = {
+    installed: false,
+    plugin: "missing",
+    missingCommands: [],
+    staleCommands: [],
+    launcher: "missing",
+    launcherOnPath: false,
+  };
+  result.installed = Bun.which("opencode") !== null;
+  try {
+    const content = readFileSync(plugin, "utf8");
+    if (!content.includes(OPENCODE_MANAGED)) {
+      result.plugin = content.includes("llmwiki OpenCode plugin") ? "stale" : "foreign";
+    } else {
+      const source = join(CLONE_ROOT, "adapters", "opencode", "llmwiki.ts");
+      const hash = createHash("sha256").update(readFileSync(source)).digest("hex");
+      const owner = `${OPENCODE_MANAGED} root=${CLONE_ROOT} source_sha256=${hash}`;
+      result.plugin = content.includes(owner) ? "current" : "stale";
+    }
+  } catch {
+    result.plugin = "missing";
+  }
+  result.missingCommands = OPENCODE_COMMANDS.filter(
+    (name) => !existsSync(join(commandsRoot, `${name}.md`)),
+  );
+  result.staleCommands = OPENCODE_COMMANDS.filter((name) => {
+    const installed = join(commandsRoot, `${name}.md`);
+    if (!existsSync(installed)) return false;
+    try {
+      const source = join(CLONE_ROOT, "skill", `${name}.md`);
+      const hash = createHash("sha256").update(readFileSync(source)).digest("hex");
+      const owner = `${OPENCODE_MANAGED} root=${CLONE_ROOT} source_sha256=${hash}`;
+      return !readFileSync(installed, "utf8").includes(owner);
+    } catch {
+      return true;
+    }
+  });
+  const launcher = join(binDir, "llmwiki");
+  try {
+    const content = readFileSync(launcher, "utf8");
+    result.launcher = content.includes("# llmwiki launcher") && content.includes(CLONE_ROOT) ? "managed" : "foreign";
+  } catch {
+    result.launcher = "missing";
+  }
+  result.launcherOnPath = (process.env.PATH ?? "").split(":").includes(dirname(launcher));
+  return result;
+}
 
 // timestamp like Python's datetime.now():%Y%m%d-%H%M%S
 function ts(): string {
@@ -109,9 +292,14 @@ function claudeProfiles(): string[] {
   return claudeConfigDirs();
 }
 
-export function runDoctor(fix = false): number {
-  console.log(`=== llmwiki doctor (root=${CLONE_ROOT}${fix ? ", --fix" : ""}) ===`);
+export type DoctorHarness = "all" | "codex" | "claude" | "opencode";
+
+export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
+  console.log(
+    `=== llmwiki doctor (root=${CLONE_ROOT}, harness=${harness}${fix ? ", --fix" : ""}) ===`,
+  );
   let issues = 0;
+  let actions = 0;
 
   for (const rel of CORE) {
     const ok = existsSync(join(CLONE_ROOT, rel));
@@ -166,8 +354,10 @@ export function runDoctor(fix = false): number {
     }
   }
 
-  // SessionStart read-injection hooks across profiles
-  for (const prof of claudeProfiles()) {
+  // SessionStart read-injection hooks across profiles. A Codex-only setup must not fail
+  // because an independently managed Claude profile points at another llmwiki clone.
+  const inspectClaude = harness === "claude" || (harness === "all" && Bun.which("claude") !== null);
+  for (const prof of inspectClaude ? claudeProfiles() : []) {
     const sp = join(prof, "settings.json");
     const name = basename(prof);
     if (!existsSync(sp)) continue;
@@ -186,7 +376,7 @@ export function runDoctor(fix = false): number {
       // script name found but pointing at a different clone — repairHook would only
       // append a duplicate; wire.ts strip-then-add is the correct re-point path.
       console.log(
-        `  [${name}] ⚠️ SessionStart hook points to a different clone (re-point: bun ${CLONE_ROOT}/src/daemon/wire.ts)`,
+        `  [${name}] ⚠️ SessionStart hook points to a different clone (re-point: ${WIRE_CLAUDE_CMD})`,
       );
       issues += 1;
     } else if (fix) {
@@ -202,7 +392,7 @@ export function runDoctor(fix = false): number {
       console.log(`  [${name}] ✅ turn-context hook present`);
     } else if (hasTurn) {
       console.log(
-        `  [${name}] ⚠️ UserPromptSubmit hook points to a different clone (re-point: bun ${CLONE_ROOT}/src/daemon/wire.ts)`,
+        `  [${name}] ⚠️ UserPromptSubmit hook points to a different clone (re-point: ${WIRE_CLAUDE_CMD})`,
       );
       issues += 1;
     } else if (fix) {
@@ -231,52 +421,136 @@ export function runDoctor(fix = false): number {
     }
   }
 
-  // Other harnesses (advisory — read-injection is a progressive enhancement there, never a
-  // baseline, so nothing here increments `issues`; machines without the harness stay silent).
-  // Wiring recipes live in adapters/codex and adapters/opencode.
-  try {
-    const codexHome = process.env.CODEX_HOME?.trim() || join(homedir(), ".codex");
-    if (existsSync(codexHome)) {
-      const hooksJson = join(codexHome, "hooks.json");
-      let hj = "";
-      try {
-        hj = readFileSync(hooksJson, "utf-8");
-      } catch {
-        /* not wired */
-      }
-      if (hj.includes("sessionstart-inject.sh")) {
-        let trusted = false;
-        try {
-          trusted = readFileSync(join(codexHome, "config.toml"), "utf-8").includes("[hooks.state.");
-        } catch {
-          /* no config */
+  // Codex is a first-class setup target. The hook file, both lifecycle events, four skills,
+  // and the launcher must all point at this clone. Hook trust itself is owned by Codex's
+  // current-hash review UI; config records are only a conservative "review happened" signal.
+  if (harness === "all" || harness === "codex") {
+    try {
+      const codexHome = process.env.CODEX_HOME?.trim() || join(HOME, ".codex");
+      if (existsSync(codexHome)) {
+        const status = inspectCodexInstall(codexHome, HOME);
+        if (!status.hooksValid || !status.sessionHook || !status.turnHook) {
+          const missing = [
+            !status.sessionHook ? "SessionStart" : "",
+            !status.turnHook ? "UserPromptSubmit" : "",
+          ].filter(Boolean);
+          console.log(
+            `  [codex] ⚠️ hooks incomplete${missing.length ? ` (${missing.join(", ")})` : ""} — ` +
+              `run \`${WIRE_CODEX_CMD}\``,
+          );
+          issues += 1;
+        } else if (!status.reviewRecords) {
+          console.log("  [codex] ⚠️ hooks installed; one-time review required — start Codex and open `/hooks`");
+          actions += 1;
+        } else {
+          console.log("  [codex] ✅ hooks installed; review records present");
+          console.log("  [codex] ⚠️ confirm the current hook hashes in `/hooks` after install or re-pointing");
+          actions += 1;
         }
-        console.log(
-          trusted
-            ? "  [codex] ✅ read-injection hooks wired + trusted"
-            : "  [codex] ⚠️ hooks wired but NOT trusted — run interactive `codex` once and accept the hooks review (advisory)",
-        );
+
+      if (status.missingSkills.length) {
+          console.log(
+            `  [codex] ⚠️ missing skill(s): ${status.missingSkills.map((name) => `$${name}`).join(", ")}`,
+          );
+          issues += 1;
+        } else {
+          console.log(`  [codex] ✅ skills present: ${CODEX_SKILLS.map((name) => `$${name}`).join(", ")}`);
+        }
+        if (status.staleSkills.length) {
+          console.log(
+            `  [codex] ⚠️ stale/wrong-clone skill(s): ${status.staleSkills.map((name) => `$${name}`).join(", ")} — ` +
+              "re-run setup after moving or updating the clone",
+          );
+          issues += 1;
+        }
+        if (status.legacySkills.length) {
+          console.log(
+            `  [codex] ⚠️ legacy skill name(s): ${status.legacySkills.map((name) => `$${name}`).join(", ")} — ` +
+              "re-run setup to migrate to the shorter `$wiki-*` names",
+          );
+          issues += 1;
+        }
+
+        if (status.launcher === "managed") {
+          console.log(`  [codex] ✅ llmwiki command installed${status.launcherOnPath ? " + on PATH" : ""}`);
+          if (!status.launcherOnPath) {
+            const binDir = process.env.LLMWIKI_BIN_DIR?.trim() || join(HOME, ".local", "bin");
+            console.log(`  [codex] ⚠️ ${binDir} is not on PATH`);
+            console.log(`          export PATH=${shellQuote(binDir)}:"$PATH"`);
+            actions += 1;
+          }
+        } else {
+          console.log(
+            status.launcher === "foreign"
+              ? "  [codex] ⚠️ `llmwiki` launcher target is owned by another command"
+              : `  [codex] ⚠️ llmwiki command missing — run \`${WIRE_CODEX_CMD}\``,
+          );
+          issues += 1;
+        }
+      } else if (harness === "codex") {
+        console.log(`  [codex] ⚠️ CODEX_HOME not found: ${codexHome}`);
+        issues += 1;
+      }
+    } catch {
+      /* Codex inspection must never crash doctor; required missing surfaces are reported when inspectable. */
+    }
+  }
+
+  // OpenCode is a first-class target when selected, and is auto-inspected under `all`
+  // only when the CLI or an existing global config is present.
+  if (harness === "all" || harness === "opencode") {
+    const configRoot = process.env.XDG_CONFIG_HOME?.trim() || join(HOME, ".config");
+    const opencodeRoot = join(configRoot, "opencode");
+    const status = inspectOpenCodeInstall(configRoot, HOME);
+    if (harness === "opencode" || status.installed || existsSync(opencodeRoot)) {
+      if (!status.installed) {
+        console.log("  [opencode] ⚠️ OpenCode CLI not found on PATH");
+        issues += 1;
+      }
+      if (status.plugin === "current") {
+        console.log("  [opencode] ✅ global read-injection plugin points to this clone");
       } else {
-        console.log("  [codex] ℹ️ installed, hooks not wired — see adapters/codex (advisory)");
+        const reason = status.plugin === "foreign" ? "target is unrelated" : status.plugin;
+        console.log(`  [opencode] ⚠️ plugin ${reason} — run \`${WIRE_OPENCODE_CMD}\``);
+        issues += 1;
+      }
+      if (status.missingCommands.length) {
+        console.log(
+          `  [opencode] ⚠️ missing command(s): ${status.missingCommands.map((name) => `/${name}`).join(", ")}`,
+        );
+        issues += 1;
+      } else {
+        console.log(`  [opencode] ✅ commands present: ${OPENCODE_COMMANDS.map((name) => `/${name}`).join(", ")}`);
+      }
+      if (status.staleCommands.length) {
+        console.log(
+          `  [opencode] ⚠️ stale/wrong-clone command(s): ${status.staleCommands.map((name) => `/${name}`).join(", ")} — ` +
+            "re-run setup after moving or updating the clone",
+        );
+        issues += 1;
+      }
+      if (status.launcher === "managed") {
+        console.log(`  [opencode] ✅ llmwiki command installed${status.launcherOnPath ? " + on PATH" : ""}`);
+        if (!status.launcherOnPath) {
+          const binDir = process.env.LLMWIKI_BIN_DIR?.trim() || join(HOME, ".local", "bin");
+          console.log(`  [opencode] ⚠️ ${binDir} is not on PATH`);
+          console.log(`             export PATH=${shellQuote(binDir)}:"$PATH"`);
+          actions += 1;
+        }
+      } else {
+        console.log(
+          status.launcher === "foreign"
+            ? "  [opencode] ⚠️ `llmwiki` launcher target is owned by another command"
+            : `  [opencode] ⚠️ llmwiki command missing — run \`${WIRE_OPENCODE_CMD}\``,
+        );
+        issues += 1;
       }
     }
-    const ocPlugin = join(homedir(), ".config", "opencode", "plugin", "llmwiki.ts");
-    const ocData =
-      (process.env.XDG_DATA_HOME?.trim() || join(homedir(), ".local", "share")) + "/opencode";
-    if (existsSync(ocData)) {
-      console.log(
-        existsSync(ocPlugin)
-          ? "  [opencode] ✅ llmwiki plugin installed (global)"
-          : "  [opencode] ℹ️ installed, plugin not wired — see adapters/opencode (advisory)",
-      );
-    }
-  } catch {
-    /* advisory section must never break doctor */
   }
 
   console.log("=== summary ===");
   if (issues === 0) {
-    console.log("  ✅ healthy.");
+    console.log(actions ? `  ✅ installed; ${actions} user action(s) required above.` : "  ✅ healthy.");
     return 0;
   }
   console.log(`  ⚠️ ${issues} issue(s). See above.`);

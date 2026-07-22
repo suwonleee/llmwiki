@@ -57,7 +57,7 @@ function parseArgs(argv: string[]): Parsed {
     "--path", "--scope", "--limit", "--kind", "--session", "--offset", "--map",
     "--write-model", "--verify-model", "--source", "--dest", "--model", "--date", "--min-pages",
     "--repo", "--max-pages", "--prompt", "--corpus", "--label",
-    "--page", "--result", "--question",
+    "--page", "--result", "--question", "--harness",
   ]);
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i]!;
@@ -424,7 +424,11 @@ function cmdRegisterTranscript(p: Parsed) {
 }
 
 function cmdDoctor(p: Parsed) {
-  process.exit(runDoctor(!!p.flags["--fix"]));
+  const harness = ((p.flags["--harness"] as string) || "all") as "all" | "codex" | "claude" | "opencode";
+  if (!new Set(["all", "codex", "claude", "opencode"]).has(harness)) {
+    die("doctor --harness must be one of: all, codex, claude, opencode");
+  }
+  process.exit(runDoctor(!!p.flags["--fix"], harness));
 }
 
 // Cold-start read-injection blob for <repo> (default: cwd). Harness-neutral: the Claude
@@ -919,7 +923,15 @@ const HANDLERS: Record<string, (p: Parsed) => void | Promise<void>> = {
   "quiz-record": cmdQuizRecord,
 };
 
+function usage(): string {
+  return `usage: llmwiki <command> ...\ncommands: ${Object.keys(HANDLERS).join(", ")}\n`;
+}
+
 const parsed = parseArgs(process.argv.slice(2));
+if (parsed.cmd === "--help" || parsed.cmd === "-h") {
+  process.stdout.write(usage());
+  process.exit(0);
+}
 // Per-repo language: if the first positional is an existing path, resolve that workspace's
 // config (a named config may set lang); otherwise cwd. LLMWIKI_LANG env still wins.
 {
@@ -930,9 +942,6 @@ const parsed = parseArgs(process.argv.slice(2));
 }
 const handler = HANDLERS[parsed.cmd];
 if (!handler) {
-  die(
-    `usage: llmwiki <command> ...\n` +
-      `commands: ${Object.keys(HANDLERS).join(", ")}`,
-  );
+  die(usage().trimEnd());
 }
 await handler(parsed);

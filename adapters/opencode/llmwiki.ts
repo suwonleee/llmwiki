@@ -6,8 +6,8 @@
 //   per user turn → inject `llmwiki turn-context` pointer lines (silent on most turns)
 // Both go through `experimental.chat.system.transform` (appends system strings per request).
 //
-// Install: copy this file into your project's `.opencode/plugin/` (or global
-// `~/.config/opencode/plugin/`) and set LLMWIKI_ROOT below or via env.
+// Install: `./setup.sh --harness opencode` writes a global, clone-pinned copy to
+// `~/.config/opencode/plugin/` (or `$XDG_CONFIG_HOME/opencode/plugin/`).
 // VERIFIED on OpenCode 1.3.0 (2026-07-10): plugin loads from the global dir, chat.message
 // captures the prompt, system.transform fires at request build, and the engine's
 // turn-context session state appears in $TMPDIR — end-to-end live. LLMWIKI_ROOT must be
@@ -24,7 +24,10 @@ export const LlmwikiPlugin: Plugin = async ({ $, directory }) => {
   // session gate starves all requests after the first (and the first transform may even
   // be a hidden agent like `title`). Fetch once per process, then reuse the cached blob.
   let coldCache: string | null = null;
-  let lastPrompt = "";
+  // A global plugin process can serve more than one active session. Keep prompt state
+  // session-scoped so a hidden/title request or parallel chat never consumes another
+  // session's user text.
+  const lastPrompt = new Map<string, string>();
 
   const run = async (args: string[]): Promise<string> => {
     if (!ROOT) return "";
@@ -38,12 +41,13 @@ export const LlmwikiPlugin: Plugin = async ({ $, directory }) => {
 
   return {
     // capture the user's prompt text as it is sent (used by the per-turn query below)
-    "chat.message": async (_input, output) => {
+    "chat.message": async (input: any, output) => {
       try {
+        const sid = String(input?.sessionID ?? "");
         const texts = (output.parts ?? [])
           .map((p: any) => (p?.type === "text" ? String(p.text ?? "") : ""))
           .filter(Boolean);
-        if (texts.length) lastPrompt = texts.join("\n");
+        if (texts.length) lastPrompt.set(sid, texts.join("\n"));
       } catch {
         /* observation only */
       }
@@ -57,10 +61,11 @@ export const LlmwikiPlugin: Plugin = async ({ $, directory }) => {
         output.system.push(coldCache);
       }
       // (b) per-turn pointers — engine is precision-first and usually silent
-      if (lastPrompt) {
-        const turn = await run(["turn-context", directory, "--prompt", lastPrompt, "--session", sid]);
+      const prompt = lastPrompt.get(sid) ?? "";
+      if (prompt) {
+        const turn = await run(["turn-context", directory, "--prompt", prompt, "--session", sid]);
         if (turn) output.system.push(turn);
-        lastPrompt = "";
+        lastPrompt.delete(sid);
       }
     },
   };

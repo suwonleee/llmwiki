@@ -27,19 +27,22 @@ function discoverAll(): { d: DiscoveredSession; kind: string }[] {
   return out;
 }
 
-function process_(d: DiscoveredSession, kind: string): void {
-  if (d.lines < THRESHOLD_LINES) return;
+function process_(d: DiscoveredSession, kind: string): "enqueued" | "skipped_short" {
+  if (d.lines < THRESHOLD_LINES) return "skipped_short";
   capture.enqueue(d.path, d.sessionId, d.repo, d.lines, kind);
   log(`captured sess=${(d.sessionId || "?").slice(0, 8)} repo=${d.repo} lines=${d.lines} [${kind}]`);
+  return "enqueued";
 }
 
-function runOnce(): number {
-  let seen = 0;
+function runOnce(): { discovered: number; enqueued: number; skippedShort: number } {
+  const counts = { discovered: 0, enqueued: 0, skippedShort: 0 };
   for (const { d, kind } of discoverAll()) {
-    process_(d, kind);
-    seen += 1;
+    const outcome = process_(d, kind);
+    counts.discovered += 1;
+    if (outcome === "enqueued") counts.enqueued += 1;
+    else counts.skippedShort += 1;
   }
-  return seen;
+  return counts;
 }
 
 async function pollLoop(): Promise<void> {
@@ -100,8 +103,11 @@ async function watchLoop(): Promise<void> {
 
 async function main(): Promise<void> {
   if (process.argv.includes("--once")) {
-    const n = runOnce();
-    console.log(`swept ${n} transcript(s); queue stats: ${JSON.stringify(capture.stats())}`);
+    const counts = runOnce();
+    console.log(
+      `sweep: discovered=${counts.discovered} enqueued=${counts.enqueued} ` +
+        `skipped_short=${counts.skippedShort}; queue stats: ${JSON.stringify(capture.stats())}`,
+    );
     return;
   }
   log("llmwiki capture daemon starting");

@@ -1,4 +1,5 @@
 {
+  "description": "llmwiki cold-start and per-turn retrieval hooks",
   "hooks": {
     "SessionStart": [
       {
@@ -6,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash __LLMWIKI_ROOT__/hooks/sessionstart-inject.sh",
+            "command": "bash '__LLMWIKI_ROOT__/hooks/sessionstart-inject.sh'",
             "timeout": 20,
             "statusMessage": "llmwiki cold-start context"
           }
@@ -19,7 +20,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash __LLMWIKI_ROOT__/hooks/userpromptsubmit-inject.sh",
+            "command": "bash '__LLMWIKI_ROOT__/hooks/userpromptsubmit-inject.sh'",
             "timeout": 10,
             "statusMessage": "llmwiki turn-context"
           }

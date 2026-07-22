@@ -1,5 +1,13 @@
 # machine-local runtime state (rebuildable by the daemon scanning transcripts)
 .state/
+# credentials and private local configuration never belong in a distributable clone
+.env
+.env.*
+!.env.example
+auth.json
+# raw agent transcripts are immutable local evidence, not release artifacts
+*.jsonl
+*.jsonl.zst
 # derived index (rebuildable from markdown)
 .llmwiki/
 __pycache__/
