@@ -58,6 +58,12 @@ function shellQuote(value: string): string {
 const SESSIONSTART_CMD = `bash ${shellQuote(`${CLONE_ROOT}/hooks/sessionstart-inject.sh`)}`;
 // per-turn read-injection hook — same self-heal contract as SessionStart
 const TURNCTX_CMD = `bash ${shellQuote(`${CLONE_ROOT}/hooks/userpromptsubmit-inject.sh`)}`;
+// "wired to THIS clone" is matched on the bare script path, not the full command string:
+// wire.ts registers the hook unquoted while repairHook writes it shellQuoted, and both
+// spellings must pass — the path itself is the clone identity (the *_CMD forms above stay
+// for what repairHook writes).
+const SESSIONSTART_SCRIPT = `${CLONE_ROOT}/hooks/sessionstart-inject.sh`;
+const TURNCTX_SCRIPT = `${CLONE_ROOT}/hooks/userpromptsubmit-inject.sh`;
 const WIRE_CLAUDE_CMD = `bun ${shellQuote(join(CLONE_ROOT, "src", "daemon", "wire.ts"))}`;
 const WIRE_CODEX_CMD = `bun ${shellQuote(join(CLONE_ROOT, "src", "daemon", "wire-codex.ts"))}`;
 const WIRE_OPENCODE_CMD = `bun ${shellQuote(join(CLONE_ROOT, "src", "daemon", "wire-opencode.ts"))}`;
@@ -373,7 +379,7 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
     // key on the stable hook script filename, not the substring "llmwiki" — so the
     // check holds regardless of the clone's name/path (decision: path-agnostic setup).
     const has = txt.includes("sessionstart-inject.sh") && txt.includes("SessionStart");
-    if (has && txt.includes(SESSIONSTART_CMD)) {
+    if (has && txt.includes(SESSIONSTART_SCRIPT)) {
       console.log(`  [${name}] ✅ read-injection hook present`);
     } else if (has) {
       // script name found but pointing at a different clone — repairHook would only
@@ -391,7 +397,7 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
 
     // per-turn read-injection hook — same presence key + self-heal
     const hasTurn = txt.includes("userpromptsubmit-inject.sh") && txt.includes("UserPromptSubmit");
-    if (hasTurn && txt.includes(TURNCTX_CMD)) {
+    if (hasTurn && txt.includes(TURNCTX_SCRIPT)) {
       console.log(`  [${name}] ✅ turn-context hook present`);
     } else if (hasTurn) {
       console.log(
