@@ -77,6 +77,25 @@ describe("setup command contract", () => {
     expect(output).toContain("OpenCode");
     expect(output).toContain("/wiki-save");
     expect(existsSync(join(home, ".config", "opencode"))).toBe(false);
+    expect(existsSync(join(home, ".local", "bin", "llmwiki"))).toBe(false);
+    expect(existsSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"))).toBe(false);
+  });
+
+  test("OpenCode dry-run accepts help text emitted only on stderr", () => {
+    const opencodeStub = join(stubBin, "opencode");
+    writeFileSync(
+      opencodeStub,
+      "#!/bin/sh\nif [ \"${1:-}\" = run ] && [ \"${2:-}\" = --help ]; then printf '%s\\n' --command >&2; fi\nexit 0\n",
+    );
+    chmodSync(opencodeStub, 0o755);
+
+    const result = run(["--dry-run", "--harness", "opencode"]);
+
+    expect(result.exitCode).toBe(0);
+    const output = new TextDecoder().decode(result.stdout);
+    expect(output).toContain("OpenCode");
+    expect(output).toContain("/wiki-save");
+    expect(existsSync(join(home, ".config", "opencode"))).toBe(false);
     expect(existsSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"))).toBe(false);
   });
 
