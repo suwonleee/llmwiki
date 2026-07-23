@@ -100,7 +100,7 @@ if [ "$USE_OPENCODE" -eq 1 ]; then
         XDG_CONFIG_HOME="$OPENCODE_CHECK_DIR/config" \
         XDG_DATA_HOME="$OPENCODE_CHECK_DIR/data" \
         XDG_CACHE_HOME="$OPENCODE_CHECK_DIR/cache" \
-        opencode run --help 2>/dev/null || true)"
+        opencode run --help 2>&1 || true)"  # newer OpenCode prints --help to stderr — capture both
     find "$OPENCODE_CHECK_DIR" -depth -delete
     if ! printf '%s\n' "$OPENCODE_RUN_HELP" | grep -q -- '--command'; then
         echo "🔴 this OpenCode installation does not support global custom commands." >&2
