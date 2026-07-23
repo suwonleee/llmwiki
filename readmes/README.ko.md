@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.png">
-    <img src="assets/banner.png" alt="Quiz_wiki" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="../assets/banner-dark.png">
+    <img src="../assets/banner.png" alt="Quiz_wiki" width="100%">
   </picture>
 </p>
 
@@ -9,9 +9,52 @@
 
 *다른 이름: quiz wiki · llmwiki quiz · Quiz_wiki — 내가 내린 결정을 다시 물어보는 간격 반복(spaced repetition) 레이어.*
 
-[English](README.md) · **한국어** · [日本語](README.ja.md) · [中文](README.zh.md)
+[English](../README.md) · **한국어** · [日本語](README.ja.md) · [中文](README.zh.md)
 
 어떤 프로젝트든, 어떤 터미널(기본/tmux/iTerm2)·코딩 에이전트(Claude Code · Codex · OpenCode)를 쓰든, 그 프로젝트에 특화된 LLM 지식이 날아가지 않고 **복리로 쌓입니다**.
+
+## 사용자가 할 일은 이것뿐
+
+Git, [Bun](https://bun.sh), 코딩 에이전트 하나가 이미 설치되어 있다면 나머지는 clone 한 번과 프롬프트 한 번입니다.
+
+```bash
+cd ~
+git clone https://github.com/suwonleee/llmwiki.git
+cd ~/llmwiki
+```
+
+이 폴더에서 에이전트 **하나만** 실행합니다.
+
+```bash
+claude
+# 또는: codex
+# 또는: opencode
+```
+
+에이전트 입력창에 그대로 붙여 넣습니다.
+
+```text
+setup_text.md를 읽고, 지금 사용 중인 코딩 에이전트와 이 머신에 llmwiki를 설치해줘. 파일의 지시를 정확히 따르고 상태 점검까지 실행한 뒤, 내가 직접 해야 할 단계가 남았다면 알려줘.
+```
+
+설치가 끝나면 원하는 프로젝트로 이동해 평소처럼 작업합니다. 의미 있는 세션의 마지막에는 Claude Code·OpenCode에서 `/wiki-save`, Codex에서 `$wiki-save`를 입력합니다. 백로그와 깊은 정리는 주기적으로 `/wiki-deep`(Codex: `$wiki-deep`)을 실행합니다.
+
+위키가 제대로 쌓이는지 확인하려면 해당 프로젝트의 에이전트 입력창에 붙여 넣습니다.
+
+```text
+이 프로젝트의 docs/wiki에 문서가 제대로 쌓이는지 확인해줘. 알맞은 llmwiki 상태·진행·lint 점검을 실행하고, 정상인 부분과 조치가 필요한 부분을 요약해줘.
+```
+
+위키 구조나 언어를 바꾸고 싶다면 엔진 코드는 그대로 두고 설정 파일 하나만 편집합니다.
+
+```bash
+cd ~/llmwiki
+cp llmwiki.config.example.toml llmwiki.config.toml
+```
+
+원하는 방향을 에이전트에게 설명하고 `llmwiki.config.toml`만 바꾸도록 요청합니다. 기존 문서 이관은 사용자가 명시적으로 승인하기 전에는 실행되지 않습니다.
+
+MCP 서버·Docker·외부 데이터베이스·벡터 DB·클라우드 서비스는 필요 없습니다. llmwiki는 로컬의 Bun·훅·캡처 데몬·SQLite와 git markdown을 사용합니다. 에이전트가 따르는 설치 계약은 [`setup_text.md`](../setup_text.md)에 있습니다.
 
 - **무엇인가**
     - 에이전트 환경을 위한 LLM 유지 프로젝트 위키 — 소스는 작업 transcript, 저장은 순수 git markdown
@@ -206,7 +249,7 @@ package.json·tsconfig.json   Bun 메타(typecheck용; 런타임은 .ts 직접 �
 | **Bun ≥ 1.1** | ✔ 필수 | 단일 바이너리 (`curl -fsSL https://bun.sh/install \| bash`). `.ts` 를 그대로 실행, `bun:sqlite` 가 FTS5 까지 번들 — 빌드·`node_modules` 0. 엔진 실행·`bun test` 는 무설치로 동작; `bun run typecheck`(tsc) 만 `bun install` 1회 필요 (dev 전용). |
 | **Codex · OpenCode CLI** | 각 빠른 시작에만 | `codex` / `opencode` 가 `PATH`에 있어야 함. Codex는 추가로 lifecycle hook 지원 + stable `hooks` 기능 활성 필요. setup은 훅·스킬·서비스 변경 전에 지원 여부와 기존 기능 설정을 확인. |
 | **LLM CLI** | 생성 패스에만 | 캡처·읽기 주입·`/wiki-*`·`ingest`(capture-only, 대기 목록만 기록)는 없어도 동작. `autoupdate·review` 와 `ingest` 의 통합은 LLM CLI 를 호출 — 기본 `claude -p`([설치](https://docs.claude.com/en/docs/claude-code/setup)), 또는 `LLMWIKI_LLM_CMD` 로 다른 CLI/provider. |
-| **OS** | macOS / Linux | macOS=launchd, Linux=systemd(`--user`), systemd 없으면 cron+nohup 폴백. 데몬 세부는 [`daemon/README.md`](daemon/README.md) |
+| **OS** | macOS / Linux | macOS=launchd, Linux=systemd(`--user`), systemd 없으면 cron+nohup 폴백. 데몬 세부는 [`daemon/README.md`](../daemon/README.md) |
 
 ### 하네스 · OS 노트 (Claude Code / Codex / OpenCode / Windows)
 
@@ -350,4 +393,4 @@ guide = "분기 목표. 변경은 사람이 확정."
 
 ## 라이선스
 
-[Apache License 2.0](LICENSE) © 2026 suwonleee.
+[Apache License 2.0](../LICENSE) © 2026 suwonleee.

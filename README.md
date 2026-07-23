@@ -9,7 +9,7 @@
 
 *Also known as: quiz wiki · llmwiki quiz · Quiz_wiki — the spaced-repetition layer that quizzes you on your own past decisions.*
 
-**English** · [한국어](docs/readmes/README.ko.md) · [日本語](docs/readmes/README.ja.md) · [中文](docs/readmes/README.zh.md)
+**English** · [한국어](readmes/README.ko.md) · [日本語](readmes/README.ja.md) · [中文](readmes/README.zh.md)
 
 Whatever project, terminal (default/tmux/iTerm2), or coding agent (Claude Code · Codex · OpenCode) you work in, project-specific LLM knowledge **compounds** instead of evaporating.
 

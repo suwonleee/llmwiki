@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.png">
-    <img src="assets/banner.png" alt="Quiz_wiki" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="../assets/banner-dark.png">
+    <img src="../assets/banner.png" alt="Quiz_wiki" width="100%">
   </picture>
 </p>
 
@@ -9,9 +9,52 @@
 
 *別名: quiz wiki · llmwiki quiz · Quiz_wiki — 自分が下した決定を問い直す間隔反復（spaced repetition）レイヤー。*
 
-[English](README.md) · [한국어](README.ko.md) · **日本語** · [中文](README.zh.md)
+[English](../README.md) · [한국어](README.ko.md) · **日本語** · [中文](README.zh.md)
 
 どのプロジェクトでも、どのターミナル（標準/tmux/iTerm2）・コーディングエージェント（Claude Code · Codex · OpenCode）でも、そのプロジェクト固有のLLM知識が消えずに**複利で積み上がります**。
+
+## やることは、これだけ
+
+Git、[Bun](https://bun.sh)、いずれかのコーディングエージェントが入っていれば、あとは一度のcloneと一つのプロンプトだけです。
+
+```bash
+cd ~
+git clone https://github.com/suwonleee/llmwiki.git
+cd ~/llmwiki
+```
+
+このフォルダからエージェントを**一つだけ**起動します。
+
+```bash
+claude
+# または: codex
+# または: opencode
+```
+
+エージェントの入力欄に、そのまま貼り付けます。
+
+```text
+setup_text.mdを読み、現在使っているコーディングエージェントとこのマシン向けにllmwikiをインストールしてください。ファイルの指示どおりに進め、ヘルスチェックまで実行し、私が手動で行う手順が残っていれば教えてください。
+```
+
+インストール後は、好きなプロジェクトへ移動して普段どおり作業します。意味のあるセッションの最後に、Claude Code・OpenCodeでは `/wiki-save`、Codexでは `$wiki-save` を実行します。バックログと深いメンテナンスには、定期的に `/wiki-deep`（Codex: `$wiki-deep`）を使います。
+
+wikiが正しく積み上がっているか確認するときは、そのプロジェクトのエージェントに貼り付けます。
+
+```text
+このプロジェクトのdocs/wikiに文書が正しく蓄積されているか確認してください。適切なllmwikiのヘルス・状態・lintチェックを実行し、正常な点と対応が必要な点を要約してください。
+```
+
+wikiの構成や言語を変えたい場合は、エンジンコードを触らず、設定ファイル一つだけを編集します。
+
+```bash
+cd ~/llmwiki
+cp llmwiki.config.example.toml llmwiki.config.toml
+```
+
+希望する方向をエージェントに伝え、`llmwiki.config.toml`だけを変更するよう依頼します。既存ページの移行は、ユーザーが明示的に承認するまで実行されません。
+
+MCPサーバー、Docker、外部データベース、ベクトルDB、クラウドサービスは不要です。llmwikiはローカルのBun・フック・キャプチャデーモン・SQLiteとgit markdownを使います。エージェント向けのインストール契約は [`setup_text.md`](../setup_text.md) にあります。
 
 - **これは何か**
     - エージェント環境のためのLLM維持型プロジェクトwiki — ソースは作業トランスクリプト、保存は素のgit markdown
@@ -206,7 +249,7 @@ package.json·tsconfig.json   Bunメタデータ（typecheck用; ランタイム
 | **Bun ≥ 1.1** | ✔ 必須 | 単一バイナリ（`curl -fsSL https://bun.sh/install \| bash`）。`.ts` を直接実行、`bun:sqlite` がFTS5まで同梱 — ビルド·`node_modules` 0。エンジン実行·`bun test` はインストール不要; `bun run typecheck`（tsc）のみ一度 `bun install` が必要（dev専用）。 |
 | **Codex · OpenCode CLI** | 各クイックスタートのみ | `codex` / `opencode` が `PATH` にあること。Codexは加えてlifecycle hook対応 + stable `hooks` 機能の有効化が必要。setupはフック·スキル·サービスを変更する前に、対応状況と既存の機能設定を確認。 |
 | **LLM CLI** | 生成パスのみ | キャプチャ·読み込み注入·`/wiki-*`·`ingest`（capture-only、保留updateをキュー）は無くても動作。`autoupdate·review` と `ingest` の統合はLLM CLIを呼ぶ — 既定 `claude -p`（[インストール](https://docs.claude.com/en/docs/claude-code/setup)）、または `LLMWIKI_LLM_CMD` で別のCLI/プロバイダへ。 |
-| **OS** | macOS / Linux | macOS=launchd、Linux=systemd（`--user`）、systemdが無ければcron+nohupへフォールバック。デーモン詳細は [`daemon/README.md`](daemon/README.md) |
+| **OS** | macOS / Linux | macOS=launchd、Linux=systemd（`--user`）、systemdが無ければcron+nohupへフォールバック。デーモン詳細は [`daemon/README.md`](../daemon/README.md) |
 
 ### ハーネス · OSノート（Claude Code / Codex / OpenCode / Windows）
 
@@ -350,4 +393,4 @@ guide = "四半期目標。変更は人間が確定。"
 
 ## ライセンス
 
-[Apache License 2.0](LICENSE) © 2026 suwonleee.
+[Apache License 2.0](../LICENSE) © 2026 suwonleee.

@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.png">
-    <img src="assets/banner.png" alt="Quiz_wiki" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="../assets/banner-dark.png">
+    <img src="../assets/banner.png" alt="Quiz_wiki" width="100%">
   </picture>
 </p>
 
@@ -9,9 +9,52 @@
 
 *别名: quiz wiki · llmwiki quiz · Quiz_wiki — 用间隔重复（spaced repetition）反问你自己过往决定的记忆层。*
 
-[English](README.md) · [한국어](README.ko.md) · [日本語](README.ja.md) · **中文**
+[English](../README.md) · [한국어](README.ko.md) · [日本語](README.ja.md) · **中文**
 
 无论什么项目、什么终端（默认/tmux/iTerm2）、哪个编码智能体（Claude Code · Codex · OpenCode），项目专属的 LLM 知识都不会蒸发，而是**以复利累积**。
+
+## 你需要做的，只有这些
+
+如果已经安装 Git、[Bun](https://bun.sh) 和任意一个编码智能体，剩下的只有一次 clone 和一段提示词。
+
+```bash
+cd ~
+git clone https://github.com/suwonleee/llmwiki.git
+cd ~/llmwiki
+```
+
+在这个目录中只启动**一个**智能体。
+
+```bash
+claude
+# 或: codex
+# 或: opencode
+```
+
+把下面这段原样粘贴到智能体输入框中。
+
+```text
+请阅读setup_text.md，为这台机器和我当前使用的编码智能体安装llmwiki。严格按照文件执行，完成健康检查，并告诉我是否还有必须手动完成的步骤。
+```
+
+安装完成后，进入任何项目，照常工作。一次有意义的会话结束时，在Claude Code或OpenCode中输入 `/wiki-save`，在Codex中输入 `$wiki-save`。定期使用 `/wiki-deep`（Codex: `$wiki-deep`）处理积压并做深度维护。
+
+要检查wiki是否正在正确积累，请在目标项目的智能体会话中粘贴：
+
+```text
+请检查这个项目的docs/wiki是否正在正确积累文档。运行合适的llmwiki健康、状态和lint检查，然后概括哪些正常、哪些需要处理。
+```
+
+如果想调整wiki结构或语言，请保持引擎代码不变，只编辑一个配置文件。
+
+```bash
+cd ~/llmwiki
+cp llmwiki.config.example.toml llmwiki.config.toml
+```
+
+把想要的方向告诉智能体，并要求它只修改 `llmwiki.config.toml`。未经用户明确批准，不会迁移已有页面。
+
+不需要MCP服务器、Docker、外部数据库、向量数据库或云服务。llmwiki在本地使用Bun、钩子、捕获守护进程、SQLite和git markdown。供智能体遵循的安装契约见 [`setup_text.md`](../setup_text.md)。
 
 - **它是什么**
     - 面向智能体环境、由 LLM 维护的项目 wiki — 素材是你的工作 transcript（会话转录），存储是纯 git markdown
@@ -206,7 +249,7 @@ package.json·tsconfig.json   Bun 元数据（供 typecheck; 运行时直接执�
 | **Bun ≥ 1.1** | ✔ 必需 | 单一二进制（`curl -fsSL https://bun.sh/install \| bash`）。直接运行 `.ts`，`bun:sqlite` 连 FTS5 一并打包 — 零构建·`node_modules`。运行引擎和 `bun test` 无需安装; 仅 `bun run typecheck`（tsc）需要一次 `bun install`（仅开发用）。 |
 | **Codex · OpenCode CLI** | 仅各自的快速开始 | `codex` / `opencode` 需在 `PATH` 上。Codex 另需支持 lifecycle hook 且启用 stable `hooks` 功能。setup 在改动钩子·技能·服务之前，会先确认支持情况与既有功能设置。 |
 | **LLM CLI** | 仅生成通道 | 捕获·读取注入·`/wiki-*`·`ingest`（capture-only，只排队待更新）没有它也能工作。`autoupdate·review` 和 `ingest` 的整合会调用 LLM CLI — 默认 `claude -p`（[安装](https://docs.claude.com/en/docs/claude-code/setup)），或用 `LLMWIKI_LLM_CMD` 指向别的 CLI/供应商。 |
-| **OS** | macOS / Linux | macOS=launchd，Linux=systemd（`--user`），无 systemd 则回退 cron+nohup。守护进程细节见 [`daemon/README.md`](daemon/README.md) |
+| **OS** | macOS / Linux | macOS=launchd，Linux=systemd（`--user`），无 systemd 则回退 cron+nohup。守护进程细节见 [`daemon/README.md`](../daemon/README.md) |
 
 ### Harness · OS 备注（Claude Code / Codex / OpenCode / Windows）
 
@@ -350,4 +393,4 @@ guide = "季度目标。变更须人工确认。"
 
 ## 许可证
 
-[Apache License 2.0](LICENSE) © 2026 suwonleee.
+[Apache License 2.0](../LICENSE) © 2026 suwonleee.
