@@ -9,9 +9,52 @@
 
 *Also known as: quiz wiki · llmwiki quiz · Quiz_wiki — the spaced-repetition layer that quizzes you on your own past decisions.*
 
-**English** · [한국어](README.ko.md) · [日本語](README.ja.md) · [中文](README.zh.md)
+**English** · [한국어](docs/readmes/README.ko.md) · [日本語](docs/readmes/README.ja.md) · [中文](docs/readmes/README.zh.md)
 
 Whatever project, terminal (default/tmux/iTerm2), or coding agent (Claude Code · Codex · OpenCode) you work in, project-specific LLM knowledge **compounds** instead of evaporating.
+
+## Everything you need to do
+
+Already have Git, [Bun](https://bun.sh), and one coding agent installed? The rest is one clone and one prompt.
+
+```bash
+cd ~
+git clone https://github.com/suwonleee/llmwiki.git
+cd ~/llmwiki
+```
+
+Start **one** agent from this folder:
+
+```bash
+claude
+# or: codex
+# or: opencode
+```
+
+Paste this into the agent:
+
+```text
+Read setup_text.md and install llmwiki for this machine and the coding agent I am currently using. Follow the file exactly, run the health checks, and tell me about any manual step that remains.
+```
+
+Then move to any project and work as usual. At the end of a meaningful session, use `/wiki-save` in Claude Code or OpenCode, and `$wiki-save` in Codex. Run `/wiki-deep` (Codex: `$wiki-deep`) periodically for the backlog and deeper maintenance.
+
+To check that the wiki is compounding, paste this in that project's agent session:
+
+```text
+Check whether this project's docs/wiki is accumulating correctly. Run the appropriate llmwiki health, status, and lint checks, then summarize what is healthy and what needs attention.
+```
+
+Want a different wiki structure or language? Keep the engine code unchanged and edit one config:
+
+```bash
+cd ~/llmwiki
+cp llmwiki.config.example.toml llmwiki.config.toml
+```
+
+Describe the direction you want to your agent and ask it to change only `llmwiki.config.toml`. Existing pages are never migrated without your explicit approval.
+
+No MCP server, Docker, external database, vector database, or cloud service is required. llmwiki uses Bun, local hooks, a local capture daemon, local SQLite, and git markdown. See [`setup_text.md`](setup_text.md) for the installation contract the agent follows.
 
 - **What it is**
     - an LLM-maintained project wiki for agentic environments — sourced from your work transcripts, stored as plain git markdown
