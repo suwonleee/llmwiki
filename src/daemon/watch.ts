@@ -34,12 +34,36 @@ function process_(d: DiscoveredSession, kind: string): "enqueued" | "skipped_sho
   return "enqueued";
 }
 
-function runOnce(): { discovered: number; enqueued: number; skippedShort: number } {
-  const counts = { discovered: 0, enqueued: 0, skippedShort: 0 };
+// The daemon IS the capture loop, so one session must never take it down: a locked database, a
+// file that vanished mid-sweep, an unwritable state dir. A throw here used to kill the process,
+// and capture then stops SILENTLY — transcripts keep rotating per the harness's own retention, so
+// the sessions are simply gone while the wiki merely looks quiet. Log it, count it, carry on.
+function processGuarded(d: DiscoveredSession, kind: string): "enqueued" | "skipped_short" | "failed" {
+  try {
+    return process_(d, kind);
+  } catch (e) {
+    log(`capture FAILED sess=${(d.sessionId || "?").slice(0, 8)} repo=${d.repo} [${kind}]: ${e}`);
+    return "failed";
+  }
+}
+
+// The sweep report has to survive an unusable queue too, or the reporting itself becomes the
+// crash that hides why nothing was captured.
+function queueStats(): string {
+  try {
+    return JSON.stringify(capture.stats());
+  } catch (e) {
+    return `unavailable (${e})`;
+  }
+}
+
+function runOnce(): { discovered: number; enqueued: number; skippedShort: number; failed: number } {
+  const counts = { discovered: 0, enqueued: 0, skippedShort: 0, failed: 0 };
   for (const { d, kind } of discoverAll()) {
-    const outcome = process_(d, kind);
+    const outcome = processGuarded(d, kind);
     counts.discovered += 1;
     if (outcome === "enqueued") counts.enqueued += 1;
+    else if (outcome === "failed") counts.failed += 1;
     else counts.skippedShort += 1;
   }
   return counts;
@@ -49,17 +73,23 @@ async function pollLoop(): Promise<void> {
   const last: Record<string, number> = {};
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    for (const { d, kind } of discoverAll()) {
-      let size: number;
-      try {
-        size = statSync(d.path).size;
-      } catch {
-        continue;
+    // Discovery walks other tools' directories, so it can throw on a permission or race too —
+    // a failed sweep costs one poll interval, never the loop.
+    try {
+      for (const { d, kind } of discoverAll()) {
+        let size: number;
+        try {
+          size = statSync(d.path).size;
+        } catch {
+          continue;
+        }
+        if (last[d.path] !== size) {
+          last[d.path] = size;
+          processGuarded(d, kind);
+        }
       }
-      if (last[d.path] !== size) {
-        last[d.path] = size;
-        process_(d, kind);
-      }
+    } catch (e) {
+      log(`sweep FAILED (retrying next poll): ${e}`);
     }
     await Bun.sleep(POLL_SECONDS * 1000);
   }
@@ -106,7 +136,7 @@ async function main(): Promise<void> {
     const counts = runOnce();
     console.log(
       `sweep: discovered=${counts.discovered} enqueued=${counts.enqueued} ` +
-        `skipped_short=${counts.skippedShort}; queue stats: ${JSON.stringify(capture.stats())}`,
+        `skipped_short=${counts.skippedShort} failed=${counts.failed}; queue stats: ${queueStats()}`,
     );
     return;
   }
