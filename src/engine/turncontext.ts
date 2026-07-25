@@ -18,7 +18,7 @@
 // Works with the trigram FTS (schema.sql): term extraction is language-neutral — ASCII
 // identifier-ish tokens (any user language keeps code terms in ASCII) + CJK runs ≥3 chars
 // (the FTS5 trigram floor; shorter runs cannot match and are dropped).
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, constants as fsConstants, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -89,15 +89,36 @@ function accumEnabled(): boolean {
   return (process.env.LLMWIKI_TURNCTX_ACCUM ?? "").trim().toLowerCase() !== "off";
 }
 
-function dedupPath(repo: string, sessionId: string): string {
+/** Where this (session, repo) pair's disposable state lives. Exported for the boundary test. */
+export function _turnStatePath(repo: string, sessionId: string): string {
   const h = createHash("sha1").update(`${sessionId}\n${repo}`).digest("hex").slice(0, 16);
   return join(tmpdir(), `llmwiki-turnctx-${h}.json`);
 }
 
+// The state path is derivable (hash of session id + repo) and lives in a temp dir another local
+// user may share, so both ends refuse to traverse a symlink planted there: O_NOFOLLOW turns that
+// into ELOOP, which the callers below treat like any other unreadable/unwritable state — the turn
+// keeps working, it just doesn't remember. Mode 0600: the file lists this repo's page paths.
+const NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
+const STATE_MODE = 0o600;
+
+function readStateFile(path: string): string | null {
+  let fd: number | null = null;
+  try {
+    fd = openSync(path, fsConstants.O_RDONLY | NOFOLLOW);
+    return readFileSync(fd, "utf-8");
+  } catch {
+    return null; // absent, unreadable, or a symlink → start fresh
+  } finally {
+    if (fd !== null) closeSync(fd);
+  }
+}
+
 function readState(p: string): TurnState {
   try {
-    if (existsSync(p)) {
-      const raw = JSON.parse(readFileSync(p, "utf-8"));
+    const text = readStateFile(p);
+    if (text !== null) {
+      const raw = JSON.parse(text);
       // legacy format: a bare array of seen paths (pre-P1 state files)
       if (Array.isArray(raw)) return { seen: new Set(raw), terms: {} };
       return {
@@ -112,11 +133,15 @@ function readState(p: string): TurnState {
 }
 
 function writeState(p: string, st: TurnState): void {
+  let fd: number | null = null;
   try {
     mkdirSync(join(p, ".."), { recursive: true });
-    writeFileSync(p, JSON.stringify({ seen: [...st.seen], terms: st.terms }), "utf-8");
+    fd = openSync(p, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | NOFOLLOW, STATE_MODE);
+    writeFileSync(fd, JSON.stringify({ seen: [...st.seen], terms: st.terms }), "utf-8");
   } catch {
     /* best-effort */
+  } finally {
+    if (fd !== null) closeSync(fd);
   }
 }
 
@@ -169,7 +194,7 @@ export function buildTurnContext(repo: string, prompt: string, sessionId = ""): 
 
     // HQE-lite (P1): fold prior-turn terms into this turn's query. Persist the merged
     // weights immediately so even a silent turn feeds the next one.
-    const sp = sessionId ? dedupPath(w.root, sessionId) : "";
+    const sp = sessionId ? _turnStatePath(w.root, sessionId) : "";
     const state = sp ? readState(sp) : { seen: new Set<string>(), terms: {} as Record<string, number> };
     let carried: string[] = [];
     if (sp && accumEnabled()) {

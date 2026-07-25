@@ -23,7 +23,7 @@
 // turn-context silence — structural, language-neutral; no English phrase lists) plus
 // structural health (lint error/warn → lintHealth, dangling links → linkIntegrity).
 // Judgement gates run regression-block first, then adopt.
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { WikiIndex } from "./db.ts";
@@ -198,7 +198,8 @@ export async function runArm(opts: ArmOpts): Promise<{ result: ArmResult; worksp
     .map((f) => join(corpus, f));
   if (!files.length) throw new Error(`corpus dir is empty: ${corpus}`);
 
-  const ws = join(tmpdir(), `llmwiki-compare-${opts.label}-${Date.now()}`);
+  // mkdtemp, not a derivable name: the arm workspace lives in a possibly shared temp dir.
+  const ws = mkdtempSync(join(tmpdir(), `llmwiki-compare-${opts.label}-`));
   mkdirSync(join(ws, "docs", "wiki"), { recursive: true });
   // golden set travels with the arm so scoreArm can bench it
   if (opts.templateRepo) {

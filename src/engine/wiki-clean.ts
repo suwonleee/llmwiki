@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { getConfig } from "./config.ts";
 import { WikiIndex } from "./db.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
@@ -215,8 +215,22 @@ export function commitWikiClean(root: string, options: { readonly today?: string
   return { ...plan, reviewPath };
 }
 
+// The review file is CONSUMED — read, applied, then unlinked — so it has to belong to the
+// repository being cleaned. A path outside it (a mistyped `--review`, or a review handed over
+// from elsewhere) is refused before anything is written or deleted. Candidate paths inside the
+// review are separately confined to `docs/wiki/` with no `..` segment (see parseReview).
+function reviewPathInside(root: string, reviewPath: string): string {
+  const repoRoot = resolve(root);
+  const resolved = resolve(reviewPath);
+  if (resolved !== repoRoot && !resolved.startsWith(repoRoot + sep)) {
+    throw new WikiCleanReviewError("malformed", `cleanup review must live inside the repository: ${reviewPath}`);
+  }
+  return resolved;
+}
+
 export function applyWikiCleanReview(root: string, options: { readonly reviewPath: string }): WikiCleanApplyResult {
-  const content = readFileSync(options.reviewPath, "utf8");
+  const reviewPath = reviewPathInside(root, options.reviewPath);
+  const content = readFileSync(reviewPath, "utf8");
   const accepted = parseReview(content);
   for (const candidate of accepted) {
     const path = join(root, ...candidate.path.split("/"));
@@ -229,6 +243,6 @@ export function applyWikiCleanReview(root: string, options: { readonly reviewPat
     writeAtomically(path, tieredContent(readFileSync(path, "utf8"), candidate.action));
   }
   new WikiIndex(root).indexAll();
-  unlinkSync(options.reviewPath);
+  unlinkSync(reviewPath);
   return { applied: accepted.map((candidate) => candidate.id) };
 }
