@@ -19,6 +19,7 @@ import { basename, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { CLONE_ROOT } from "./paths.ts";
 import { resolveModels } from "./models.ts";
+import { detectSessionLang } from "./session-lang.ts";
 
 export interface CategoryDef {
   dir: string; // folder under docs/wiki (ordered = numbered = reading order)
@@ -351,7 +352,12 @@ function normalizeLang(raw: string): WikiLang | null {
   return (WIKI_LANGS as readonly string[]).includes(primary) ? (primary as WikiLang) : null;
 }
 
-/** The wiki's language: LLMWIKI_LANG (session override) → config `[wiki] lang` → English. */
+/**
+ * The wiki's language without looking at a repository: LLMWIKI_LANG → config → English.
+ *
+ * Prefer `resolveWikiLang(root)` wherever a repository is in hand — that one can see the session
+ * language. This exists for the pure renderers, whose default argument must not touch the disk.
+ */
 export function resolveLang(cfg: { readonly lang?: string } = getConfig()): WikiLang {
   const env = normalizeLang(process.env.LLMWIKI_LANG ?? "");
   if (env) return env;
@@ -359,9 +365,42 @@ export function resolveLang(cfg: { readonly lang?: string } = getConfig()): Wiki
   return normalizeLang(cfg.lang ?? "") ?? "en";
 }
 
+/** Is `lang` an explicit choice, or a request to follow the session ("", "auto")? */
+function explicitLang(raw: string | undefined): WikiLang | null {
+  const value = (raw ?? "").trim().toLowerCase();
+  if (!value || value === "auto") return null;
+  return normalizeLang(value);
+}
+
+/**
+ * The language of the wiki at `root`, defaulting to THE SESSION'S OWN LANGUAGE.
+ *
+ * Order: LLMWIKI_LANG → an explicit `[wiki] lang` → detected from this session → English.
+ *
+ * "Detected from this session" is deliberately two-tiered, because the engine is a CLI and cannot
+ * read the conversation: first the wiki's own content pages (what previous sessions produced —
+ * which also makes the answer sticky, so a wiki never flips language between runs), then the
+ * human's own utterances in this repo's captured transcripts, which is all a brand-new wiki has.
+ * Engine-authored files never vote: an English skeleton seeded on day one must not lock a Korean
+ * team into English forever.
+ */
+export function resolveWikiLang(root: string, cfg: { readonly lang?: string } = getConfig(root)): WikiLang {
+  const env = normalizeLang(process.env.LLMWIKI_LANG ?? "");
+  if (env) return env;
+  if ((process.env.LLMWIKI_LANG ?? "").trim()) return "en";
+  const explicit = explicitLang(cfg.lang);
+  if (explicit) return explicit;
+  return detectSessionLang(root, getConfig(root)) ?? "en";
+}
+
 /** Pick this wiki's entry from a catalog, falling back to English. */
 export function pickLang<T>(catalog: LangCatalog<T>, cfg: { readonly lang?: string } = getConfig()): T {
   return catalog[resolveLang(cfg)] ?? catalog.en;
+}
+
+/** Pick from a catalog for an already-resolved language. */
+export function pickLangValue<T>(catalog: LangCatalog<T>, lang: WikiLang): T {
+  return catalog[lang] ?? catalog.en;
 }
 
 /**
@@ -379,7 +418,7 @@ export function effectiveKo(cfg: WikiConfig = getConfig()): boolean {
  * `effectiveKo(cfg)`; this exists so "resolve that repo's config, then ask" is spelled once.
  */
 export function isRepoKorean(root: string): boolean {
-  return effectiveKo(getConfig(root));
+  return resolveWikiLang(root) === "ko";
 }
 
 // ---- prompt / rules rendering (P2) --------------------------------------------------------

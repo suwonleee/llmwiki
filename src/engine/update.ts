@@ -5,7 +5,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import * as capture from "./capture.ts";
-import { getConfig, pickLang, logDirs, type WikiConfig } from "./config.ts";
+import { getConfig, logDirs, pickLangValue, resolveWikiLang, type WikiConfig } from "./config.ts";
 import { render } from "./extract.ts";
 import { sourceForKind, sourceForPath } from "./source.ts";
 import { WikiIndex } from "./db.ts";
@@ -84,13 +84,14 @@ export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(w
   mkdirSync(join(wiki, cfg.quizDir), { recursive: true });
   const name = basename(root);
   const today = new Date().toISOString().slice(0, 10);
+  const lang = resolveWikiLang(root, cfg); // unset config → this session's own language
   const overview = join(wiki, cfg.files.overview);
   if (!repoFileExists(overview) && !repoFileExists(join(wiki, cfg.files.l0))) {
     writeRepoFile(
       overview,
       `---\ntitle: Overview — ${name}\ndescription: Front page / cold-start context for ${name}\n` +
         `date: ${today}\ntags: [overview, meta]\n---\n\n` +
-        pickLang<(project: string) => string>(
+        pickLangValue<(project: string) => string>(
           {
             en: (project) =>
               `This wiki is the living knowledge of the **${project}** project (it auto-accumulates as you work).\n\n` +
@@ -105,7 +106,7 @@ export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(w
               `本 wiki 是 **${project}** 项目的活知识（随着工作自动积累）。\n\n` +
               "## 方向（由人确认）\n\n## Key Findings\n\n尚未归纳任何来源。\n\n## Recent Updates\n\n",
           },
-          cfg,
+          lang,
         )(name),
     );
   }
@@ -114,17 +115,17 @@ export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(w
     writeRepoFile(
       cs,
       `---\ntitle: Current State — ${name} (L0)\n` +
-        pickLang(
+        pickLangValue(
           {
             en: "description: cold-start L0 — a one-glance snapshot of 'now' and 'next' (human-owned)\n",
             ko: "description: cold-start L0 — '지금'과 '다음'의 한눈 스냅샷 (사람이 소유·승격)\n",
             ja: "description: cold-start L0 — 「現在」と「次」の一目スナップショット（人が所有）\n",
             zh: "description: cold-start L0 — “现在”与“下一步”的一眼快照（由人所有）\n",
           },
-          cfg,
+          lang,
         ) +
         `updated: ${today}\ntags: [current-state, L0, meta]\n---\n\n` +
-        pickLang(
+        pickLangValue(
           {
             en:
               "> **L0 (current state) is the judgment layer — the human owns it.** The LLM only *proposes* 'now/next'\n" +
@@ -151,7 +152,7 @@ export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(w
               "## 现在 (TL;DR)\n\n- <用一行写清当前核心状态>\n    - <必要的依据或条件>\n\n" +
               "## 下一步 (剩余工作)\n\n- <紧接着要做的事>\n    - <负责人·阻塞点·完成条件>\n",
           },
-          cfg,
+          lang,
         ),
     );
   }
@@ -159,8 +160,8 @@ export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(w
   if (!repoFileExists(log)) {
     writeRepoFile(
       log,
-      `---\ntitle: Log\ndescription: ${pickLang(LOG_DESCRIPTION, cfg)}\ndate: ${today}\ntags: [log, meta]\n---\n\n` +
-        pickLang(LOG_BODY, cfg),
+      `---\ntitle: Log\ndescription: ${pickLangValue(LOG_DESCRIPTION, lang)}\ndate: ${today}\ntags: [log, meta]\n---\n\n` +
+        pickLangValue(LOG_BODY, lang),
     );
   }
   // Team-safety files (idempotent; harmless solo). Without these, a shared project commits the

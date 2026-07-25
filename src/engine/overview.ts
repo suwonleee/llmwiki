@@ -6,7 +6,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { OVERVIEW_BUDGET } from "./budgets.ts";
-import { getConfig, resolveLang, type LangCatalog, type WikiLang } from "./config.ts";
+import { resolveWikiLang, getConfig, resolveLang, type LangCatalog, type WikiLang } from "./config.ts";
 import { writeRepoFile } from "./repo-write.ts";
 
 // The canonical one-line body the "Recent Updates" section is collapsed to. This is PAGE CONTENT
@@ -70,7 +70,7 @@ export function normalizeOverviewText(content: string, lang: WikiLang = resolveL
 export function normalizeOverview(ws: string, opts: { check?: boolean } = {}): OverviewResult {
   const root = resolve(ws);
   const path = join(root, "docs", "wiki", "overview.md");
-  const lang = resolveLang(getConfig(root));
+  const lang = resolveWikiLang(root);
   if (!existsSync(path)) return { verdict: "skip", reason: lang === "ko" ? "overview.md 없음" : "no overview.md" };
   const before = readFileSync(path, "utf-8");
   const { text, collapsed } = normalizeOverviewText(before, lang);

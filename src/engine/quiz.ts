@@ -29,7 +29,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { getConfig, isHumanReviewDir, logDirs, resolveLang, type LangCatalog, type WikiConfig, type WikiLang } from "./config.ts";
+import { resolveWikiLang, getConfig, isHumanReviewDir, logDirs, resolveLang, type LangCatalog, type WikiConfig, type WikiLang } from "./config.ts";
 import { parseFrontmatter } from "./lint.ts";
 import { writeRepoFile } from "./repo-write.ts";
 
@@ -250,7 +250,7 @@ function saveLedger(root: string, cfg: WikiConfig, entries: QuizEntry[], date: s
   const dir = join(root, "docs", "wiki", cfg.quizDir);
   mkdirSync(dir, { recursive: true });
   const path = ledgerPath(root, cfg);
-  writeRepoFile(path, renderLedger(entries, date, resolveLang(cfg)));
+  writeRepoFile(path, renderLedger(entries, date, resolveWikiLang(root)));
   return path;
 }
 

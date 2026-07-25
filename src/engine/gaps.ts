@@ -15,7 +15,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
-import { getConfig, resolveLang, type LangCatalog, type WikiLang } from "./config.ts";
+import { resolveWikiLang, getConfig, resolveLang, type LangCatalog, type WikiLang } from "./config.ts";
 
 function pickLangValue<T>(catalog: LangCatalog<T>, lang: WikiLang): T {
   return catalog[lang] ?? catalog.en;
@@ -213,7 +213,7 @@ export function refreshGapQueue(ws: string, date: string, opts: { check?: boolea
   const root = resolve(ws);
   const reviewPath = _latestReview(root);
   if (!reviewPath) {
-    const ko = resolveLang(getConfig(root)) === "ko";
+    const ko = resolveWikiLang(root) === "ko";
     return { verdict: "skip", reason: ko ? "review 리포트 없음(먼저 review 실행)" : "no review report yet (run review first)" };
   }
   const current = extractGapsFromReview(readFileSync(reviewPath, "utf-8"));
@@ -266,7 +266,7 @@ export function refreshGapQueue(ws: string, date: string, opts: { check?: boolea
   if (!opts.check) {
     const dir = join(root, "docs", "wiki", getConfig(root).queueDir);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeRepoFile(queuePath, renderQueue(gaps, date, resolveLang(getConfig(root))));
+    writeRepoFile(queuePath, renderQueue(gaps, date, resolveWikiLang(root)));
     const stateDir = join(root, ".llmwiki");
     if (!existsSync(stateDir)) mkdirSync(stateDir, { recursive: true });
     writeResolvedGapState(gapStatePath(root), gaps);
