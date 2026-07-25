@@ -35,10 +35,6 @@ function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function today(): string {
-  return today();
-}
-
 function wikiFiles(dir: string): readonly string[] {
   if (!existsSync(dir)) return [];
   const files: string[] = [];

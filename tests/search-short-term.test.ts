@@ -23,7 +23,7 @@ describe("short-term search", () => {
   let idx: WikiIndex;
   let conn: Database;
 
-  const paths = (rows: { relative_path?: unknown }[]) => rows.map((r) => String(r.relative_path));
+  const paths = (rows: readonly Record<string, any>[]) => rows.map((r) => String(r.relative_path));
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "llmwiki-shortterm-"));

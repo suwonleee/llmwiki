@@ -129,4 +129,10 @@ describe("wiki clean", () => {
     expect(readFileSync(ambiguous, "utf8")).toContain("preserved ambiguous body");
     expect(existsSync(reviewPath)).toBe(false);
   });
+
+  test("the default date works — every other test pins `today`, so nothing else exercises it", () => {
+    const { root } = mkRepo();
+    const result = commitWikiClean(root); // no options: the caller's normal call
+    expect(result.reviewPath).toMatch(/wiki-clean-\d{4}-\d{2}-\d{2}\.md$/);
+  });
 });
