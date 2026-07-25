@@ -7,6 +7,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { OVERVIEW_BUDGET } from "./budgets.ts";
 import { effectiveKo, getConfig, isRepoKorean } from "./config.ts";
+import { writeRepoFile } from "./repo-write.ts";
 
 // The canonical one-line body the "Recent Updates" section is collapsed to. This is PAGE CONTENT
 // committed into the user's repository, so it follows the wiki's language — and both variants
@@ -70,6 +71,6 @@ export function normalizeOverview(ws: string, opts: { check?: boolean } = {}): O
   if (!collapsed) {
     return { verdict: "unchanged", path, before: before.length, after: before.length, oversized };
   }
-  if (!opts.check) writeFileSync(path, text, "utf-8");
+  if (!opts.check) writeRepoFile(path, text);
   return { verdict: "normalized", path, before: before.length, after: text.length, collapsed, oversized };
 }

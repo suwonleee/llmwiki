@@ -17,6 +17,7 @@ import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { effectiveKo, getConfig, isRepoKorean } from "./config.ts";
 import { gapStatePath, loadResolvedGapState, writeResolvedGapState } from "./gap-state.ts";
+import { readRepoFile, writeRepoFile } from "./repo-write.ts";
 
 export const RESOLVE_AFTER = 2; // consecutive absent reviews before a gap is closed
 export const RECENT_RESOLVED_LIMIT = 20;
@@ -195,7 +196,9 @@ export function refreshGapQueue(ws: string, date: string, opts: { check?: boolea
   }
   const current = extractGapsFromReview(readFileSync(reviewPath, "utf-8"));
   const queuePath = join(root, "docs", "wiki", getConfig(root).queueDir, "gap-queue.md");
-  const queue = existsSync(queuePath) ? readFileSync(queuePath, "utf-8") : null;
+  // readRepoFile, not readFileSync: a symlinked queue reads as absent, so a link planted by
+  // someone else's commit is neither parsed (its content would enter our queue) nor followed.
+  const queue = readRepoFile(queuePath);
   if (queue !== null && !isQueueWellFormed(queue)) {
     return { verdict: "skip", reason: "gap queue malformed; preserve it and recover before refresh" };
   }
@@ -241,7 +244,7 @@ export function refreshGapQueue(ws: string, date: string, opts: { check?: boolea
   if (!opts.check) {
     const dir = join(root, "docs", "wiki", getConfig(root).queueDir);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(queuePath, renderQueue(gaps, date, isRepoKorean(root)), "utf-8");
+    writeRepoFile(queuePath, renderQueue(gaps, date, isRepoKorean(root)));
     const stateDir = join(root, ".llmwiki");
     if (!existsSync(stateDir)) mkdirSync(stateDir, { recursive: true });
     writeResolvedGapState(gapStatePath(root), gaps);

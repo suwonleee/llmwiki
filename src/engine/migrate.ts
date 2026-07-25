@@ -20,6 +20,7 @@ import { parseLedger, renderLedger, type QuizEntry } from "./quiz.ts";
 import { WikiIndex } from "./db.ts";
 import { updateReferences, autoRegisterCitedTranscripts } from "./refs.ts";
 import { Linter, type WikiIndexLike } from "./lint.ts";
+import { writeRepoFile } from "./repo-write.ts";
 
 export const SCHEMA_VERSION_FILE = ".schema-version";
 
@@ -142,7 +143,7 @@ export function migrate(
   if (!pairs.length) {
     // structure already conforms → just (re)stamp the snapshot on commit so reverse-drift
     // detection has a baseline even for wikis created before this feature.
-    if (opts.commit) writeFileSync(join(wiki, SCHEMA_VERSION_FILE), schemaSnapshot(cfg) + "\n", "utf-8");
+    if (opts.commit) writeRepoFile(join(wiki, SCHEMA_VERSION_FILE), schemaSnapshot(cfg) + "\n");
     return { verdict: "conforms", strays };
   }
 
@@ -207,7 +208,7 @@ export function migrate(
   }
 
   // apply: page rewrites first (paths still old), then dir renames, then snapshot + reindex + lint
-  for (const e of pageEdits) writeFileSync(e.path, e.content, "utf-8");
+  for (const e of pageEdits) writeRepoFile(e.path, e.content);
   for (const pair of pairs) {
     const from = join(wiki, pair.from);
     const to = join(wiki, pair.to);
@@ -219,9 +220,9 @@ export function migrate(
     }
   }
   for (const l of ledgers) {
-    writeFileSync(l.file, renderLedger(l.entries, new Date().toISOString().slice(0, 10), effectiveKo(cfg)), "utf-8");
+    writeRepoFile(l.file, renderLedger(l.entries, new Date().toISOString().slice(0, 10), effectiveKo(cfg)));
   }
-  writeFileSync(join(wiki, SCHEMA_VERSION_FILE), schemaSnapshot(cfg) + "\n", "utf-8");
+  writeRepoFile(join(wiki, SCHEMA_VERSION_FILE), schemaSnapshot(cfg) + "\n");
 
   const idx = new WikiIndex(ws);
   idx.indexAll();

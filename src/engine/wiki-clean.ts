@@ -5,6 +5,7 @@ import { getConfig } from "./config.ts";
 import { WikiIndex } from "./db.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import { classifyTier, type AmbiguousReason, type AutoReason, type ProtectionReason } from "./tiering.ts";
+import { writeRepoFile } from "./repo-write.ts";
 
 type TierAction = "hot" | "warm" | "cold";
 type AutomaticCandidate = { readonly id: string; readonly path: string; readonly action: TierAction; readonly reason: AutoReason; readonly pageHash: string; readonly bytes: number };
@@ -67,12 +68,6 @@ function tieredContent(content: string, tier: TierAction): string {
   if (tierLine >= 0) lines[tierLine] = `tier: ${tier}`;
   else lines.splice(end, 0, `tier: ${tier}`);
   return lines.join(newline);
-}
-
-function writeAtomically(path: string, content: string): void {
-  const temp = `${path}.llmwiki-tmp-${crypto.randomUUID()}`;
-  writeFileSync(temp, content, "utf8");
-  renameSync(temp, path);
 }
 
 function candidateLine(candidate: AmbiguousCandidate): string {
@@ -203,13 +198,13 @@ export function commitWikiClean(root: string, options: { readonly today?: string
   const plan = planWikiClean(root, options);
   for (const candidate of plan.automatic) {
     const path = join(root, ...candidate.path.split("/"));
-    writeAtomically(path, tieredContent(readFileSync(path, "utf8"), candidate.action));
+    writeRepoFile(path, tieredContent(readFileSync(path, "utf8"), candidate.action));
   }
   let reviewPath: string | null = null;
   if (plan.ambiguous.length > 0) {
     reviewPath = join(root, "docs", "wiki", getConfig(root).queueDir, `wiki-clean-${options.today ?? today()}.md`);
     mkdirSync(join(root, "docs", "wiki", getConfig(root).queueDir), { recursive: true });
-    if (!existsSync(reviewPath)) writeAtomically(reviewPath, reviewText(plan.ambiguous, options.today ?? today()));
+    if (!existsSync(reviewPath)) writeRepoFile(reviewPath, reviewText(plan.ambiguous, options.today ?? today()));
   }
   new WikiIndex(root).indexAll();
   return { ...plan, reviewPath };
@@ -240,7 +235,7 @@ export function applyWikiCleanReview(root: string, options: { readonly reviewPat
   }
   for (const candidate of accepted) {
     const path = join(root, ...candidate.path.split("/"));
-    writeAtomically(path, tieredContent(readFileSync(path, "utf8"), candidate.action));
+    writeRepoFile(path, tieredContent(readFileSync(path, "utf8"), candidate.action));
   }
   new WikiIndex(root).indexAll();
   unlinkSync(reviewPath);

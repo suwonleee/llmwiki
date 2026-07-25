@@ -30,6 +30,7 @@ import { appendLog, ensureSkeleton } from "./update.ts";
 import { effectiveKo, getConfig, isRepoKorean, renderBodyStyleRule, type WikiConfig } from "./config.ts";
 import { Linter, type LintIssue, type WikiIndexLike } from "./lint.ts";
 import { MODEL_HEAVY, MODEL_LIGHT } from "./models.ts";
+import { writeRepoFile } from "./repo-write.ts";
 
 // WRITE drafts the merged page (cheap tier); VERIFY adjudicates the added claims (heavy tier,
 // independent — same independence guarantee as the log gate). Both env-overridable via models.ts.
@@ -366,7 +367,7 @@ export async function consolidateOne(
   mkdirSync(join(dest, ".."), { recursive: true });
   // Authorship is read from git, not cached into frontmatter (decision 2026-07-10) — a stamped
   // author goes stale the moment a teammate edits the page, and git is already the truth.
-  writeFileSync(dest, page.endsWith("\n") ? page : page + "\n", "utf-8");
+  writeRepoFile(dest, page.endsWith("\n") ? page : page + "\n");
   idx.registerTranscript(transcriptPath, inc.sessionId);
   idx.indexAll();
   const conn = idx.connect();

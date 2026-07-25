@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { estimateTokens, type Chunk } from "./chunker.ts";
 import type { Frontmatter, KnowledgeTier } from "./frontmatter.ts";
 import { stripCode, stripEvidence } from "./refs.ts";
+import { writeRepoFile } from "./repo-write.ts";
 
 export const COLD_INDEX_RELATIVE_PATH = "docs/wiki/cold-index.md";
 const MAX_STRUCTURAL_LABELS = 24;
@@ -110,5 +111,5 @@ export function writeColdIndex(root: string, entries: readonly ColdIndexEntry[])
     lines.push(`- [${entry.title}](${path})${date}${tags}${description} · source: ${entry.relativePath}`);
   }
   lines.push("");
-  writeFileSync(coldIndexPath(root), lines.join("\n"), "utf-8");
+  writeRepoFile(coldIndexPath(root), lines.join("\n"));
 }

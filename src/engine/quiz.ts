@@ -31,6 +31,7 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { getConfig, isHumanReviewDir, logDirs, effectiveKo, type WikiConfig } from "./config.ts";
 import { parseFrontmatter } from "./lint.ts";
+import { writeRepoFile } from "./repo-write.ts";
 
 // Box intervals in days. Ebbinghaus reviews are minutes/hours/days, but a chat-ritual quiz
 // can't fire sub-daily — so the curve is flattened to day granularity with the classic
@@ -228,7 +229,7 @@ function saveLedger(root: string, cfg: WikiConfig, entries: QuizEntry[], date: s
   const dir = join(root, "docs", "wiki", cfg.quizDir);
   mkdirSync(dir, { recursive: true });
   const path = ledgerPath(root, cfg);
-  writeFileSync(path, renderLedger(entries, date, effectiveKo(cfg)), "utf-8");
+  writeRepoFile(path, renderLedger(entries, date, effectiveKo(cfg)));
   return path;
 }
 

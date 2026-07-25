@@ -15,6 +15,7 @@ import { llm } from "./claude.ts";
 import { WikiIndex, type DocRow } from "./db.ts";
 import { appendLog } from "./update.ts";
 import { MODEL_HEAVY } from "./models.ts";
+import { writeRepoFile } from "./repo-write.ts";
 
 // review is the JUDGMENT half (semantic lint + grounding adjudication). It is the place
 // where real judgment is needed, so it runs on the heavy tier (strongest model): deterministic
@@ -408,7 +409,7 @@ export async function review(ws: string, opts: ReviewOpts): Promise<Record<strin
   // pages). status: draft.
   const destDir = join(root, "docs", "wiki", getConfig(root).queueDir);
   if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true });
-  writeFileSync(dest, page + (page.endsWith("\n") ? "" : "\n"), "utf-8");
+  writeRepoFile(dest, page + (page.endsWith("\n") ? "" : "\n"));
   _writeState(root, { hash: runHash, date, dest: result.dest as string });
   new WikiIndex(ws).indexAll();
   appendLog(

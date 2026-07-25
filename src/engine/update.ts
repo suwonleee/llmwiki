@@ -9,6 +9,7 @@ import { effectiveKo, getConfig, logDirs, type WikiConfig } from "./config.ts";
 import { render } from "./extract.ts";
 import { sourceForKind, sourceForPath } from "./source.ts";
 import { WikiIndex } from "./db.ts";
+import { appendRepoFile, readRepoFile, repoFileExists, writeRepoFile } from "./repo-write.ts";
 
 // Wiki categories: numbered by reading order.
 // The LLM writes all of these by summarizing what the HUMAN decided/realized in the
@@ -85,8 +86,8 @@ export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(w
   const name = basename(root);
   const today = new Date().toISOString().slice(0, 10);
   const overview = join(wiki, cfg.files.overview);
-  if (!existsSync(overview) && !existsSync(join(wiki, cfg.files.l0))) {
-    writeFileSync(
+  if (!repoFileExists(overview) && !repoFileExists(join(wiki, cfg.files.l0))) {
+    writeRepoFile(
       overview,
       `---\ntitle: Overview — ${name}\ndescription: Front page / cold-start context for ${name}\n` +
         `date: ${today}\ntags: [overview, meta]\n---\n\n` +
@@ -95,12 +96,11 @@ export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(w
             "## 방향성 (사람 확인)\n\n## Key Findings\n\n아직 update된 소스 없음.\n\n## Recent Updates\n\n"
           : `This wiki is the living knowledge of the **${name}** project (it auto-accumulates as you work).\n\n` +
             "## Direction (human-confirmed)\n\n## Key Findings\n\nNo sources condensed yet.\n\n## Recent Updates\n\n"),
-      "utf-8",
     );
   }
   const cs = join(wiki, cfg.files.l0);
-  if (!existsSync(cs)) {
-    writeFileSync(
+  if (!repoFileExists(cs)) {
+    writeRepoFile(
       cs,
       `---\ntitle: Current State — ${name} (L0)\n` +
         (ko
@@ -118,18 +118,16 @@ export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(w
             "## Direction (human-confirmed)\n\n- <big project direction — human changes only>\n\n" +
             "## Now (TL;DR)\n\n- <current core state in one line>\n    - <necessary evidence or condition>\n\n" +
             "## Next (remaining work)\n\n- <immediate next action>\n    - <owner, blocker, or completion condition>\n"),
-      "utf-8",
     );
   }
   const log = join(wiki, cfg.files.log);
-  if (!existsSync(log)) {
-    writeFileSync(
+  if (!repoFileExists(log)) {
+    writeRepoFile(
       log,
       `---\ntitle: Log\ndescription: ${ko ? "시간순 ingest/update/lint 기록" : "chronological ingest/update/lint record"}\ndate: ${today}\ntags: [log, meta]\n---\n\n` +
         (ko
           ? "ingest·update·lint·decide 의 시간순 기록 (append-only).\n"
           : "chronological record of ingest·update·lint·decide (append-only).\n"),
-      "utf-8",
     );
   }
   // Team-safety files (idempotent; harmless solo). Without these, a shared project commits the
@@ -165,7 +163,7 @@ export function ensurePrivateDirs(root: string, cfg: WikiConfig): void {
 // additive: an existing file is never rewritten, and a missing git identity writes only the note.
 function _ensureMailmap(root: string): void {
   const path = join(root, ".mailmap");
-  if (existsSync(path)) return;
+  if (repoFileExists(path)) return;
   const name = _gitConfig("user.name");
   const email = _gitConfig("user.email");
   const header =
@@ -173,7 +171,7 @@ function _ensureMailmap(root: string): void {
     "# in page frontmatter). One line per alias:  Canonical Name <canonical@email>  Alias <alias@email>\n";
   const seed = name && email ? `${name} <${email}> ${name} <${email}>\n` : "";
   try {
-    writeFileSync(path, header + seed, "utf-8");
+    writeRepoFile(path, header + seed);
   } catch {
     /* unwritable repo root → skip; scaffolding must never break a close-out */
   }
@@ -192,12 +190,12 @@ function _gitConfig(key: string): string {
 // Never rewrites existing content — safe on user-owned files.
 function _ensureLine(file: string, line: string): void {
   try {
-    if (existsSync(file)) {
-      const cur = readFileSync(file, "utf-8");
+    const cur = readRepoFile(file);
+    if (cur !== null) {
       if (cur.split("\n").some((l) => l.trim() === line)) return;
-      appendFileSync(file, (cur.endsWith("\n") || cur === "" ? "" : "\n") + line + "\n", "utf-8");
+      appendRepoFile(file, (cur.endsWith("\n") || cur === "" ? "" : "\n") + line + "\n");
     } else {
-      writeFileSync(file, line + "\n", "utf-8");
+      writeRepoFile(file, line + "\n");
     }
   } catch {
     /* fail-safe: never let a bookkeeping nicety break skeleton creation */
@@ -206,8 +204,8 @@ function _ensureLine(file: string, line: string): void {
 
 export function appendLog(ws: string, kind: string, title: string, bullets: string[], date: string, cfg: WikiConfig = getConfig(resolve(ws))): void {
   const log = join(resolve(ws), "docs", "wiki", cfg.files.log);
-  if (!existsSync(log)) ensureSkeleton(ws, cfg);
+  if (!repoFileExists(log)) ensureSkeleton(ws, cfg);
   const block = [`\n## [${date}] ${kind} | ${title}`];
   for (const b of bullets) block.push(`- ${b}`);
-  appendFileSync(log, block.join("\n") + "\n", "utf-8");
+  appendRepoFile(log, block.join("\n") + "\n");
 }

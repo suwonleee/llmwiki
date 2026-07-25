@@ -45,6 +45,7 @@ import { ensureExcerpts } from "./excerpt.ts";
 import { updateReferences } from "./refs.ts";
 import { Linter, type LintIssue, type WikiIndexLike } from "./lint.ts";
 import { MODEL_HEAVY, MODEL_LIGHT } from "./models.ts";
+import { writeRepoFile } from "./repo-write.ts";
 
 // WRITE = light tier (cheap, high-volume drafting). VERIFY = heavy tier — the adversarial
 // gate uses the strongest model; volume is small (one call per pending transcript), so it
@@ -354,7 +355,7 @@ export async function updateOne(
   // here, and on any other clone it will not be readable at all (page format v3).
   // (Authorship is deliberately NOT stamped: git already records it — decision 2026-07-10.)
   page = ensureExcerpts(page, transcriptPath, offset);
-  writeFileSync(dest, page + (page.endsWith("\n") ? "" : "\n"), "utf-8");
+  writeRepoFile(dest, page + (page.endsWith("\n") ? "" : "\n"));
   idx.indexAll();
   const conn = idx.connect();
   const destName = basename(dest);
