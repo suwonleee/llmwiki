@@ -59,7 +59,8 @@ describe("OpenCode wiring", () => {
       expect(command).not.toContain("~/llmwiki");
     }
     const save = readFileSync(join(opencodeRoot, "commands", "wiki-save.md"), "utf8");
-    expect(save).toContain("supporting detail at four spaces (`    -`)");
+    expect(save).toContain("`## 1. <label>`"); // the installed skill carries the structure contract
+    expect(save).toContain("supporting detail at `    -`");
     expect(save).toContain("noun phrases or telegraphic endings");
     expect(readFileSync(join(opencodeRoot, "commands", "wiki-deep.md"), "utf8")).toContain("$ARGUMENTS");
 

@@ -57,7 +57,7 @@ $ARGUMENTS
      - a decision the human made at this question (ADR) → `docs/wiki/3_decision/<slug>.md` (`status: draft`, human confirm)
      - direction/strategy shift (rare) → `docs/wiki/1_direction/<slug>.md` (`status: draft`, human confirm)
    - frontmatter: `title` `description` `date` `tags`(≥2) `status` `source: query` (put the original question in description or at the top of the body).
-   - body: answer + footnote citations + related-page markdown cross-links, following `/wiki-save`'s compact hierarchy: one concrete point per `-`, details under `    -`, deeper details under `        -`, noun-phrase/telegraphic endings where natural.
+   - body: answer + footnote citations + related-page markdown cross-links, following `/wiki-save`'s structure contract: numbered sections (`## 1. <label>`, split as `### 1-1.`) once the answer has more than one group, one concrete point per `-` with details under `    -` and deeper details under `        -`, noun-phrase/telegraphic endings where natural, and no `·`-joined pile-up in a single line.
 
 6. **Bookkeeping** (only if filed back):
    - Append to `docs/wiki/log.md`: `## [YYYY-MM-DD] query | <question>` + `- Finding: <one line>` + `- Filed: <path>`.

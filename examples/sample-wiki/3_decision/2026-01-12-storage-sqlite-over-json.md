@@ -11,12 +11,26 @@ source: session-2026-01-12.jsonl
 
 TL;DR — transactions live in an embedded SQLite DB; JSON was rejected for lack of query/FTS.
 
-## Problem
-Need durable storage that supports "sum by category this month" and free-text merchant search.
+## 1. Problem
 
-## Alternatives
-- **Flat JSON files** — simple, but every query loads + scans all of it; no FTS. Rejected.
-- **SQLite (chosen)** — embedded, zero-server, SQL aggregation + FTS5 for merchant search. [^1]
+- Durable storage for two access patterns
+    - "sum by category this month"
+    - free-text merchant search
+
+## 2. Alternatives
+
+- Flat JSON files — rejected
+    - every query loads and scans the whole file
+    - no full-text search
+- SQLite — chosen [^1]
+    - embedded, zero-server
+    - SQL aggregation for the monthly sums
+    - FTS5 for merchant search
+
+## 3. Consequences
+
+- One file to back up, one schema to migrate
+- A query layer now exists for later reports
 
 ## Related
 - [[5_topic/transaction-import]] — enables

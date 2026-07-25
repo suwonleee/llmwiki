@@ -99,7 +99,8 @@ describe("fresh Claude Code setup", () => {
       if (name !== "wiki-doctor") expect(installed[name]).toContain(ROOT);
       expect(installed[name]).not.toContain("~/llmwiki");
     }
-    expect(installed["wiki-save"]).toContain("supporting detail at four spaces (`    -`)");
+    expect(installed["wiki-save"]).toContain("`## 1. <label>`"); // the installed skill carries the structure contract
+    expect(installed["wiki-save"]).toContain("supporting detail at `    -`");
     expect(installed["wiki-save"]).toContain("noun phrases or telegraphic endings");
 
     const rerun = runSetup();

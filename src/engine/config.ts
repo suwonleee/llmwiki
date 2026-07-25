@@ -404,7 +404,13 @@ export function renderTerminologyLine(cfg: WikiConfig = getConfig()): string {
 // Compact enough to repeat across every model-written surface. The exact indentation examples
 // carry the structure without spending prompt tokens on a separate style essay.
 export function renderBodyStyleRule(): string {
-  return "- Body style: compact hierarchical bullets — one concrete claim, decision, result, or action per `-` line; supporting detail at four spaces (`    -`); deeper detail at eight (`        -`). Prefer noun phrases or telegraphic endings natural to the page language; avoid abstract framing or repetition, but keep verbs when actor, action, condition, or outcome would be unclear. One useful line per bullet when possible; never add a child that merely repeats its parent.";
+  return [
+    "- Body style: numbered sections holding a bullet hierarchy a person can scan.",
+    "    - Sections `## 1. <label>`, `## 2. <label>` … in reading order; split one as `### 1-1. <label>` only when it has parts. Sections start once a page holds 6+ top-level bullets; a shorter one stays a bare list under the TL;DR.",
+    "    - Inside a section: one concrete claim, decision, result, or action per `-`; supporting detail at `    -`; deeper detail at `        -`. No fourth level.",
+    "    - A bullet enumerating more than three items becomes a parent plus one child per item — never a `·`-joined line.",
+    "    - Endings: noun phrases or telegraphic endings natural to the page language; keep verbs when actor, action, condition, or outcome would be unclear. No abstract framing, no child repeating its parent.",
+  ].join("\n");
 }
 
 // Cold-start operating-rule fragments (rule 2's category listing + rule 3's human-queue line).

@@ -70,7 +70,8 @@ describe("Codex wiring", () => {
       expect(skill).not.toContain("~/llmwiki");
     }
     const save = readFileSync(join(home, ".agents", "skills", "wiki-save", "SKILL.md"), "utf8");
-    expect(save).toContain("supporting detail at four spaces (`    -`)");
+    expect(save).toContain("`## 1. <label>`"); // the installed skill carries the structure contract
+    expect(save).toContain("supporting detail at `    -`");
     expect(save).toContain("noun phrases or telegraphic endings");
     const deep = readFileSync(join(home, ".agents", "skills", "wiki-deep", "SKILL.md"), "utf8");
     expect(deep).toContain("invoke `$wiki-save` before continuing");

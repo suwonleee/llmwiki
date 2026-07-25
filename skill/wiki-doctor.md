@@ -66,7 +66,7 @@ $ARGUMENTS
    - stale/supersession warnings: require a newer authority. Preserve the old body and mark
      supersession; do not rewrite history.
    - terminology warnings: make a wording-only substitution that does not change the claim.
-   - newly written repair text: use `/wiki-save`'s compact hierarchy (`-` → `    -` → `        -`)
+   - newly written repair text: use `/wiki-save`'s structure contract — numbered sections (`## 1.`, `### 1-1.`) when the page holds several groups, then `-` → `    -` → `        -`
      and noun-phrase/telegraphic endings where natural. Never reformat an existing grounded page
      solely for style.
    - oversized topics, recurring concepts, backlog, and open gaps: report them as `/wiki-deep`

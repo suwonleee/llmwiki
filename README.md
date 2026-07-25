@@ -154,10 +154,12 @@ A citation like `[^s1]: <session>.jsonl` points at a transcript that lives on **
     - the footnote definition line stays byte-identical to before — four parsers read it, and one of them keeps a teammate's citation from erroring
     - excerpts come only from `llmwiki excerpt` — verbatim, length-capped, secret-screened (raw transcripts routinely contain credentials)
     - judgment claims quote the human; factual claims carry a machine tool-record
-- **Compact page body**
-    - one concrete point per `-` line; supporting detail at `    -`; deeper detail at `        -`
+- **Scannable page body**
+    - numbered sections in reading order — `## 1. <label>`, split as `### 1-1. <label>` when a section has parts; a short single-group page stays a bare bullet list
+    - inside a section: one concrete point per `-` line; supporting detail at `    -`; deeper detail at `        -` (no fourth level)
+    - one point per line: a bullet enumerating more than three items becomes a parent plus one child per item, never a `·`-joined pile-up (lint: `dense-bullet`)
     - noun-phrase or telegraphic endings where natural; verbs retained when needed for an unambiguous actor, action, condition, or outcome
-    - no abstract framing, paragraph repetition, or child bullet that merely restates its parent
+    - no abstract framing, paragraph repetition, or child bullet that merely restates its parent (lint: `flat-body` when a long page has no sections)
 - **Lint stance**
     - a quote is verified against the transcript only **where that transcript is readable**; on other clones lint stays silent — "can't check" must never read as "wrong"
 - **Zero retrieval cost**
