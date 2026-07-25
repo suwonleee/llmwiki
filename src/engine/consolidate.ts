@@ -27,7 +27,7 @@ import { sourceForKind } from "./source.ts";
 import { collectGroundedFacts, assessGrounding } from "./grounding.ts";
 import { updateReferences } from "./refs.ts";
 import { appendLog, ensureSkeleton } from "./update.ts";
-import { effectiveKo, getConfig, renderBodyStyleRule, type WikiConfig } from "./config.ts";
+import { effectiveKo, getConfig, isRepoKorean, renderBodyStyleRule, type WikiConfig } from "./config.ts";
 import { Linter, type LintIssue, type WikiIndexLike } from "./lint.ts";
 import { MODEL_HEAVY, MODEL_LIGHT } from "./models.ts";
 
@@ -414,7 +414,7 @@ export async function run(
   verifyModel: string = VERIFY_MODEL,
 ): Promise<Record<string, any>[]> {
   const root = resolve(ws);
-  const ko = effectiveKo(getConfig(root));
+  const ko = isRepoKorean(root);
   ensureSkeleton(root); // guarantees docs/wiki/ + topic dir exist (per-repo config)
   if (writeModel === verifyModel) {
     process.stderr.write(

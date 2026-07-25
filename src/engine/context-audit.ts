@@ -7,11 +7,11 @@
 // the same stance as `review` (advisory → human applies). Absent files are skipped
 // (never created). Conceptually this is the lint operation extended to the schema layer.
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { effectiveKo, getConfig } from "./config.ts";
+import { getConfig, isRepoKorean } from "./config.ts";
 import { join, relative as relpath } from "node:path";
 
 // Message language resolves per repo at call time (per-repo config).
-const _ko = (repo: string) => effectiveKo(getConfig(repo));
+const _ko = (repo: string) => isRepoKorean(repo);
 
 // Rough token estimate (word count × 4/3) — same heuristic used for the doc metrics; exact tokens
 // don't matter for an advisory, only the order of magnitude.

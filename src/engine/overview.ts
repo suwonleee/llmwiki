@@ -6,7 +6,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { OVERVIEW_BUDGET } from "./budgets.ts";
-import { effectiveKo, getConfig } from "./config.ts";
+import { effectiveKo, getConfig, isRepoKorean } from "./config.ts";
 
 // The canonical one-line body the "Recent Updates" section is collapsed to. This is PAGE CONTENT
 // committed into the user's repository, so it follows the wiki's language — and both variants
@@ -62,7 +62,7 @@ export function normalizeOverviewText(content: string, ko: boolean = effectiveKo
 export function normalizeOverview(ws: string, opts: { check?: boolean } = {}): OverviewResult {
   const root = resolve(ws);
   const path = join(root, "docs", "wiki", "overview.md");
-  const ko = effectiveKo(getConfig(root));
+  const ko = isRepoKorean(root);
   if (!existsSync(path)) return { verdict: "skip", reason: ko ? "overview.md 없음" : "no overview.md" };
   const before = readFileSync(path, "utf-8");
   const { text, collapsed } = normalizeOverviewText(before, ko);

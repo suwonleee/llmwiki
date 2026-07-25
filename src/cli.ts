@@ -8,7 +8,7 @@ import { MissingCliFlagValueError, parseCliArgs, type ParsedCliArgs as Parsed } 
 import { createMaintenanceHandlers } from "./commands/maintenance.ts";
 import * as excerpt from "./engine/excerpt.ts";
 import { rebuildReferenceGraph } from "./engine/refs.ts";
-import { effectiveKo, getConfig, CONFIG_BASENAME, CONFIGS_DIR } from "./engine/config.ts";
+import { effectiveKo, getConfig, isRepoKorean, CONFIG_BASENAME, CONFIGS_DIR } from "./engine/config.ts";
 import { Linter, formatReport } from "./engine/lint.ts";
 import * as update from "./engine/update.ts";
 import { sourceForPath } from "./engine/source.ts";
@@ -817,7 +817,7 @@ if (parsed.cmd === "--help" || parsed.cmd === "-h") {
 {
   const wsGuess =
     parsed.positionals[0] && existsSync(parsed.positionals[0]) ? parsed.positionals[0] : process.cwd();
-  LANG = effectiveKo(getConfig(wsGuess)) ? "ko" : "en";
+  LANG = isRepoKorean(wsGuess) ? "ko" : "en";
   ko = LANG === "ko";
 }
 const handler = HANDLERS[parsed.cmd];

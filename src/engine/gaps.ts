@@ -15,7 +15,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
-import { effectiveKo, getConfig } from "./config.ts";
+import { effectiveKo, getConfig, isRepoKorean } from "./config.ts";
 import { gapStatePath, loadResolvedGapState, writeResolvedGapState } from "./gap-state.ts";
 
 export const RESOLVE_AFTER = 2; // consecutive absent reviews before a gap is closed
@@ -190,7 +190,7 @@ export function refreshGapQueue(ws: string, date: string, opts: { check?: boolea
   const root = resolve(ws);
   const reviewPath = _latestReview(root);
   if (!reviewPath) {
-    const ko = effectiveKo(getConfig(root));
+    const ko = isRepoKorean(root);
     return { verdict: "skip", reason: ko ? "review 리포트 없음(먼저 review 실행)" : "no review report yet (run review first)" };
   }
   const current = extractGapsFromReview(readFileSync(reviewPath, "utf-8"));
@@ -241,7 +241,7 @@ export function refreshGapQueue(ws: string, date: string, opts: { check?: boolea
   if (!opts.check) {
     const dir = join(root, "docs", "wiki", getConfig(root).queueDir);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(queuePath, renderQueue(gaps, date, effectiveKo(getConfig(root))), "utf-8");
+    writeFileSync(queuePath, renderQueue(gaps, date, isRepoKorean(root)), "utf-8");
     const stateDir = join(root, ".llmwiki");
     if (!existsSync(stateDir)) mkdirSync(stateDir, { recursive: true });
     writeResolvedGapState(gapStatePath(root), gaps);

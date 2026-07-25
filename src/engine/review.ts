@@ -8,7 +8,7 @@
 // --commit writes docs/wiki/0_review/semantic-review-<date>.md, status: draft) for a
 // human to act on. Single WRITE pass (no VERIFY second model).
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { effectiveKo, getConfig, renderBodyStyleRule } from "./config.ts";
+import { getConfig, isRepoKorean, renderBodyStyleRule } from "./config.ts";
 import { createHash } from "node:crypto";
 import { basename, join, relative as relpath, resolve } from "node:path";
 import { llm } from "./claude.ts";
@@ -345,7 +345,7 @@ export async function review(ws: string, opts: ReviewOpts): Promise<Record<strin
 
   const briefs = _briefs(ws);
   if (briefs.length < minPages) {
-    const ko = effectiveKo(getConfig(root));
+    const ko = isRepoKorean(root);
     return {
       verdict: "skip",
       n_pages: briefs.length,
@@ -415,7 +415,7 @@ export async function review(ws: string, opts: ReviewOpts): Promise<Record<strin
     ws,
     "review",
     _title(page) || "semantic-review",
-    _reviewLogEntry(result.dest as string, scoped.length, briefs.length, result.scope.bounded, effectiveKo(getConfig(root))),
+    _reviewLogEntry(result.dest as string, scoped.length, briefs.length, result.scope.bounded, isRepoKorean(root)),
     date,
   );
   result.accepted = true; // accepted = report written (not auto-applied to wiki)

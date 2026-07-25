@@ -340,6 +340,15 @@ export function effectiveKo(cfg: WikiConfig = getConfig()): boolean {
   return cfg.lang.trim().toLowerCase().startsWith("ko");
 }
 
+/**
+ * The language of the wiki AT A REPO PATH — the question every writer asks before it puts a
+ * sentence on a page or on the terminal. Callers that already hold a resolved config keep using
+ * `effectiveKo(cfg)`; this exists so "resolve that repo's config, then ask" is spelled once.
+ */
+export function isRepoKorean(root: string): boolean {
+  return effectiveKo(getConfig(root));
+}
+
 // ---- prompt / rules rendering (P2) --------------------------------------------------------
 //
 // CANONICAL-DEFAULT CONTRACT: tests/config-render.test.ts pins the stock prompt/rules text so
