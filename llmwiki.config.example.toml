@@ -1,36 +1,55 @@
-# llmwiki.config.toml — team wiki conventions (copy to the engine clone root and edit).
+# ══════════════════════════════════════════════════════════════════════════════════════
+#  llmwiki.config.toml — your wiki's conventions
+# ══════════════════════════════════════════════════════════════════════════════════════
 #
-# ZERO-CONFIG: without this file the engine runs the stock structure
-# (0_review · 1_direction · 2_milestone · 3_decision · 4_insight · 5_topic) — nothing changes.
-# Every key below is optional and overrides that default. Declaring ANY [[category]]
-# REPLACES the whole default category list (no partial merge — predictability first).
-# Check the result with:  bun <clone>/src/cli.ts config [workspace]
-# Team distribution: commit this file to your team's engine fork; members `git pull`.
+#  You do NOT need this file. Without it the engine runs the stock structure and nothing
+#  changes. Copy it to the engine clone root only when you want something different:
 #
-# PER-REPO CONFIGS (optional): put multiple *.toml files under <clone>/configs/ instead.
-#   • a file WITH `applies_to = ["<folder>", ...]` governs those folders and everything
-#     under them (segment-safe prefix; the most specific/longest match wins; ~ expands)
-#   • a file WITHOUT applies_to is the default for all repos (canonical: configs/default.toml)
-#   • precedence: named applies_to match → configs/ default → this root file → built-in defaults
-#     (a configs/ default shadows this root file; named-only configs/ still falls back here)
-#   • matching uses the path the session hook passes (CLAUDE_PROJECT_DIR / cwd)
-#   • a broken file never breaks a session: it is skipped/faded to defaults and surfaced
-#     as a warning in `llmwiki config <workspace>`
+#      cp llmwiki.config.example.toml llmwiki.config.toml
+#      llmwiki config <project-path>      # shows what the engine actually resolved
 #
-# applies_to = ["~/work/repo-a", "/abs/path/team-wikis"]   # per-repo scope (configs/*.toml only)
+#  Everything below is commented out — uncomment only what you want to change.
+#  A broken file never breaks a session: it is skipped, defaults apply, and
+#  `llmwiki config` reports the warning.
 
 config_version = 1
 
-[wiki]
-# lang = "ko"            # UI/skeleton language; LLMWIKI_LANG env still wins per-session
 
-# --- log-layer categories: order = number = reading order --------------------------
-# dir    : folder under docs/wiki
-# domain : frontmatter `domain:` value routed to this folder (lowercase slug)
-# review : "human" → queued to 0_review for human confirmation (strategic judgment)
-#          "model" → strong-model adjudication, no human sign-off (fact bookkeeping)
-# guide  : one-line convention — rendered into prompts and `llmwiki conventions`
-#          (free text, ANY language — it is shown to the model as-is)
+# ── 1. LANGUAGE ───────────────────────────────────────────────────────────────────────
+#
+#  This is NOT the language of your pages. Pages follow your conversation: talk in Korean
+#  and you get Korean pages, switch to English and the next page is English. Nothing is
+#  translated for you.
+#
+#  This sets the language the ENGINE writes in — the starter pages it seeds
+#  (current-state.md · overview.md · log.md), the pointer it collapses overview.md to,
+#  and the headers of the gap queue and quiz ledger. Those files live in your repo.
+#
+#  "en" (default) · "ko" · "ja" · "zh"; region tags like "zh-Hans" are fine, and any
+#  unsupported value falls back to English. Engine MESSAGES (terminal, lint, session-start
+#  briefing) are translated for en/ko only — with "ja"/"zh" those stay English.
+#  One-off override: LLMWIKI_LANG=ja llmwiki init <path>   (env always wins)
+#
+# [wiki]
+# lang = "ko"
+
+
+# ── 2. WIKI FOLDERS ───────────────────────────────────────────────────────────────────
+#
+#  Defaults, in reading order: 1_direction (big direction, human-confirmed) ·
+#  2_milestone (what got done, what's next) · 3_decision (ADR) · 4_insight (gotchas) ·
+#  5_topic (one living page per concept) · 0_review (questions for a human) ·
+#  6_quiz (your memory loop, never indexed).
+#
+#  Declaring ONE [[category]] replaces the whole default list — no partial merge, so what
+#  you write is exactly what you get. Keep the number prefix: it is the reading order.
+#
+#      dir     folder under docs/wiki
+#      domain  the `domain:` value in a page's frontmatter (lowercase)
+#      review  "human" → queued into 0_review for a person · "model" → the strong model
+#              decides, no human sign-off
+#      guide   one line telling the model what belongs here (free text, any language —
+#              passed to the model as written)
 #
 # [[category]]
 # dir = "1_goal"
@@ -43,44 +62,66 @@ config_version = 1
 # domain = "lesson"
 # review = "model"
 # guide = "작업 교훈·gotcha. transcript 근거 필수."
-#
-# [[category]]
-# dir = "3_adr"
-# domain = "adr"
-# review = "model"
-# guide = "ADR: 문제 → 대안 → 선택 → 결과."
 
+# The other three folders, renamed the same way:
 # [topic]
-# dir = "5_topic"        # per-concept living encyclopedia (consolidation target)
-
+# dir = "5_topic"
+#
 # [queue]
-# dir = "0_review"       # human-judgment queue
-
+# dir = "0_review"
+#
 # [quiz]
-# dir = "6_quiz"         # human memory loop (quiz ledger + session records) — never indexed/searched
-# questions = 3          # default questions per /wiki-quiz session (a numeric argument raises it; engine caps at 7)
+# dir = "6_quiz"
+# questions = 3            # per /wiki-quiz session (the engine caps a session at 7)
 
+# Personal folders inside a shared wiki: indexed, searched and quizzed for you, but
+# auto-gitignored so nothing in them is committed. Must not collide with the names above.
 # [private]
-# dirs = ["9_personal"]  # additional LOCAL-ONLY wiki folders: indexed·searched·quizzed like any
-#                        # page, but auto-gitignored — personal pages inside a shared repo without
-#                        # manual git fencing. Committing this config makes the rule team-wide.
-#                        # Must not collide with a category/topic/queue/quiz dir.
+# dirs = ["9_personal"]
 
-# --- LLM model tiers (per generative pass) -----------------------------------------
-# light = WRITE/drafting tier (cheap, high-volume). heavy = VERIFY gate + semantic
-# review tier (judgment). Resolution order: env > this [models] block > builtin default.
-# Per-session env LLMWIKI_MODEL_LIGHT / LLMWIKI_MODEL_HEAVY still win over these values.
+
+# ── 3. MODELS ─────────────────────────────────────────────────────────────────────────
+#
+#  Only two passes call a model (capture, reading, search and lint never do):
+#  `light` drafts pages, `heavy` runs the verification gate and the semantic review.
+#  Order: env (LLMWIKI_MODEL_LIGHT / _HEAVY) > this file > built-in default.
+#
 # [models]
-# light = "claude-sonnet-5"   # WRITE pass (drafting, high-volume). env LLMWIKI_MODEL_LIGHT wins.
-# heavy = "claude-opus-4-8"   # VERIFY gate + semantic review (judgment). env LLMWIKI_MODEL_HEAVY wins.
+# light = "claude-sonnet-5"
+# heavy = "claude-opus-4-8"
 
+
+# ── 4. FILE NAMES AND WORDING ─────────────────────────────────────────────────────────
+#
+#  l0 = the one-glance current state injected at every session start · overview = the
+#  entry point · log = the append-only ledger.
+#
 # [files]
 # l0 = "current-state.md"
 # overview = "overview.md"
 # log = "log.md"
 
-# legacy_dirs = ["milestones", "insights", "decisions", "directions"]  # extra dirs still scanned
+# Old folders to keep scanning after a rename, so earlier pages stay findable.
+# legacy_dirs = ["milestones", "insights", "decisions", "directions"]
 
-# [lint.banned_terms]    # banned word → preferred wording (warn-level)
+# Wording you don't want → what to use instead. Advisory: lint warns, nothing is blocked.
+# [lint.banned_terms]
 # "진북" = "방향성"
 # "distill" = "update / 업데이트"
+
+
+# ── 5. ONE CONFIG PER PROJECT (optional) ──────────────────────────────────────────────
+#
+#  One engine clone can serve projects with different conventions: put *.toml files under
+#  <clone>/configs/ instead of using this single root file.
+#
+#    • with `applies_to = [...]` → governs those folders and everything beneath them
+#      (longest match wins; `~` expands)
+#    • without it → the default for every project (canonical: configs/default.toml)
+#    • precedence: applies_to match → configs/default.toml → this file → built-in defaults
+#    • the matched path is the one your agent session reports (CLAUDE_PROJECT_DIR, or cwd)
+#
+#  Only valid inside a configs/ file, not here:
+# applies_to = ["~/work/repo-a", "/absolute/path/team-wikis"]
+#
+#  Team sharing: commit the file to your team's engine fork; members `git pull`.

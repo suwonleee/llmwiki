@@ -53,14 +53,26 @@ setup正常完成后，在同一个安装会话中告诉智能体：
 请检查这个项目的docs/wiki是否正在正确积累文档。运行合适的llmwiki健康、状态和lint检查，然后概括哪些正常、哪些需要处理。
 ```
 
-如果想调整wiki结构或语言，请保持引擎代码不变，只编辑一个配置文件。
+### 想按自己的方式来？只需一个文件
+
+引擎代码不用动，下面这些都在同一个配置文件里改。
 
 ```bash
 cd ~/llmwiki
-cp llmwiki.config.example.toml llmwiki.config.toml
+cp llmwiki.config.example.toml llmwiki.config.toml   # 英文，注释齐全
 ```
 
-把想要的方向告诉智能体，并要求它只修改 `llmwiki.config.toml`。未经用户明确批准，不会迁移已有页面。
+| 配置项 | 改变什么 |
+|---|---|
+| `[wiki] lang` | **引擎**书写所用的语言（`en` · `ko` · `ja` · `zh`）— 页面语言不看这里，始终跟随你的对话 |
+| `[[category]]` | wiki 的文件夹结构，以及每个文件夹放什么 |
+| `[topic]` `[queue]` `[quiz]` | 这些文件夹的名字，以及一次测验出几道题 |
+| `[private] dirs` | 对你可索引、但永不提交的文件夹 |
+| `[models]` | 谁写初稿（`light`）、谁做校验（`heavy`） |
+| `[files]` · `legacy_dirs` | 三个特殊文件的名字，以及改名后仍继续扫描的旧文件夹 |
+| `[lint.banned_terms]` | 需要提醒的措辞（仅建议，不阻止） |
+
+最省事的做法: 把想要的效果告诉智能体，让它只修改 `llmwiki.config.toml`，然后用 `llmwiki config <项目路径>` 查看结果。未经用户明确批准，不会迁移已有页面。
 
 不需要MCP服务器、Docker、外部数据库、向量数据库或云服务。llmwiki在本地使用Bun、钩子、捕获守护进程、SQLite和git markdown。供智能体遵循的安装契约见 [`setup_text.md`](../setup_text.md)。
 

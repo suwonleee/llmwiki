@@ -59,14 +59,26 @@ To check that the wiki is compounding, paste this in that project's agent sessio
 Run /wiki-doctor for this project. Repair safe generated state and evidence-grounded page problems, then summarize what was fixed and what still needs attention. In Codex, run $wiki-doctor.
 ```
 
-Want a different wiki structure or language? Keep the engine code unchanged and edit one config:
+### Want it another way? One file
+
+The engine code stays untouched — everything below lives in one config:
 
 ```bash
 cd ~/llmwiki
-cp llmwiki.config.example.toml llmwiki.config.toml
+cp llmwiki.config.example.toml llmwiki.config.toml   # English, fully commented
 ```
 
-Describe the direction you want to your agent and ask it to change only `llmwiki.config.toml`. Existing pages are never migrated without your explicit approval.
+| Setting | What it changes |
+|---|---|
+| `[wiki] lang` | the language the **engine** writes in (`en` · `ko` · `ja` · `zh`) — your pages always follow your conversation, not this |
+| `[[category]]` | the wiki folders and what belongs in each |
+| `[topic]` `[queue]` `[quiz]` | those folder names, and how many questions a quiz session asks |
+| `[private] dirs` | folders indexed for you but never committed |
+| `[models]` | which model drafts (`light`) and which verifies (`heavy`) |
+| `[files]` · `legacy_dirs` | the three special file names, and old folders to keep scanning after a rename |
+| `[lint.banned_terms]` | wording to warn about (advisory only) |
+
+Easiest path: tell your agent what you want and ask it to edit only `llmwiki.config.toml`, then check the result with `llmwiki config <project-path>`. Existing pages are never migrated without your explicit approval.
 
 No MCP server, Docker, external database, vector database, or cloud service is required. llmwiki uses Bun, local hooks, a local capture daemon, local SQLite, and git markdown. See [`setup_text.md`](setup_text.md) for the installation contract the agent follows.
 

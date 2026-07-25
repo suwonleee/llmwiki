@@ -53,14 +53,26 @@ setup_text.md를 읽고, 지금 사용 중인 코딩 에이전트와 이 머신�
 이 프로젝트의 docs/wiki에 문서가 제대로 쌓이는지 확인해줘. 알맞은 llmwiki 상태·진행·lint 점검을 실행하고, 정상인 부분과 조치가 필요한 부분을 요약해줘.
 ```
 
-위키 구조나 언어를 바꾸고 싶다면 엔진 코드는 그대로 두고 설정 파일 하나만 편집합니다.
+### 내 방식대로 바꾸고 싶다면 — 파일 하나
+
+엔진 코드는 그대로 두고, 아래 항목은 전부 설정 파일 하나에서 바꿉니다.
 
 ```bash
 cd ~/llmwiki
-cp llmwiki.config.example.toml llmwiki.config.toml
+cp llmwiki.config.example.toml llmwiki.config.toml   # 영어 · 주석 상세
 ```
 
-원하는 방향을 에이전트에게 설명하고 `llmwiki.config.toml`만 바꾸도록 요청합니다. 기존 문서 이관은 사용자가 명시적으로 승인하기 전에는 실행되지 않습니다.
+| 설정 | 무엇이 바뀌나 |
+|---|---|
+| `[wiki] lang` | **엔진**이 쓰는 언어 (`en` · `ko` · `ja` · `zh`) — 페이지 언어는 이 값이 아니라 항상 대화 언어를 따릅니다 |
+| `[[category]]` | 위키 폴더 구성과 각 폴더에 담을 내용 |
+| `[topic]` `[queue]` `[quiz]` | 해당 폴더 이름, 그리고 퀴즈 한 세션의 문항 수 |
+| `[private] dirs` | 나에게는 인덱싱되지만 커밋되지 않는 폴더 |
+| `[models]` | 초안을 쓰는 모델(`light`)과 검증하는 모델(`heavy`) |
+| `[files]` · `legacy_dirs` | 특별한 파일 3개의 이름, 이름 변경 후에도 계속 훑을 옛 폴더 |
+| `[lint.banned_terms]` | 경고할 표현 (권고일 뿐 차단 안 함) |
+
+가장 쉬운 방법: 원하는 바를 에이전트에게 말하고 `llmwiki.config.toml`만 고치게 한 뒤, `llmwiki config <프로젝트-경로>`로 결과를 확인합니다. 기존 문서 이관은 사용자가 명시적으로 승인하기 전에는 실행되지 않습니다.
 
 MCP 서버·Docker·외부 데이터베이스·벡터 DB·클라우드 서비스는 필요 없습니다. llmwiki는 로컬의 Bun·훅·캡처 데몬·SQLite와 git markdown을 사용합니다. 에이전트가 따르는 설치 계약은 [`setup_text.md`](../setup_text.md)에 있습니다.
 
