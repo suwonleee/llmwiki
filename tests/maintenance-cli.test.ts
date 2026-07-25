@@ -53,9 +53,28 @@ describe("maintenance CLI", () => {
     expect(fileHash(database)).toBe(databaseBefore);
     expect(existsSync(noticeState)).toBe(false);
     expect(compact.exitCode).toBe(0);
-    expect(compact.stdout).toContain("dry-run");
+    expect(compact.stdout).not.toContain("committed"); // the default never compacts
     expect(cli("db-health", root, "--notice").exitCode).toBe(0);
     expect(existsSync(noticeState)).toBe(true);
+  });
+
+  // `--commit` on an ineligible database does nothing — but reporting that as "dry-run" reads as
+  // "you still have to run the real thing", which invites a needless VACUUM. Name the outcome.
+  test("compact --commit on an ineligible database reports no-action, not a dry-run", () => {
+    // Given: a fresh index, far below every compaction threshold.
+    const { root } = mkRepo();
+    cli("index", root);
+    const database = join(root, ".llmwiki", "index.db");
+    const databaseBefore = fileHash(database);
+
+    // When: compaction is explicitly committed.
+    const committed = cli("compact", root, "--commit");
+
+    // Then: the database is untouched and the outcome is named as no-action.
+    expect(committed.exitCode).toBe(0);
+    expect(committed.stdout).toContain("no-action");
+    expect(committed.stdout).not.toContain("dry-run");
+    expect(fileHash(database)).toBe(databaseBefore);
   });
 
   test("keeps wiki bytes identical by default and writes reversible cleanup only with commit", () => {

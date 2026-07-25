@@ -65,7 +65,7 @@ export function createMaintenanceHandlers(dependencies: MaintenanceDependencies)
         case "refused":
           die("compact refused: database integrity failed");
         case "not_needed":
-          console.log("compact: dry-run — not needed");
+          console.log("compact: no-action — not needed (below the compaction thresholds)");
           return;
         case "dry-run":
           console.log("compact: dry-run — eligible; rerun with --commit to optimize FTS and VACUUM");
