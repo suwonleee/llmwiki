@@ -6,7 +6,15 @@
 import type { Database } from "bun:sqlite";
 import { resolve as pathResolve, dirname as pathDirname } from "node:path";
 import { existsSync } from "node:fs";
-import { parseCitationFilename, stripCode, stripEvidence } from "./refs.ts";
+import {
+  buildLinkIndex,
+  lookupKey,
+  parseCitationFilename,
+  resolveWikiLink,
+  stripCode,
+  stripEvidence,
+  type LinkIndex,
+} from "./refs.ts";
 import { parseExcerpts, verifyExcerpt } from "./excerpt.ts";
 import { hasSecret } from "./screen.ts";
 import { L0_BUDGET, L0_LINT_BUDGET } from "./budgets.ts";
@@ -750,14 +758,14 @@ export class Linter {
     const out: Record<string, WikiDoc> = {};
     for (const d of docs) {
       if (this._isWiki(d)) continue;
-      const fn = d.filename.toLowerCase();
+      const fn = lookupKey(d.filename);
       if (!(fn in out)) out[fn] = d;
       const stripped = fn.replace(SRC_EXT, "");
       if (!(stripped in out)) out[stripped] = d;
-      const rp = (d.relative_path || "").toLowerCase();
+      const rp = lookupKey(d.relative_path || "");
       if (rp && !(rp in out)) out[rp] = d;
       if (d.title) {
-        const tk = d.title.toLowerCase();
+        const tk = lookupKey(d.title);
         if (!(tk in out)) out[tk] = d;
       }
     }
@@ -769,21 +777,21 @@ export class Linter {
     for (const d of docs) {
       if (!this._isWiki(d)) continue;
       const parts = d.relative_path.split("docs/wiki/");
-      const rel = (parts.length > 1 ? parts[parts.length - 1]! : parts[0]!).toLowerCase();
+      const rel = lookupKey(parts.length > 1 ? parts[parts.length - 1]! : parts[0]!);
       out[rel] = d;
-      const fn = d.filename.toLowerCase();
+      const fn = lookupKey(d.filename);
       if (!(fn in out)) out[fn] = d;
     }
     return out;
   }
 
   _resolveSource(filename: string, lookup: Record<string, WikiDoc>): WikiDoc | undefined {
-    const k = filename.trim().toLowerCase();
+    const k = lookupKey(filename.trim());
     return lookup[k] || lookup[k.replace(SRC_EXT, "")];
   }
 
   _resolveLink(link: string, lookup: Record<string, WikiDoc>): WikiDoc | undefined {
-    const k = link.split("#")[0]!.toLowerCase();
+    const k = lookupKey(link.split("#")[0]!);
     const tail = k.split("/").pop() || "";
     return lookup[k] || lookup[k + ".md"] || lookup[tail];
   }
@@ -793,7 +801,7 @@ export class Linter {
   }
 
   _isLedger(doc: WikiDoc): boolean {
-    return this.ledgerPages.has(doc.filename.toLowerCase());
+    return this.ledgerPages.has(lookupKey(doc.filename));
   }
 
   _p(doc: WikiDoc): string {

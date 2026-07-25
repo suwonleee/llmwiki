@@ -158,6 +158,59 @@ export function parseWikiLinks(content: string, currentDir: string): string[] {
   return paths;
 }
 
+// The lookup key for a path, filename, title or link target: case-folded AND Unicode-normalized.
+//
+// Normalization matters as much as case. The same Korean, Japanese or Chinese filename exists in
+// two byte forms — composed (NFC, 언어 = 2 code points) and decomposed (NFD, ᄋ+ᅥ+ᆫ… = 4) — and
+// which one lands on disk depends on the tool, not the author: macOS Finder, `unzip`, and
+// iCloud/Dropbox sync all decompose, while a keyboard and git generally compose. Compared raw,
+// those are simply different strings, so `[[5_topic/언어-설정]]` resolves to nothing and the
+// failure is silent: no edge is created, and the page quietly reads as an orphan.
+export function lookupKey(value: string): string {
+  return value.normalize("NFC").toLowerCase();
+}
+
+export interface LinkIndex {
+  readonly byName: Record<string, WikiDocument>;
+  readonly byRelpath: Record<string, WikiDocument>;
+}
+
+/** Name/path lookup for turning a citation or `[[wikilink]]` into a graph edge. */
+export function buildLinkIndex(docs: readonly WikiDocument[]): LinkIndex {
+  const byName: Record<string, WikiDocument> = {};
+  const byRelpath: Record<string, WikiDocument> = {};
+  for (const d of docs) {
+    const fn = lookupKey(d.filename);
+    if (!(fn in byName)) byName[fn] = d;
+    const stripped = fn.replace(_SRC_EXT, "");
+    if (!(stripped in byName)) byName[stripped] = d;
+    // key by relative path too, so code-path citations (`engine/db.py`) resolve
+    // to a graph edge — must match lint's _source_lookup resolution.
+    const rp = lookupKey(d.relative_path);
+    if (!(rp in byName)) byName[rp] = d;
+    if (d.title) {
+      const tl = lookupKey(d.title);
+      if (!(tl in byName)) byName[tl] = d;
+    }
+    byRelpath[rp] = d;
+    if (d.relative_path.includes("docs/wiki/")) {
+      byRelpath[lookupKey(d.relative_path.split("docs/wiki/")[1]!)] = d;
+    }
+  }
+  return { byName, byRelpath };
+}
+
+/**
+ * The page a `[[wikilink]]` points at, or undefined when it points at nothing.
+ *
+ * Single source of truth on purpose: lint reports a link as dangling exactly when this returns
+ * undefined, so a warning can never disagree with the graph the indexer actually built.
+ */
+export function resolveWikiLink(link: string, index: LinkIndex): WikiDocument | undefined {
+  const key = lookupKey(link.split("#")[0]!);
+  return index.byRelpath[key] ?? index.byRelpath[`${key}.md`] ?? index.byName[key.split("/").pop()!];
+}
+
 export function updateReferences(
   index: WikiIndex,
   conn: Database,
@@ -173,42 +226,20 @@ export function updateReferences(
     wikiRelDir = docDir.split("/docs/wiki/")[1] ?? "";
   }
 
-  const allDocs = index.listDocuments(conn);
-  const byName: Record<string, WikiDocument> = {};
-  const byRelpath: Record<string, WikiDocument> = {};
-  for (const d of allDocs) {
-    const fn = d.filename.toLowerCase();
-    if (!(fn in byName)) byName[fn] = d;
-    const stripped = fn.replace(_SRC_EXT, "");
-    if (!(stripped in byName)) byName[stripped] = d;
-    // key by relative path too, so code-path citations (`engine/db.py`) resolve
-    // to a graph edge — must match lint's _source_lookup resolution.
-    const rp = d.relative_path.toLowerCase();
-    if (!(rp in byName)) byName[rp] = d;
-    if (d.title) {
-      const tl = d.title.toLowerCase();
-      if (!(tl in byName)) byName[tl] = d;
-    }
-    byRelpath[rp] = d;
-    if (d.relative_path.includes("docs/wiki/")) {
-      const sub = d.relative_path.split("docs/wiki/")[1]!.toLowerCase();
-      byRelpath[sub] = d;
-    }
-  }
+  const linkIndex = buildLinkIndex(index.listDocuments(conn));
 
   const edges: [string, string, number | null][] = [];
   for (const m of content.matchAll(_CITATION_RE)) {
     const [filename, page] = parseCitationFilename(m[1]!);
-    const key = filename.toLowerCase();
-    const target = byName[key] ?? byName[key.replace(_SRC_EXT, "")];
+    const key = lookupKey(filename);
+    const target = linkIndex.byName[key] ?? linkIndex.byName[key.replace(_SRC_EXT, "")];
     if (target && String(target.id) !== docId) {
       edges.push([String(target.id), "cites", page]);
     }
   }
 
   for (const link of parseWikiLinks(content, wikiRelDir)) {
-    const key = link.split("#")[0]!.toLowerCase();
-    const target = byRelpath[key] ?? byRelpath[key + ".md"] ?? byName[key.split("/").pop()!];
+    const target = resolveWikiLink(link, linkIndex);
     if (target && String(target.id) !== docId) {
       edges.push([String(target.id), "links_to", null]);
     }
