@@ -80,6 +80,8 @@ describe("setup command contract", () => {
     expect(existsSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"))).toBe(false);
   });
 
+  // OpenCode 1.18.x prints `run --help` to stderr, so a stdout-only capture read a supported
+  // CLI as unsupported and refused to install. The gate must accept help on either stream.
   test("OpenCode dry-run accepts help text emitted only on stderr", () => {
     const opencodeStub = join(stubBin, "opencode");
     writeFileSync(
@@ -97,6 +99,23 @@ describe("setup command contract", () => {
     expect(existsSync(join(home, ".config", "opencode"))).toBe(false);
     expect(existsSync(join(home, ".local", "bin", "llmwiki"))).toBe(false);
     expect(existsSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"))).toBe(false);
+  });
+
+  // `--dry-run` is the documented read-only preflight, so the capability probe must not leave
+  // vendor state behind either: OpenCode persists under XDG_STATE_HOME, which defaults into
+  // $HOME/.local/state — a machine that only ever ran the preflight must stay untouched.
+  test("the OpenCode capability probe writes no state into HOME", () => {
+    const opencodeStub = join(stubBin, "opencode");
+    writeFileSync(
+      opencodeStub,
+      "#!/bin/sh\nSTATE=\"${XDG_STATE_HOME:-$HOME/.local/state}/opencode\"\nmkdir -p \"$STATE\"\n: > \"$STATE/probe-marker\"\nif [ \"${1:-}\" = run ]; then printf '%s\\n' --command; fi\nexit 0\n",
+    );
+    chmodSync(opencodeStub, 0o755);
+
+    const result = run(["--dry-run", "--harness", "opencode"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(existsSync(join(home, ".local", "state", "opencode"))).toBe(false);
   });
 
   test("unknown flags fail with usage exit 2", () => {
