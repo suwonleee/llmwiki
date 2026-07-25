@@ -36,8 +36,8 @@ afterEach(() => {
 
 describe("quiz ledger identity", () => {
   test("env identity is sanitized into a safe filename token", () => {
-    process.env.LLMWIKI_QUIZ_IDENTITY = "Suwon Lee!";
-    expect(quizIdentity("/anywhere")).toBe("suwon-lee");
+    process.env.LLMWIKI_QUIZ_IDENTITY = "Ada Lovelace!";
+    expect(quizIdentity("/anywhere")).toBe("ada-lovelace");
   });
 
   test("two identities keep isolated ledgers — one person's result never enters the other's curve", () => {

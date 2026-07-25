@@ -96,7 +96,7 @@ test("contributors are derived from git history, collapsing aliases via .mailmap
   mkdirSync(wiki, { recursive: true });
   git(repo, "init", "-q");
   git(repo, "config", "core.hooksPath", "/dev/null"); // isolate from the developer's global hooks
-  writeFileSync(join(repo, ".mailmap"), "Su Won <su@work> Suwon Lee <su@personal>\n", "utf-8");
+  writeFileSync(join(repo, ".mailmap"), "Ada Lovelace <ada@work> Ada L <ada@personal>\n", "utf-8");
 
   const commit = (name: string, email: string, file: string) => {
     writeFileSync(join(wiki, file), `---\ntitle: ${file}\n---\nbody\n`, "utf-8");
@@ -104,13 +104,13 @@ test("contributors are derived from git history, collapsing aliases via .mailmap
     // --no-verify: a developer's global commit-msg hook must not decide whether this test runs
     git(repo, "-c", `user.name=${name}`, "-c", `user.email=${email}`, "commit", "-q", "--no-verify", "-m", file);
   };
-  commit("Su Won", "su@work", "a.md");
-  commit("Suwon Lee", "su@personal", "b.md"); // same human, second identity
+  commit("Ada Lovelace", "ada@work", "a.md");
+  commit("Ada L", "ada@personal", "b.md"); // same human, second identity
   commit("Teammate", "mate@work", "c.md");
 
   const people = contributors(repo);
-  expect(people.map((p) => p.name).sort()).toEqual(["Su Won", "Teammate"]); // two people, not three
-  expect(people.find((p) => p.name === "Su Won")?.commits).toBe(2);
+  expect(people.map((p) => p.name).sort()).toEqual(["Ada Lovelace", "Teammate"]); // two people, not three
+  expect(people.find((p) => p.name === "Ada Lovelace")?.commits).toBe(2);
 });
 
 test("contributors degrades to empty outside a git repo instead of throwing", () => {
@@ -126,11 +126,11 @@ test("0_review owner renders as [→ name] in cold-start", () => {
   writeFileSync(join(repo, "docs", "wiki", "overview.md"), "---\ntitle: OV\n---\nhub", "utf-8");
   writeFileSync(
     join(review, "2026-07-07-direction.md"),
-    "---\ntitle: Direction?\nowner: suwon\n---\nQ. confirm?\n",
+    "---\ntitle: Direction?\nowner: dana\n---\nQ. confirm?\n",
     "utf-8",
   );
   const out = buildContext(repo);
-  expect(out).toContain("[→ suwon]");
+  expect(out).toContain("[→ dana]");
 });
 
 test("behind-upstream repo gets one team line; up-to-date repo stays silent", () => {
