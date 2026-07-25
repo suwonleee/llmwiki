@@ -37,7 +37,15 @@ claude
 setup_text.mdを読み、現在使っているコーディングエージェントとこのマシン向けにllmwikiをインストールしてください。ファイルの指示どおりに進め、ヘルスチェックまで実行し、私が手動で行う手順が残っていれば教えてください。
 ```
 
-インストール後は、好きなプロジェクトへ移動して普段どおり作業します。意味のあるセッションの最後に、Claude Code・OpenCodeでは `/wiki-save`、Codexでは `$wiki-save` を実行します。バックログと深いメンテナンスには、定期的に `/wiki-deep`（Codex: `$wiki-deep`）を使います。
+これが推奨インストール経路です。READMEは人向けの入口に留め、ハーネス分岐・ヘルスチェック・`PATH`・フック信頼・OS・復旧規則は、エージェント契約 [`setup_text.md`](../setup_text.md) と [インストールフロー参照](../reference/INSTALLATION_FLOW.md) に置きます。
+
+セットアップが正常終了したら、同じセットアップセッションでエージェントに依頼します。
+
+```text
+今インストールしたエンジンで /absolute/path/to/my-project に llmwiki を初期化してください。プロジェクトwikiを検証し、このコーディングエージェントのセッション終了コマンドも教えてください。
+```
+
+そのプロジェクトでコーディングエージェントを開き、普段どおり作業します。意味のあるセッションの最後に、Claude Code・OpenCodeでは `/wiki-save`、Codexでは `$wiki-save` を実行します。バックログと深いメンテナンスには、定期的に `/wiki-deep`（Codex: `$wiki-deep`）を使います。プロジェクトwikiに問題がありそうなら `/wiki-doctor`（Codex: `$wiki-doctor`）を実行します。
 
 wikiが正しく積み上がっているか確認するときは、そのプロジェクトのエージェントに貼り付けます。
 
@@ -71,62 +79,22 @@ MCPサーバー、Docker、外部データベース、ベクトルDB、クラウ
 
 核となるアイデア — LLMが維持し、人間は方向だけを決めるプロジェクトwiki — は [Andrej KarpathyのLLM-wikiノート](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)に由来します。参照した外部資料はそのノートただ一つで、設計とコードは独自実装です。
 
-## Claude Code 5分クイックスタート
+## 手動インストールの代替
+
+エージェントを使わず意図的に直接インストールする場合だけ使用します。ハーネスを一つ選び、検出済みの全ハーネスを配線する意図がなければ `auto` は使いません。
 
 ```bash
-git clone https://github.com/suwonleee/llmwiki.git
-cd llmwiki
-./setup.sh --harness claude              # ただの ./setup.sh でインストール済みハーネスを自動検出
-
-bun src/cli.ts init /path/to/your-project
-cd /path/to/your-project
-claude
+./setup.sh --harness claude
+# または: ./setup.sh --harness codex
+# または: ./setup.sh --harness opencode
 ```
 
-- 意味のあるセッションの締めは **`/wiki-save`** — 定期のdeepパス `/wiki-deep` · 質問と書き戻し `/wiki-ask` · 復習 `/wiki-quiz`
-- 自動配線: キャプチャデーモン · SessionStart/UserPromptSubmit読み込み注入 · `/wiki-*` コマンド
-- 健全性チェック: `bun src/cli.ts doctor`
-    - `llmwiki` ユーザーコマンドの実体はCodex/OpenCode配線が導入 — Claude単独インストールではCLIを `bun <clone>/src/cli.ts …` の形で使用
-
-## Codex 5分クイックスタート
-
-```bash
-git clone https://github.com/suwonleee/llmwiki.git
-cd llmwiki
-./setup.sh --harness codex
-export PATH="$HOME/.local/bin:$PATH"  # PATHにない場合のみ（setupが正確なコマンドを表示）
-
-# 初回のみ: 任意のプロジェクトでCodexを起動し /hooks を開いて llmwiki のフック2つを信頼する。
-cd /path/to/your-project
-llmwiki init .
-codex
-```
-
-- Codexプロンプトで: 意味のあるセッションの締め **`$wiki-save`** · 定期的に `$wiki-deep` · 質問と書き戻し `$wiki-ask` · 復習 `$wiki-quiz`
-- setupが導入するもの
-    - `~/.agents/skills` 配下の `$wiki-*` スキル4つ — 再実行時は旧 `$llmwiki-*` を短い名前へ安全に移行
-    - `$CODEX_HOME/hooks.json` へのnative `SessionStart`/`UserPromptSubmit` フックのマージ — 無関係な既存フックは保持
-    - `~/.local/bin` の `llmwiki` コマンド — `PATH` にない場合のみ正確な修正コマンドを表示
-- 確認: `llmwiki doctor`
-    - フックレビュー前は**初回アクション必要**と表示 — 注入が有効になったとは断定しない
-    - フック信頼の判定はCodexが所有 — フック変更後の真実源は `/hooks` 画面
-
-## OpenCode 5分クイックスタート
-
-```bash
-git clone https://github.com/suwonleee/llmwiki.git
-cd llmwiki
-./setup.sh --harness opencode
-
-cd /path/to/your-project
-llmwiki init .
-opencode
-```
-
-- Claude Codeと同じ構文: **`/wiki-save`** · `/wiki-deep` · `/wiki-ask` · `/wiki-quiz`
-- setupが導入するもの
-    - `$XDG_CONFIG_HOME/opencode/`（既定 `~/.config/opencode/`）へのグローバル `/wiki-*` カスタムコマンド + 読み込み注入プラグイン
-    - `~/.local/bin` の共有 `llmwiki` コマンド
+- setupが表示した次のコマンドをそのまま使用
+    - Claude-only: clone固定の `bun <clone>/src/cli.ts …`
+    - Codex/OpenCode: ユーザー用 `llmwiki …`
+- 表示された手動アクションを完了
+    - Codexのみ: `/hooks` で現在のllmwikiフック2つを確認・信頼
+- 全分岐・復旧基準: [`reference/INSTALLATION_FLOW.md`](../reference/INSTALLATION_FLOW.md)
 
 ## 複利のループ
 
@@ -230,7 +198,7 @@ src/           TypeScriptエンジン（Bunランタイム、bun:sqlite内蔵 �
 daemon/        install.sh（launchd/systemd/cron自動検出）+ autoupdate-*.sh（無人の事実パス）
 hooks/         sessionstart-inject.sh（コールドスタート注入）· userpromptsubmit-inject.sh（ターン毎ポインタ注入）
 adapters/      codex/（ネイティブフック hooks.json テンプレート）· opencode/（プラグイン1ファイル）
-skill/         wiki-save（セッション締め）·wiki-deep（deep定期パス）·wiki-ask·wiki-quiz（人間の記憶）（/コマンド）
+skill/         wiki-save（セッション締め）·wiki-deep（deep定期パス）·wiki-doctor（診断・修復）·wiki-ask·wiki-quiz（人間の記憶）（/コマンド）
 examples/      sample-wiki/ — 完成wikiの例（読み取り専用）。エンジンは非インデックス（IGNORE_DIRS）。**コピー禁止** — 実wikiは各プロジェクトの docs/wiki に自動生成。examples/README.md 参照
 tests/         bun:testスイート（chunker·refs·lint·extract·capture·db·source·review-scope·overview·gaps·quiz·マイグレーション）— `bun test`
 package.json·tsconfig.json   Bunメタデータ（typecheck用; ランタイムは .ts を直接実行）
@@ -256,7 +224,7 @@ package.json·tsconfig.json   Bunメタデータ（typecheck用; ランタイム
 - **Claude Code** — `git clone … && ./setup.sh`、以上
     - キャプチャ · 読み込み注入 · `/wiki-*` コマンドすべて自動配線
 - **Codex (OpenAI)** — `./setup.sh --harness codex`
-    - ユーザーCLI + `$wiki-*` スキル4つを導入し、`$CODEX_HOME/hooks.json` にnative `SessionStart`/`UserPromptSubmit` フックをマージ
+    - ユーザーCLI + `$wiki-*` スキル5つを導入し、`$CODEX_HOME/hooks.json` にnative `SessionStart`/`UserPromptSubmit` フックをマージ
     - 初回のみ: Codexを起動し `/hooks` で正確なコマンドをレビュー — 新規·変更フックは信頼されるまで実行されない
     - キャプチャは `$CODEX_HOME/sessions/**/*.jsonl[.zst]` を監視
     - ウォームスキルはCodex自体で動作 · 無人の `autoupdate`/`review` はClaude CLIが無い場合 `LLMWIKI_LLM_CMD` が必要
@@ -290,6 +258,7 @@ cd llmwiki
 # 3) エージェントのプロンプトでセッションを締める
 /wiki-save                               # セッションの締め（Codex: $wiki-save）
 /wiki-deep                               # deep定期パス（Codex: $wiki-deep）
+/wiki-doctor                             # このwikiを診断・修復（Codex: $wiki-doctor）
 /wiki-quiz                               # 人間の記憶ループ（Codex: $wiki-quiz）
 ```
 
@@ -299,7 +268,7 @@ cd llmwiki
 
 ## 設定（環境変数）— プロバイダ · モデル · CLI 非依存
 
-生成パス（autoupdate/review）は既定で `claude -p` + 最新のClaudeモデルを使い、無設定なら標準の挙動と完全に同一です。
+生成パス（autoupdate/review）は既定で `claude -p` + 下記の固定された組み込みモデルIDを使い、無設定なら標準の挙動と完全に同一です。
 
 | env | 既定値 | 用途 |
 |---|---|---|
@@ -331,8 +300,8 @@ cd llmwiki
     - `.gitignore` を自動シード — `.llmwiki/`（派生インデックス）はコミットされない
     - `.gitattributes` を自動シード — `docs/wiki/log.md merge=union`、同時appendが衝突せずマージ
 - **帰属**
-    - 無人作成ページに `author:`（git `user.name`）を自動スタンプ
-    - `0_review` の質問に `owner: <名前>` を付与可能 — コールドスタートが `[→ 名前]` と表示、自分宛でない質問はスキップ
+    - 著者情報はfrontmatterの `author:` に保存せず、`.mailmap` を反映したgit履歴から算出
+    - `0_review` の質問には `owner: <GitHub login>` を記録 — コールドスタートが `[→ login]` と表示、自分宛でない質問はスキップ
 - **チームメイトの引用は自己治癒**
     - 正しい形式の `.jsonl` 引用はインデックス再構築時に仮想ソースとして自動登録（トランスクリプトはどのみちローテーション）
     - チームメイトの引用が自分の `lint` ゲートを壊さない · 形式の壊れた引用は従来どおりerror

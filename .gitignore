@@ -21,4 +21,6 @@ node_modules/
 *.tsbuildinfo
 bun.lockb
 docs/
-reference/
+# internal working notes stay local; the agent installation flow is part of the shipped contract
+reference/*
+!reference/INSTALLATION_FLOW.md

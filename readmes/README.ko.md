@@ -37,7 +37,15 @@ claude
 setup_text.md를 읽고, 지금 사용 중인 코딩 에이전트와 이 머신에 llmwiki를 설치해줘. 파일의 지시를 정확히 따르고 상태 점검까지 실행한 뒤, 내가 직접 해야 할 단계가 남았다면 알려줘.
 ```
 
-설치가 끝나면 원하는 프로젝트로 이동해 평소처럼 작업합니다. 의미 있는 세션의 마지막에는 Claude Code·OpenCode에서 `/wiki-save`, Codex에서 `$wiki-save`를 입력합니다. 백로그와 깊은 정리는 주기적으로 `/wiki-deep`(Codex: `$wiki-deep`)을 실행합니다.
+이 방식이 권장 설치 경로입니다. README는 사람용 시작점만 담고, 하네스별 분기·상태 점검·`PATH`·훅 신뢰·OS·복구 규칙은 에이전트 계약 [`setup_text.md`](../setup_text.md)와 [설치 플로우 참조](../reference/INSTALLATION_FLOW.md)에 둡니다.
+
+설치가 정상으로 끝나면 같은 설치 세션에서 에이전트에게 요청합니다.
+
+```text
+방금 설치한 엔진으로 /내/프로젝트/절대경로에 llmwiki를 초기화해줘. 프로젝트 위키를 검증하고, 지금 코딩 에이전트의 세션 마감 명령도 알려줘.
+```
+
+그 프로젝트에서 코딩 에이전트를 열고 평소처럼 작업합니다. 의미 있는 세션의 마지막에는 Claude Code·OpenCode에서 `/wiki-save`, Codex에서 `$wiki-save`를 입력합니다. 백로그와 깊은 정리는 주기적으로 `/wiki-deep`(Codex: `$wiki-deep`)을 실행합니다. 프로젝트 위키가 이상해 보이면 `/wiki-doctor`(Codex: `$wiki-doctor`)를 실행합니다.
 
 위키가 제대로 쌓이는지 확인하려면 해당 프로젝트의 에이전트 입력창에 붙여 넣습니다.
 
@@ -71,62 +79,22 @@ MCP 서버·Docker·외부 데이터베이스·벡터 DB·클라우드 서비스
 
 핵심 아이디어 — LLM이 유지하고 사람은 방향만 잡는 프로젝트 위키 — 는 [Andrej Karpathy의 LLM-wiki 노트](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)에서 왔습니다. 참고한 외부 자료는 그 노트 하나뿐이며, 설계와 코드는 자체 구현입니다.
 
-## Claude Code 5분 빠른 시작
+## 수동 설치 대안
+
+에이전트 없이 직접 설치하려는 경우에만 사용합니다. 하네스 하나를 선택하고, 감지된 모든 하네스를 설치할 의도가 아니면 `auto`를 사용하지 않습니다.
 
 ```bash
-git clone https://github.com/suwonleee/llmwiki.git
-cd llmwiki
-./setup.sh --harness claude              # 그냥 ./setup.sh 하면 설치된 하네스를 자동 감지
-
-bun src/cli.ts init /path/to/your-project
-cd /path/to/your-project
-claude
+./setup.sh --harness claude
+# 또는: ./setup.sh --harness codex
+# 또는: ./setup.sh --harness opencode
 ```
 
-- 의미 있는 세션 마감은 **`/wiki-save`** — 주기 deep 패스 `/wiki-deep` · 질문·재기록 `/wiki-ask` · 사람 복습 `/wiki-quiz`
-- 자동 배선: 캡처 데몬 · SessionStart/UserPromptSubmit 읽기 주입 · `/wiki-*` 커맨드
-- 상태 점검: `bun src/cli.ts doctor`
-    - `llmwiki` 사용자 명령은 Codex/OpenCode 배선이 설치함 — Claude 단독 설치에서는 `bun <clone>/src/cli.ts …` 형태로 CLI 사용
-
-## Codex 5분 빠른 시작
-
-```bash
-git clone https://github.com/suwonleee/llmwiki.git
-cd llmwiki
-./setup.sh --harness codex
-export PATH="$HOME/.local/bin:$PATH"  # PATH에 없을 때만(setup이 정확한 명령을 출력함)
-
-# 최초 1회: 프로젝트에서 Codex를 시작하고 /hooks를 열어 llmwiki 훅 2개를 신뢰한다.
-cd /path/to/your-project
-llmwiki init .
-codex
-```
-
-- Codex 입력창에서: 의미 있는 세션 마감 **`$wiki-save`** · 주기적으로 `$wiki-deep` · 질문·재기록 `$wiki-ask` · 사람 복습 `$wiki-quiz`
-- setup이 설치하는 것
-    - `~/.agents/skills` 아래 `$wiki-*` 스킬 4개 — 재실행 시 이전 `$llmwiki-*` 설치를 짧은 이름으로 안전하게 이관
-    - `$CODEX_HOME/hooks.json`에 native `SessionStart`/`UserPromptSubmit` 훅 병합 — 무관한 기존 훅은 보존
-    - `~/.local/bin`에 `llmwiki` 명령 — `PATH`에 없을 때만 정확한 수정 명령을 출력
-- 확인: `llmwiki doctor`
-    - 훅 검토 전에는 **최초 1회 조치 필요**로 표시 — 주입이 이미 활성이라고 단정하지 않음
-    - 훅 신뢰 판정의 주체는 Codex — 훅 변경 후 진실원은 `/hooks` 화면
-
-## OpenCode 5분 빠른 시작
-
-```bash
-git clone https://github.com/suwonleee/llmwiki.git
-cd llmwiki
-./setup.sh --harness opencode
-
-cd /path/to/your-project
-llmwiki init .
-opencode
-```
-
-- Claude Code와 동일한 문법: **`/wiki-save`** · `/wiki-deep` · `/wiki-ask` · `/wiki-quiz`
-- setup이 설치하는 것
-    - `$XDG_CONFIG_HOME/opencode/`(기본 `~/.config/opencode/`)에 전역 `/wiki-*` custom command + 읽기 주입 플러그인
-    - `~/.local/bin`에 공유 `llmwiki` 명령
+- setup이 출력한 다음 명령을 그대로 사용
+    - Claude-only: clone 고정 `bun <clone>/src/cli.ts …`
+    - Codex/OpenCode: 사용자 `llmwiki …`
+- 출력된 수동 단계 완료
+    - Codex만: `/hooks`에서 현재 llmwiki 훅 2개 검토·신뢰
+- 전체 분기·복구 기준: [`reference/INSTALLATION_FLOW.md`](../reference/INSTALLATION_FLOW.md)
 
 ## 선순환 루프
 
@@ -230,7 +198,7 @@ src/           TypeScript 엔진 (Bun 런타임, bun:sqlite 내장 — node_modu
 daemon/        install.sh (launchd/systemd/cron 자동감지) + autoupdate-*.sh (무인 사실 패스)
 hooks/         sessionstart-inject.sh (cold-start 주입) · userpromptsubmit-inject.sh (턴별 포인터 주입)
 adapters/      codex/ (네이티브 훅 hooks.json 템플릿) · opencode/ (플러그인 1파일)
-skill/         wiki-save(세션 마감)·wiki-deep(deep 주기 패스)·wiki-ask·wiki-quiz(사람 기억) (/커맨드)
+skill/         wiki-save(세션 마감)·wiki-deep(deep 주기 패스)·wiki-doctor(진단·복구)·wiki-ask·wiki-quiz(사람 기억) (/커맨드)
 examples/      sample-wiki/ — 완성된 위키 예시(읽기 전용). 엔진이 인덱싱 안 함(IGNORE_DIRS). **복사하지 말 것** — 실제 위키는 각 프로젝트 docs/wiki에 자동 생성. examples/README.md 참조
 tests/         bun:test 스위트 (chunker·refs·lint·extract·capture·db·source·review-scope·overview·gaps·quiz·마이그레이션) — `bun test`
 package.json·tsconfig.json   Bun 메타(typecheck용; 런타임은 .ts 직접 실행)
@@ -256,7 +224,7 @@ package.json·tsconfig.json   Bun 메타(typecheck용; 런타임은 .ts 직접 �
 - **Claude Code** — `git clone … && ./setup.sh`, 끝
     - 캡처 · 읽기 주입 · `/wiki-*` 커맨드 전부 자동 배선
 - **Codex (OpenAI)** — `./setup.sh --harness codex`
-    - 사용자 CLI + `$wiki-*` 스킬 4개 설치, `$CODEX_HOME/hooks.json`에 native `SessionStart`/`UserPromptSubmit` 훅 병합
+    - 사용자 CLI + `$wiki-*` 스킬 5개 설치, `$CODEX_HOME/hooks.json`에 native `SessionStart`/`UserPromptSubmit` 훅 병합
     - 최초 1회: Codex를 시작해 `/hooks`에서 정확한 명령을 검토 — 새 훅·변경된 훅은 신뢰 전까지 실행되지 않음
     - 캡처는 `$CODEX_HOME/sessions/**/*.jsonl[.zst]` 감시
     - 웜 스킬은 Codex 자체로 동작 · 무인 `autoupdate`/`review`는 Claude CLI가 없으면 `LLMWIKI_LLM_CMD` 필요
@@ -290,6 +258,7 @@ cd llmwiki
 # 3) 에이전트 입력창에서 세션 마감
 /wiki-save                               # 세션 마감 (Codex: $wiki-save)
 /wiki-deep                               # deep 주기 패스 (Codex: $wiki-deep)
+/wiki-doctor                             # 이 위키 진단·복구 (Codex: $wiki-doctor)
 /wiki-quiz                               # 사람 기억 루프 (Codex: $wiki-quiz)
 ```
 
@@ -299,7 +268,7 @@ cd llmwiki
 
 ## 설정 (환경 변수) — provider · 모델 · CLI 무관
 
-생성 패스(autoupdate/review)는 기본값으로 `claude -p` + 최신 Claude 모델을 쓰며, 무설정이면 기본 동작과 완전히 동일합니다.
+생성 패스(autoupdate/review)는 기본값으로 `claude -p` + 아래에 표시된 고정 내장 모델 ID를 쓰며, 무설정이면 기본 동작과 완전히 동일합니다.
 
 | env | 기본값 | 용도 |
 |---|---|---|
@@ -331,8 +300,8 @@ cd llmwiki
     - `.gitignore` 자동 시딩 — `.llmwiki/`(파생 인덱스)는 커밋되지 않음
     - `.gitattributes` 자동 시딩 — `docs/wiki/log.md merge=union`, 동시 append가 충돌 없이 병합
 - **귀속**
-    - 무인 작성 페이지에 `author:`(git `user.name`) 자동 스탬프
-    - `0_review` 질문에 `owner: <이름>` 지정 가능 — cold-start가 `[→ 이름]`으로 표시, 자기 것 아닌 질문은 건너뜀
+    - 작성자 정보는 frontmatter의 `author:`에 저장하지 않고 `.mailmap`을 반영한 git 이력에서 계산
+    - `0_review` 질문에는 `owner: <GitHub login>`을 기록 — cold-start가 `[→ login]`으로 표시, 자기 것 아닌 질문은 건너뜀
 - **팀원 인용 자가치유**
     - 정상 형식의 `.jsonl` 인용은 인덱스 재빌드 때 가상 소스로 자동 등록 (transcript는 어차피 회전·소멸)
     - 팀원의 인용이 내 `lint` 게이트를 깨지 않음 · 형식이 깨진 인용은 여전히 error

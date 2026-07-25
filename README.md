@@ -37,12 +37,26 @@ Paste this into the agent:
 Read setup_text.md and install llmwiki for this machine and the coding agent I am currently using. Follow the file exactly, run the health checks, and tell me about any manual step that remains.
 ```
 
-Then move to any project and work as usual. At the end of a meaningful session, use `/wiki-save` in Claude Code or OpenCode, and `$wiki-save` in Codex. Run `/wiki-deep` (Codex: `$wiki-deep`) periodically for the backlog and deeper maintenance.
+This is the recommended installation path. The README stays human-facing; exact harness branches,
+health checks, `PATH` handling, hook trust, OS notes, and recovery rules live in the
+agent contract [`setup_text.md`](setup_text.md) and its
+[installation-flow reference](reference/INSTALLATION_FLOW.md).
+
+After setup reports healthy, stay in the same setup session and tell the agent:
+
+```text
+Initialize llmwiki for /absolute/path/to/my-project using the engine you just installed. Verify the project wiki, then tell me the close-out command for this coding agent.
+```
+
+Then open that project with your coding agent and work as usual. At the end of a meaningful session, use `/wiki-save` in Claude Code or
+OpenCode, and `$wiki-save` in Codex. Run `/wiki-deep` (Codex: `$wiki-deep`) periodically for
+the backlog and deeper maintenance. If a project wiki looks unhealthy, run `/wiki-doctor`
+(Codex: `$wiki-doctor`).
 
 To check that the wiki is compounding, paste this in that project's agent session:
 
 ```text
-Check whether this project's docs/wiki is accumulating correctly. Run the appropriate llmwiki health, status, and lint checks, then summarize what is healthy and what needs attention.
+Run /wiki-doctor for this project. Repair safe generated state and evidence-grounded page problems, then summarize what was fixed and what still needs attention. In Codex, run $wiki-doctor.
 ```
 
 Want a different wiki structure or language? Keep the engine code unchanged and edit one config:
@@ -71,62 +85,23 @@ No MCP server, Docker, external database, vector database, or cloud service is r
 
 The core idea — a project wiki that the LLM maintains and the human only steers — comes from [Andrej Karpathy's LLM-wiki note](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). That note is the only outside reference: the design and code here are original.
 
-## Claude Code quick start (5 minutes)
+## Manual fallback
+
+Use this only when you intentionally want to install without an agent. Select one harness;
+do not use `auto` unless you want every detected harness wired.
 
 ```bash
-git clone https://github.com/suwonleee/llmwiki.git
-cd llmwiki
-./setup.sh --harness claude              # plain ./setup.sh auto-detects installed harnesses
-
-bun src/cli.ts init /path/to/your-project
-cd /path/to/your-project
-claude
+./setup.sh --harness claude
+# or: ./setup.sh --harness codex
+# or: ./setup.sh --harness opencode
 ```
 
-- Close out a meaningful session with **`/wiki-save`** — periodic deep pass `/wiki-deep` · query/file back `/wiki-ask` · recall `/wiki-quiz`
-- Wired automatically: capture daemon · SessionStart/UserPromptSubmit read-injection · `/wiki-*` commands
-- Health check: `bun src/cli.ts doctor`
-    - the `llmwiki` user command ships with the Codex/OpenCode wirings; a Claude-only install drives the CLI as `bun <clone>/src/cli.ts …`
-
-## Codex quick start (5 minutes)
-
-```bash
-git clone https://github.com/suwonleee/llmwiki.git
-cd llmwiki
-./setup.sh --harness codex
-export PATH="$HOME/.local/bin:$PATH"  # setup prints this only when your PATH needs it
-
-# One-time activation: start Codex in any project, open /hooks, and trust both llmwiki hooks.
-cd /path/to/your-project
-llmwiki init .
-codex
-```
-
-- In the Codex prompt: **`$wiki-save`** after a meaningful session · `$wiki-deep` periodically · `$wiki-ask` to query/file back · `$wiki-quiz` for recall
-- What setup installs
-    - four `$wiki-*` skills under `~/.agents/skills` — re-running setup migrates earlier `$llmwiki-*` installs to the shorter names
-    - native `SessionStart`/`UserPromptSubmit` hooks merged into `$CODEX_HOME/hooks.json` — unrelated hooks untouched
-    - the `llmwiki` command in `~/.local/bin` — the exact `PATH` fix printed only when needed
-- Verify: `llmwiki doctor`
-    - before hook review it reports **one-time action required** — it never claims injection is already active
-    - Codex owns the hook-trust verdict: after hook changes, `/hooks` is the source of truth
-
-## OpenCode quick start (5 minutes)
-
-```bash
-git clone https://github.com/suwonleee/llmwiki.git
-cd llmwiki
-./setup.sh --harness opencode
-
-cd /path/to/your-project
-llmwiki init .
-opencode
-```
-
-- Same syntax as Claude Code: **`/wiki-save`** · `/wiki-deep` · `/wiki-ask` · `/wiki-quiz`
-- What setup installs
-    - global `/wiki-*` custom commands + the read-injection plugin under `$XDG_CONFIG_HOME/opencode/` (default `~/.config/opencode/`)
-    - the shared `llmwiki` command in `~/.local/bin`
+- Follow the exact next command printed by setup
+    - Claude-only: clone-pinned `bun <clone>/src/cli.ts …`
+    - Codex/OpenCode: user-level `llmwiki …`
+- Complete any printed manual action
+    - Codex only: review and trust the two current llmwiki hooks in `/hooks`
+- Full branch and recovery reference: [`reference/INSTALLATION_FLOW.md`](reference/INSTALLATION_FLOW.md)
 
 ## The Compounding Loop
 
@@ -179,6 +154,10 @@ A citation like `[^s1]: <session>.jsonl` points at a transcript that lives on **
     - the footnote definition line stays byte-identical to before — four parsers read it, and one of them keeps a teammate's citation from erroring
     - excerpts come only from `llmwiki excerpt` — verbatim, length-capped, secret-screened (raw transcripts routinely contain credentials)
     - judgment claims quote the human; factual claims carry a machine tool-record
+- **Compact page body**
+    - one concrete point per `-` line; supporting detail at `    -`; deeper detail at `        -`
+    - noun-phrase or telegraphic endings where natural; verbs retained when needed for an unambiguous actor, action, condition, or outcome
+    - no abstract framing, paragraph repetition, or child bullet that merely restates its parent
 - **Lint stance**
     - a quote is verified against the transcript only **where that transcript is readable**; on other clones lint stays silent — "can't check" must never read as "wrong"
 - **Zero retrieval cost**
@@ -230,7 +209,7 @@ src/           TypeScript engine (Bun runtime, bun:sqlite built in — zero node
 daemon/        install.sh (launchd/systemd/cron auto-detect) + autoupdate-*.sh (unattended fact pass)
 hooks/         sessionstart-inject.sh (cold-start) · userpromptsubmit-inject.sh (per-turn pointers)
 adapters/      codex/ (native-hook hooks.json template) · opencode/ (single-file plugin)
-skill/         wiki-save(session close-out)·wiki-deep(periodic deep pass)·wiki-ask·wiki-quiz(human memory) (/commands)
+skill/         wiki-save(session close-out)·wiki-deep(periodic deep pass)·wiki-doctor(diagnose/repair)·wiki-ask·wiki-quiz(human memory) (/commands)
 examples/      sample-wiki/ — a finished wiki example (read-only illustration). Not indexed by the engine (IGNORE_DIRS). **Do not copy** — real wikis are auto-generated under each project's docs/wiki. See examples/README.md
 tests/         bun:test suite (chunker·refs·lint·extract·capture·db·source·review-scope·overview·gaps·quiz·migrations) — `bun test`
 package.json·tsconfig.json   Bun metadata (for typecheck; the runtime executes .ts directly)
@@ -256,7 +235,7 @@ Storage principle — three homes, one owner each:
 - **Claude Code** — `git clone … && ./setup.sh`, done
     - capture · read-injection · `/wiki-*` commands all wired automatically
 - **Codex (OpenAI)** — `./setup.sh --harness codex`
-    - installs the user CLI + four `$wiki-*` skills, and merges native `SessionStart`/`UserPromptSubmit` hooks into `$CODEX_HOME/hooks.json`
+    - installs the user CLI + five `$wiki-*` skills, and merges native `SessionStart`/`UserPromptSubmit` hooks into `$CODEX_HOME/hooks.json`
     - one-time: start Codex and review the exact commands in `/hooks` — new or changed hooks stay skipped until trusted
     - capture watches `$CODEX_HOME/sessions/**/*.jsonl[.zst]`
     - warm skills run on Codex itself; unattended `autoupdate`/`review` still need `LLMWIKI_LLM_CMD` when the Claude CLI is absent
@@ -290,6 +269,7 @@ cd llmwiki
 # 3) close out the session in your agent's prompt
 /wiki-save                               # close out this session (Codex: $wiki-save)
 /wiki-deep                               # periodic DEEP pass (Codex: $wiki-deep)
+/wiki-doctor                             # diagnose + repair this wiki (Codex: $wiki-doctor)
 /wiki-quiz                               # human memory loop (Codex: $wiki-quiz)
 ```
 
@@ -297,9 +277,20 @@ cd llmwiki
 > `bun <clone>/src/daemon/wire.ts` (Claude) · `wire-codex.ts` / `wire-opencode.ts` (Codex/OpenCode) —
 > each wire script also takes `--revert` to undo its own changes.
 
+### Installation doctor vs project wiki doctor
+
+- `llmwiki doctor` checks the llmwiki installation: engine files, daemon, hooks, installed skills,
+  and the user CLI. Its `--fix` repairs wiring.
+- `llmwiki wiki-doctor <repo>` diagnoses one project's `docs/wiki/` read-only by default:
+  structure, exact index freshness, SQLite integrity/storage, lint, capture continuity, gap queue,
+  and semantic-review cadence. Add `--fix` to rebuild only safe derived/generated state.
+- `/wiki-doctor` (Codex: `$wiki-doctor`) runs the full repair workflow. After the deterministic
+  engine repair, the active agent reads the remaining lint/review evidence and fixes page content
+  without deleting provenance or inventing project direction.
+
 ## Configuration (environment variables) — provider · model · CLI agnostic
 
-The generative pass (autoupdate/review) defaults to `claude -p` + the latest Claude models; with no configuration at all, behavior is identical to stock.
+The generative pass (autoupdate/review) defaults to `claude -p` + the built-in pinned model IDs listed below; with no configuration at all, behavior is identical to stock.
 
 | env | default | purpose |
 |---|---|---|
@@ -323,6 +314,12 @@ The generative pass (autoupdate/review) defaults to `claude -p` + the latest Cla
     - any other harness calls the same commands from AGENTS.md or a startup prompt
     - per-turn injection is a progressive enhancement — the cold-start + `search` baseline is identical everywhere
 
+### Index maintenance escalation (bounded, opt-in)
+
+`/wiki-save` only calls `llmwiki db-health <repo> --notice`: it records a cooldown-governed health signal and may recommend `/wiki-deep`; it never compacts SQLite or runs semantic cleanup. `/wiki-deep` refreshes the index and lint first, compacts only after the health command marks the database eligible, then rechecks. It recommends the manual, dry-run `llmwiki wiki-clean <repo>` only when **post-compact** live indexed bytes still exceed 30 MiB. A free-ratio-only pressure resolved by compaction is reported as no cleanup action.
+
+The defaults are intentionally conservative and currently have no environment override: compaction requires all of **30 MiB database size**, **10% free-page ratio**, and a **1 MiB free-page floor**. The notice state cools down for **7 days** (unless eligibility changes or indexed bytes grow by 10%). The reversible cleanup classifier considers eligible old pages after **180 days**; gap reporting retains the **20** most-recent resolved rows. `wiki-clean --date YYYY-MM-DD` only supplies a deterministic review date — neither `wiki-clean --commit` nor `wiki-clean-apply` is ever part of save/deep automation.
+
 ## Team use (sharing one project's wiki)
 
 Solo is the default and needs none of this — everything below is additive and silent for a single user. With several people on one project, each runs their own local engine (own capture daemon, own queue) and condenses **their own sessions** into the shared `docs/wiki/`; sharing is plain git.
@@ -331,8 +328,8 @@ Solo is the default and needs none of this — everything below is additive and 
     - `.gitignore` seeded — `.llmwiki/` (the derived index) never gets committed
     - `.gitattributes` seeded — `docs/wiki/log.md merge=union`, so concurrent appends merge instead of conflicting
 - **Attribution**
-    - unattended writes stamp `author:` (from git `user.name`) into page frontmatter
-    - a `0_review` question can carry `owner: <name>` — cold-start shows it as `[→ name]`, so teammates skip questions that aren't theirs
+    - authorship is derived from git history (`.mailmap`-aware); pages never stamp `author:` into frontmatter
+    - a `0_review` question carries `owner: <GitHub login>` — cold-start shows it as `[→ login]`, so teammates skip questions that aren't theirs
 - **Teammate citations self-heal**
     - every clean cited `.jsonl` is registered as a virtual source on index rebuild (transcripts rotate anyway)
     - a teammate's citation never breaks your `lint` gate; malformed citations still error

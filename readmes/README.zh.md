@@ -37,7 +37,15 @@ claude
 请阅读setup_text.md，为这台机器和我当前使用的编码智能体安装llmwiki。严格按照文件执行，完成健康检查，并告诉我是否还有必须手动完成的步骤。
 ```
 
-安装完成后，进入任何项目，照常工作。一次有意义的会话结束时，在Claude Code或OpenCode中输入 `/wiki-save`，在Codex中输入 `$wiki-save`。定期使用 `/wiki-deep`（Codex: `$wiki-deep`）处理积压并做深度维护。
+这是推荐的安装路径。README只保留面向人的入口；harness分支、健康检查、`PATH`、钩子信任、OS和恢复规则位于智能体契约 [`setup_text.md`](../setup_text.md) 及其[安装流程参考](../reference/INSTALLATION_FLOW.md)。
+
+setup正常完成后，在同一个安装会话中告诉智能体：
+
+```text
+使用刚安装的引擎，在 /absolute/path/to/my-project 初始化 llmwiki。验证项目wiki，并告诉我这个编码智能体的会话收尾命令。
+```
+
+然后在该项目中打开编码智能体并照常工作。一次有意义的会话结束时，在Claude Code或OpenCode中输入 `/wiki-save`，在Codex中输入 `$wiki-save`。定期使用 `/wiki-deep`（Codex: `$wiki-deep`）处理积压并做深度维护。如果项目 wiki 看起来有问题，运行 `/wiki-doctor`（Codex: `$wiki-doctor`）。
 
 要检查wiki是否正在正确积累，请在目标项目的智能体会话中粘贴：
 
@@ -71,62 +79,22 @@ cp llmwiki.config.example.toml llmwiki.config.toml
 
 核心想法 — 由 LLM 维护、人只负责把握方向的项目 wiki — 来自 [Andrej Karpathy 的 LLM-wiki 笔记](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)。外部参考仅此一篇，设计与代码均为自研。
 
-## Claude Code 5 分钟快速开始
+## 手动安装备选
+
+仅在明确不使用智能体而直接安装时使用。选择一个harness；除非确实要接入所有已检测harness，否则不要使用 `auto`。
 
 ```bash
-git clone https://github.com/suwonleee/llmwiki.git
-cd llmwiki
-./setup.sh --harness claude              # 直接 ./setup.sh 会自动检测已装的 harness
-
-bun src/cli.ts init /path/to/your-project
-cd /path/to/your-project
-claude
+./setup.sh --harness claude
+# 或: ./setup.sh --harness codex
+# 或: ./setup.sh --harness opencode
 ```
 
-- 一次有意义的会话结束时输入 **`/wiki-save`** — 周期深度整理 `/wiki-deep` · 提问与回填 `/wiki-ask` · 复习 `/wiki-quiz`
-- 自动接线: 捕获守护进程 · SessionStart/UserPromptSubmit 读取注入 · `/wiki-*` 命令
-- 健康检查: `bun src/cli.ts doctor`
-    - `llmwiki` 用户命令由 Codex/OpenCode 接线安装 — 仅装 Claude 时以 `bun <clone>/src/cli.ts …` 形式使用 CLI
-
-## Codex 5 分钟快速开始
-
-```bash
-git clone https://github.com/suwonleee/llmwiki.git
-cd llmwiki
-./setup.sh --harness codex
-export PATH="$HOME/.local/bin:$PATH"  # 仅当 PATH 缺失时需要（setup 会打印确切命令）
-
-# 仅一次: 在任意项目里启动 Codex，打开 /hooks，信任两个 llmwiki 钩子。
-cd /path/to/your-project
-llmwiki init .
-codex
-```
-
-- 在 Codex 输入框: 有意义的会话收尾 **`$wiki-save`** · 周期性 `$wiki-deep` · 提问与回填 `$wiki-ask` · 复习 `$wiki-quiz`
-- setup 安装的内容
-    - `~/.agents/skills` 下的 4 个 `$wiki-*` 技能 — 重跑 setup 会把旧的 `$llmwiki-*` 安全迁移到短名字
-    - 把原生 `SessionStart`/`UserPromptSubmit` 钩子合并进 `$CODEX_HOME/hooks.json` — 不碰无关的既有钩子
-    - `~/.local/bin` 里的 `llmwiki` 命令 — 仅当 `PATH` 缺失时打印确切的修复命令
-- 验证: `llmwiki doctor`
-    - 钩子审查之前显示**需要一次性操作** — 不会断言注入已经生效
-    - 钩子信任的裁决权在 Codex — 钩子变更后，`/hooks` 界面才是事实来源
-
-## OpenCode 5 分钟快速开始
-
-```bash
-git clone https://github.com/suwonleee/llmwiki.git
-cd llmwiki
-./setup.sh --harness opencode
-
-cd /path/to/your-project
-llmwiki init .
-opencode
-```
-
-- 与 Claude Code 相同的语法: **`/wiki-save`** · `/wiki-deep` · `/wiki-ask` · `/wiki-quiz`
-- setup 安装的内容
-    - `$XDG_CONFIG_HOME/opencode/`（默认 `~/.config/opencode/`）下的全局 `/wiki-*` 自定义命令 + 读取注入插件
-    - `~/.local/bin` 里的共享 `llmwiki` 命令
+- 原样使用setup输出的下一条命令
+    - Claude-only: 固定到clone的 `bun <clone>/src/cli.ts …`
+    - Codex/OpenCode: 用户级 `llmwiki …`
+- 完成输出中的手动操作
+    - 仅Codex: 在 `/hooks` 中检查并信任两个当前llmwiki钩子
+- 完整分支与恢复规则: [`reference/INSTALLATION_FLOW.md`](../reference/INSTALLATION_FLOW.md)
 
 ## 复利循环
 
@@ -230,7 +198,7 @@ src/           TypeScript 引擎（Bun 运行时，内置 bun:sqlite — 零 nod
 daemon/        install.sh（launchd/systemd/cron 自动检测）+ autoupdate-*.sh（无人值守事实通道）
 hooks/         sessionstart-inject.sh（冷启动注入）· userpromptsubmit-inject.sh（每轮指针注入）
 adapters/      codex/（原生钩子 hooks.json 模板）· opencode/（单文件插件）
-skill/         wiki-save（会话收尾）·wiki-deep（周期深度整理）·wiki-ask·wiki-quiz（人的记忆）（/命令）
+skill/         wiki-save（会话收尾）·wiki-deep（周期深度整理）·wiki-doctor（诊断与修复）·wiki-ask·wiki-quiz（人的记忆）（/命令）
 examples/      sample-wiki/ — 一个完成态 wiki 示例（只读展示）。引擎不索引（IGNORE_DIRS）。**请勿复制** — 真实 wiki 会在各项目 docs/wiki 下自动生成。见 examples/README.md
 tests/         bun:test 套件（chunker·refs·lint·extract·capture·db·source·review-scope·overview·gaps·quiz·迁移）— `bun test`
 package.json·tsconfig.json   Bun 元数据（供 typecheck; 运行时直接执行 .ts）
@@ -256,7 +224,7 @@ package.json·tsconfig.json   Bun 元数据（供 typecheck; 运行时直接执�
 - **Claude Code** — `git clone … && ./setup.sh`，完事
     - 捕获 · 读取注入 · `/wiki-*` 命令全部自动接线
 - **Codex (OpenAI)** — `./setup.sh --harness codex`
-    - 安装用户 CLI + 4 个 `$wiki-*` 技能，并把原生 `SessionStart`/`UserPromptSubmit` 钩子合并进 `$CODEX_HOME/hooks.json`
+    - 安装用户 CLI + 5 个 `$wiki-*` 技能，并把原生 `SessionStart`/`UserPromptSubmit` 钩子合并进 `$CODEX_HOME/hooks.json`
     - 仅一次: 启动 Codex，在 `/hooks` 里审查确切命令 — 新钩子·改动过的钩子在被信任前不会执行
     - 捕获监视 `$CODEX_HOME/sessions/**/*.jsonl[.zst]`
     - 温热技能靠 Codex 本身即可运行 · 无人值守的 `autoupdate`/`review` 在缺少 Claude CLI 时需要 `LLMWIKI_LLM_CMD`
@@ -290,6 +258,7 @@ cd llmwiki
 # 3) 在智能体输入框里收尾会话
 /wiki-save                               # 会话收尾（Codex: $wiki-save）
 /wiki-deep                               # 周期深度整理（Codex: $wiki-deep）
+/wiki-doctor                             # 诊断并修复此 wiki（Codex: $wiki-doctor）
 /wiki-quiz                               # 人的记忆循环（Codex: $wiki-quiz）
 ```
 
@@ -299,7 +268,7 @@ cd llmwiki
 
 ## 配置（环境变量）— 供应商 · 模型 · CLI 无关
 
-生成通道（autoupdate/review）默认使用 `claude -p` + 最新 Claude 模型；完全不配置时行为与出厂默认一致。
+生成通道（autoupdate/review）默认使用 `claude -p` + 下表所列的内置固定模型ID；完全不配置时行为与出厂默认一致。
 
 | env | 默认值 | 用途 |
 |---|---|---|
@@ -331,8 +300,8 @@ cd llmwiki
     - 自动播种 `.gitignore` — `.llmwiki/`（派生索引）永不入库
     - 自动播种 `.gitattributes` — `docs/wiki/log.md merge=union`，并发 append 无冲突合并
 - **署名**
-    - 无人值守写入的页面自动盖上 `author:`（取 git `user.name`）
-    - `0_review` 的问题可带 `owner: <名字>` — 冷启动显示为 `[→ 名字]`，队友可跳过不属于自己的问题
+    - 作者信息不写入frontmatter的 `author:`，而是从考虑 `.mailmap` 的git历史中计算
+    - `0_review` 的问题记录 `owner: <GitHub login>` — 冷启动显示为 `[→ login]`，队友可跳过不属于自己的问题
 - **队友引用自愈**
     - 格式正确的 `.jsonl` 引用会在索引重建时自动登记为虚拟来源（transcript 本来就会轮转消失）
     - 队友的引用不会打破你的 `lint` 门 · 格式坏掉的引用照旧报错
