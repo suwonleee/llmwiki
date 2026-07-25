@@ -5,7 +5,7 @@ import type { Database } from "bun:sqlite";
 
 // Bump whenever a change here would cut chunks differently — db.ts invalidates the existing
 // chunks on mismatch so a wiki never carries two chunkings at once.
-export const CHUNKER_VERSION = "2-script-aware-tokens";
+export const CHUNKER_VERSION = "3-three-rate-tokens";
 export const CHUNK_SIZE = 512;
 export const CHUNK_OVERLAP = 128;
 export const MIN_CHUNK_TOKENS = 32;
@@ -14,22 +14,29 @@ export const MAX_CHUNK_CHARS = 10_000;
 const SENTENCE_RE = /(?<=[.!?。！？])\s+/;
 const HEADER_RE = /^(#{1,6})\s+(.+)$/m;
 
-// Characters that a tokenizer spends roughly one token on each: Hangul (composed syllables and
-// the jamo a decomposed filename or paste is made of), kana, CJK ideographs, and CJK punctuation.
-// Everything else keeps English's four-characters-to-a-token rule.
-const CJK_RE = /[ᄀ-ᇿ　-〿぀-ヿ㐀-䶿一-鿿ꥠ-꥿가-퟿豈-﫿＀-ﾟ]/gu;
+// Scripts a tokenizer spends roughly a whole token on per character: the CJK family (Hangul —
+// composed syllables and the jamo a decomposed paste is made of — kana, ideographs, CJK
+// punctuation) plus the dense unspaced scripts of South-East Asia.
+const DENSE_RE =
+  /[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}\p{scx=Thai}\p{scx=Lao}\p{scx=Khmer}\p{scx=Myanmar}]/gu;
+// Everything else outside ASCII — Cyrillic, Greek, Arabic, Hebrew, the Indic scripts, and Latin
+// letters carrying a diacritic. Roughly two characters to a token.
+const NON_ASCII_RE = /[^\x00-\x7F]/gu;
 
 // How many tokens this text is worth — the budget every chunk boundary is measured against.
 //
-// Script matters and a single ratio cannot serve both: English runs about four characters to a
-// token, Korean/Japanese/Chinese about one. Estimating everything at chars ÷ 4 therefore let a
-// CJK chunk grow three to four times an English chunk's real size for the same nominal budget,
-// so a Korean wiki quietly paid several times the context per retrieved hit — a cost that only
-// ever grows with the wiki. Counting each script at its own rate makes CHUNK_SIZE mean the same
-// thing in every language.
+// One ratio cannot serve every script. English runs about four characters to a token; Cyrillic,
+// Greek, Arabic and the Indic scripts about two; Korean, Japanese, Chinese and Thai about one.
+// Estimating everything at chars ÷ 4 therefore cut a CJK chunk three to four times larger, and a
+// Cyrillic or Thai one about twice as large, as the English chunk the same budget was meant to
+// buy. No number is visible to the reader — they simply pay that multiple in context on every
+// retrieved hit, forever, for writing in their own language. Three rates make CHUNK_SIZE mean the
+// same thing everywhere.
 export function estimateTokens(text: string): number {
-  const cjk = (text.match(CJK_RE) ?? []).length;
-  return Math.max(1, Math.floor(cjk + (text.length - cjk) / 4));
+  const dense = (text.match(DENSE_RE) ?? []).length;
+  const nonAscii = (text.match(NON_ASCII_RE) ?? []).length;
+  const ascii = text.length - nonAscii;
+  return Math.max(1, Math.floor(dense + (nonAscii - dense) / 2 + ascii / 4));
 }
 
 export interface Chunk {

@@ -36,6 +36,25 @@ describe("estimateTokens across scripts", () => {
     expect(ratio).toBeGreaterThan(0.5);
     expect(ratio).toBeLessThan(2); // was ~2.3 when every character counted as a quarter token
   });
+
+  test("scripts that are neither Latin nor CJK are not counted as if they were English", () => {
+    // Cyrillic, Greek, Arabic, Hebrew and the Indic scripts run around two characters to a token,
+    // so chars ÷ 4 halves them. They were left on the English rate when CJK was fixed.
+    for (const text of [
+      "конвейер развёртывания выполняет миграции",
+      "ο αγωγός ανάπτυξης εκτελεί μεταναστεύσεις",
+      "خط أنابيب النشر ينفذ عمليات الترحيل",
+      "תהליך הפריסה מריץ מיגרציות לפני השחרור",
+      "तैनाती पाइपलाइन रिलीज़ से पहले माइग्रेशन चलाती है",
+    ]) {
+      expect(estimateTokens(text), text).toBeGreaterThan(Math.floor(text.length / 4));
+    }
+  });
+
+  test("Thai is dense and unspaced, so it counts like CJK rather than like Cyrillic", () => {
+    const thai = "ไปป์ไลน์การปรับใช้จะรันการย้ายฐานข้อมูล";
+    expect(estimateTokens(thai)).toBeGreaterThanOrEqual([...thai].length * 0.9);
+  });
 });
 
 describe("chunk size across scripts", () => {
