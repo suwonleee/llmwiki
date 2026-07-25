@@ -1,4 +1,5 @@
 import * as capture from "../engine/capture.ts";
+import { today } from "../engine/today.ts";
 import { runDoctor, type DoctorHarness } from "../engine/doctor.ts";
 import { refreshGapQueue } from "../engine/gaps.ts";
 import { migrate } from "../engine/migrate.ts";
@@ -116,7 +117,7 @@ export function createMaintenanceHandlers(dependencies: MaintenanceDependencies)
       die("doctor --harness must be one of: all, codex, claude, opencode");
     },
     gaps: (args) => {
-      const date = getFlagValue(args, "--date") || new Date().toISOString().slice(0, 10);
+      const date = getFlagValue(args, "--date") || today();
       const result = refreshGapQueue(args.positionals[0] ?? die("gaps <workspace> required"), date, {
         check: Boolean(args.flags["--check"]),
       });

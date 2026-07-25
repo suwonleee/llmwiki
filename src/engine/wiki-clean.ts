@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { getConfig } from "./config.ts";
+import { today } from "./today.ts";
 import { WikiIndex } from "./db.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import { classifyTier, type AmbiguousReason, type AutoReason, type ProtectionReason } from "./tiering.ts";
@@ -35,7 +36,7 @@ function sha256(value: string | Uint8Array): string {
 }
 
 function today(): string {
-  return new Date().toISOString().slice(0, 10);
+  return today();
 }
 
 function wikiFiles(dir: string): readonly string[] {

@@ -9,6 +9,7 @@
 // human to act on. Single WRITE pass (no VERIFY second model).
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { getConfig, isRepoKorean, renderBodyStyleRule } from "./config.ts";
+import { today as todayLocal } from "./today.ts";
 import { createHash } from "node:crypto";
 import { basename, join, relative as relpath, resolve } from "node:path";
 import { llm } from "./claude.ts";
@@ -261,7 +262,7 @@ export interface ReviewHealth {
 }
 
 /** Inspect semantic-review cadence without building briefs, reindexing, or invoking an LLM. */
-export function inspectReviewHealth(ws: string, today = new Date().toISOString().slice(0, 10)): ReviewHealth {
+export function inspectReviewHealth(ws: string, today = todayLocal()): ReviewHealth {
   const root = resolve(ws);
   const state = _readState(root);
   return {

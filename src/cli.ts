@@ -4,6 +4,7 @@
 // rebuildable derived index. No server, no MCP registration required.
 // allow: SIZE_OK — stable CLI dispatch remains co-located with legacy handlers to preserve command/help ordering; parsing and maintenance commands now have dedicated boundaries, while further migration is outside this behavior-preserving Todo.
 import { WikiIndex, dedupeByPage } from "./engine/db.ts";
+import { today } from "./engine/today.ts";
 import { MissingCliFlagValueError, parseCliArgs, type ParsedCliArgs as Parsed } from "./cli-args.ts";
 import { createMaintenanceHandlers } from "./commands/maintenance.ts";
 import * as excerpt from "./engine/excerpt.ts";
@@ -275,7 +276,7 @@ async function cmdAutoupdate(p: Parsed) {
 async function cmdReview(p: Parsed) {
   const ws = p.positionals[0] ?? die("review <workspace> required");
   const commit = !!p.flags["--commit"];
-  const date = (p.flags["--date"] as string) || new Date().toISOString().slice(0, 10);
+  const date = (p.flags["--date"] as string) || today();
   const r = await review(ws, {
     commit,
     minPages: p.flags["--min-pages"] ? parseInt(p.flags["--min-pages"] as string, 10) : 2,

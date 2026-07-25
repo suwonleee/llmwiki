@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync,
 import { join, resolve } from "node:path";
 import { effectiveKo, getConfig, resolveLang, type WikiConfig } from "./config.ts";
 import { parseLedger, renderLedger, type QuizEntry } from "./quiz.ts";
+import { today } from "./today.ts";
 import { WikiIndex } from "./db.ts";
 import { updateReferences, autoRegisterCitedTranscripts } from "./refs.ts";
 import { Linter, type WikiIndexLike } from "./lint.ts";
@@ -220,7 +221,7 @@ export function migrate(
     }
   }
   for (const l of ledgers) {
-    writeRepoFile(l.file, renderLedger(l.entries, new Date().toISOString().slice(0, 10), resolveLang(cfg)));
+    writeRepoFile(l.file, renderLedger(l.entries, today(), resolveLang(cfg)));
   }
   writeRepoFile(join(wiki, SCHEMA_VERSION_FILE), schemaSnapshot(cfg) + "\n");
 

@@ -17,6 +17,7 @@ import { inspectDatabaseHealth, compactDatabase, type DatabaseHealthReport } fro
 import { WikiIndex } from "./db.ts";
 import { parseQueue } from "./gaps.ts";
 import { Linter, type LintIssue } from "./lint.ts";
+import { today as todayLocal } from "./today.ts";
 import { normalizeOverview } from "./overview.ts";
 import { rebuildReferenceGraph } from "./refs.ts";
 import { citedTranscripts, reconcileReflected } from "./reconcile.ts";
@@ -377,7 +378,7 @@ export function runWikiDoctor(
   const fix = options.fix === true;
   const actions: WikiDoctorAction[] = [];
   const cfg = getConfig(root);
-  const today = options.today ?? new Date().toISOString().slice(0, 10);
+  const today = options.today ?? todayLocal();
   let workspaceDirectory = false;
   try {
     workspaceDirectory = statSync(root).isDirectory();

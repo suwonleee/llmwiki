@@ -5,6 +5,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import * as capture from "./capture.ts";
+import { today as todayLocal } from "./today.ts";
 import { getConfig, logDirs, pickLangValue, resolveWikiLang, type WikiConfig } from "./config.ts";
 import { render } from "./extract.ts";
 import { sourceForKind, sourceForPath } from "./source.ts";
@@ -83,7 +84,7 @@ export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(w
   // /wiki-quiz + quiz-record). Deliberately excluded from index/search/cold-start — see quiz.ts.
   mkdirSync(join(wiki, cfg.quizDir), { recursive: true });
   const name = basename(root);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocal();
   const lang = resolveWikiLang(root, cfg); // unset config → this session's own language
   const overview = join(wiki, cfg.files.overview);
   if (!repoFileExists(overview) && !repoFileExists(join(wiki, cfg.files.l0))) {

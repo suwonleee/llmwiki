@@ -24,14 +24,16 @@
 //     scheduling), in the gap-queue pattern: one human-readable line per item plus
 //     a machine marker (<!-- quiz:{json} -->). Engine-owned; hand-editing markers is
 //     unsupported (any quiz-record rewrites the file whole).
-//   • Dates are day-granular UTC YYYY-MM-DD (the engine-wide convention). An item asked today
-//     is never re-selected today — the minimum interval really is 1 day.
+//   • Dates are day-granular YYYY-MM-DD on the READER's calendar (the engine-wide convention —
+//     see today.ts), so "due today" means today where the person actually is. An item asked
+//     today is never re-selected today — the minimum interval really is 1 day.
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { resolveWikiLang, getConfig, isHumanReviewDir, logDirs, resolveLang, type LangCatalog, type WikiConfig, type WikiLang } from "./config.ts";
 import { parseFrontmatter } from "./lint.ts";
 import { writeRepoFile } from "./repo-write.ts";
+import { addDays, today } from "./today.ts";
 
 // Box intervals in days. Ebbinghaus reviews are minutes/hours/days, but a chat-ritual quiz
 // can't fire sub-daily — so the curve is flattened to day granularity with the classic
@@ -75,14 +77,8 @@ export interface QuizPick {
   candidate?: QuizCandidate; // new picks
 }
 
-export function todayUTC(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-export function addDays(iso: string, days: number): string {
-  const t = Date.parse(iso + "T00:00:00Z");
-  return new Date(t + days * 86_400_000).toISOString().slice(0, 10);
-}
+// A quiz is due on the reader's calendar day, not on UTC's — see today.ts.
+export { addDays, today };
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -343,7 +339,7 @@ export interface QuizSelection {
 
 export function selectNext(ws: string, opts: { limit?: number; date?: string } = {}): QuizSelection {
   const root = resolve(ws);
-  const date = opts.date ?? todayUTC();
+  const date = opts.date ?? today();
   // Session size: [quiz] questions is the config default; QUIZ_MAX_QUESTIONS the fixed cap.
   const limit = Math.min(QUIZ_MAX_QUESTIONS, Math.max(1, opts.limit ?? getConfig(root).quizQuestions));
   const { entries } = loadLedger(root);
@@ -395,7 +391,7 @@ export function recordResult(
 ): RecordOutcome {
   const root = resolve(ws);
   const cfg = getConfig(root);
-  const date = opts.date ?? todayUTC();
+  const date = opts.date ?? today();
   if (!RESULTS.has(opts.result)) throw new Error(`result must be correct|wrong|skip: ${JSON.stringify(opts.result)}`);
   if (!DATE_RE.test(date)) throw new Error(`--date must be YYYY-MM-DD: ${JSON.stringify(date)}`);
   const page = normalizePage(opts.page);
@@ -451,7 +447,7 @@ export interface QuizStatus {
 }
 
 export function quizStatus(ws: string, opts: { date?: string } = {}): QuizStatus {
-  const date = opts.date ?? todayUTC();
+  const date = opts.date ?? today();
   const cfg = getConfig(ws);
   const sel = selectNext(ws, { limit: 1, date });
   const { entries } = loadLedger(ws);
@@ -481,7 +477,7 @@ export function quizStatus(ws: string, opts: { date?: string } = {}): QuizStatus
 export function dueCount(ws: string, date?: string): number {
   try {
     const root = resolve(ws);
-    const d = date ?? todayUTC();
+    const d = date ?? today();
     const { entries } = loadLedger(root);
     return entries.filter((e) => {
       if (e.due > d || e.last === d) return false;
