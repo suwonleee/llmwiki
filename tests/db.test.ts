@@ -71,7 +71,10 @@ describe("WikiIndex", () => {
     expect(ftsSanitize("native-epub Readium")).toBe('"native-epub" "Readium"');
     expect(ftsSanitize('say "hi"')).toBe('"say" """hi"""'); // embedded quote doubled
     expect(ftsSanitize("  --- ::: ")).toBe("");
-    expect(ftsSanitize("회원가입 정책")).toBe('"회원가입" "정책"'); // unicode word chars kept
+    // Unicode word chars are kept, but "정책" is below the trigram floor: quoting it into the
+    // implicit AND would empty the query instead of narrowing it. `search` answers the dropped
+    // term by substring — see search-short-term.test.ts.
+    expect(ftsSanitize("회원가입 정책")).toBe('"회원가입"');
   });
 
   test("change then reindex counts updated", () => {

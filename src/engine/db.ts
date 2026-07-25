@@ -55,18 +55,38 @@ function sourceKind(relative: string): string {
   return relative.startsWith(WIKI_DIR + "/") ? "wiki" : "source";
 }
 
+// The trigram tokenizer indexes three-character sequences, so a MATCH term shorter than three
+// characters has nothing in the index to compare against and can never match. Not an English
+// edge case: 언어 · 세션 · 보안 · 言語 · 语言 · 設定 are ordinary two-character words, and this
+// tokenizer was chosen precisely BECAUSE it segments CJK (schema.sql) — so the words a Korean,
+// Japanese or Chinese reader is most likely to type are the ones the index cannot answer.
+const FTS_MIN_TERM_CHARS = 3;
+
+/** Word-bearing tokens of a free-text query (punctuation-only tokens dropped). */
+export function ftsTokens(query: string): string[] {
+  return (query || "").split(/\s+/).filter((t) => /[\p{L}\p{N}]/u.test(t));
+}
+
+/** Can the trigram index answer this term at all? Counted in code points, not UTF-16 units. */
+export function ftsMatchable(token: string): boolean {
+  return [...token].length >= FTS_MIN_TERM_CHARS;
+}
+
 // Sanitize a free-text query into a safe FTS5 MATCH string. Raw user input may contain FTS5
 // operators (- : * ^ ( ) " OR AND NEAR) — passing it straight to MATCH throws (e.g. a query
 // like "native-epub" yields `SQLiteError: no such column: epub`). We split on whitespace and
 // wrap each word-bearing token as a quoted string literal (doubling any embedded quote), so
 // every term is matched literally with implicit AND between them and no token is ever parsed
-// as syntax. Punctuation-only tokens are dropped; an all-punctuation/empty query → "" (the
-// caller returns no rows rather than issuing an empty MATCH). Power-user FTS syntax is
-// intentionally unsupported here — robustness over expressivity for natural-language queries.
+// as syntax. Power-user FTS syntax is intentionally unsupported here — robustness over
+// expressivity for natural-language queries.
+//
+// Terms below the trigram floor are dropped rather than quoted: they cannot contribute the
+// precision they appear to promise, and under implicit AND a single one of them silently empties
+// an otherwise good query ("언어 설정으로" would return nothing at all). When that leaves nothing,
+// the result is "" and `search` answers by substring instead of reporting silence.
 export function ftsSanitize(query: string): string {
-  return (query || "")
-    .split(/\s+/)
-    .filter((t) => /[\p{L}\p{N}]/u.test(t))
+  return ftsTokens(query)
+    .filter(ftsMatchable)
     .map((t) => `"${t.replace(/"/g, '""')}"`)
     .join(" ");
 }
@@ -639,7 +659,49 @@ export class WikiIndex {
   // phrases and drop the OR semantics, so raw callers bypass it — they own query safety.
   search(db: Database, query: string, limit = 10, kind: string | null = null, raw = false): DocRow[] {
     const match = raw ? (query || "").trim() : ftsSanitize(query);
-    if (!match) return []; // empty/punctuation-only query → no rows (avoid an invalid empty MATCH)
+    const tokens = raw ? [] : ftsTokens(query);
+    let rows: DocRow[] = [];
+
+    if (match) {
+      rows = this._matchRows(db, match, limit, kind);
+      // Relaxed-recall retry (P0-3): strict AND semantics found nothing → one OR retry with
+      // the same SQL/ranking. Sanitized (natural-language) queries only — raw callers own
+      // their query semantics (turn-context already builds its own OR query).
+      if (rows.length === 0 && !raw && process.env.LLMWIKI_SEARCH_RELAX !== "off") {
+        const relaxed = ftsRelax(query); // env kill-switch: A/B measurement + safety valve
+        if (relaxed && relaxed !== match) rows = this._matchRows(db, relaxed, limit, kind);
+      }
+    }
+
+    // Below-the-floor recall: the query named terms the trigram index cannot represent, so the
+    // MATCH above answered a strictly smaller question than the reader asked (or, with every term
+    // short, none of it). Substring is exactly what trigram would have done had the terms been
+    // long enough. It costs a scan, so it runs only after MATCH has come back empty — measured on
+    // this engine's own wiki (304 chunks): 0.5-1.3ms.
+    if (rows.length === 0 && !raw && tokens.length > 0 && !tokens.every(ftsMatchable)) {
+      rows = this._substringRows(db, tokens, limit, kind);
+    }
+    return rows.map(WikiIndex.row);
+  }
+
+  // Live pages before retired ones, then the caller's ranking. Superseded down-rank (P0-4):
+  // pages whose FRONTMATTER carries `status: superseded` sort after live pages so retired
+  // decisions stop crowding top-k as the wiki grows (read-cost-constant principle).
+  // Frontmatter-only for real: the page must open with `---\n`, have a closing `\n---` (scanned
+  // within the first 2000 chars), and the phrase must sit BEFORE that closing fence — a body that
+  // merely mentions the phrase is not demoted. Query-time, migration-free, deterministic;
+  // superseded pages stay findable (demoted, never filtered).
+  static _orderBy(rank: string): string {
+    const fmEnd = "instr(substr(d.content,5,2000), char(10)||'---')";
+    return (
+      "ORDER BY (CASE WHEN d.source_kind='wiki' AND substr(d.content,1,4) = '---'||char(10) " +
+      `AND ${fmEnd} > 0 ` +
+      `AND instr(substr(d.content, 1, ${fmEnd} + 4), 'status: superseded') > 0 ` +
+      `THEN 1 ELSE 0 END), ${rank} LIMIT ?`
+    );
+  }
+
+  _matchRows(db: Database, match: string, limit: number, kind: string | null): DocRow[] {
     let sql =
       "SELECT dc.content, dc.header_breadcrumb, d.relative_path, d.title, d.source_kind, rank AS score " +
       "FROM document_chunks dc JOIN chunks_fts fts ON dc.rowid = fts.rowid " +
@@ -650,48 +712,39 @@ export class WikiIndex {
       sql += "AND d.source_kind = ? ";
       params.push(kind);
     }
-    // Superseded down-rank (P0-4): pages whose FRONTMATTER carries `status: superseded`
-    // sort after live pages so retired decisions stop crowding top-k as the wiki grows
-    // (read-cost-constant principle). Frontmatter-only for real: the page must open with
-    // `---\n`, have a closing `\n---` (scanned within the first 2000 chars), and the phrase
-    // must sit BEFORE that closing fence — a body that merely mentions the phrase is not
-    // demoted. Query-time, migration-free, deterministic; superseded pages stay findable
-    // (demoted, never filtered).
-    const fmEnd = "instr(substr(d.content,5,2000), char(10)||'---')";
-    sql +=
-      "ORDER BY (CASE WHEN d.source_kind='wiki' AND substr(d.content,1,4) = '---'||char(10) " +
-      `AND ${fmEnd} > 0 ` +
-      `AND instr(substr(d.content, 1, ${fmEnd} + 4), 'status: superseded') > 0 ` +
-      "THEN 1 ELSE 0 END), rank LIMIT ?";
+    sql += WikiIndex._orderBy("rank");
     params.push(limit);
     // FTS5 MATCH parse errors (stray operators in a raw query) degrade to "no rows",
     // never a crash — same absorb-to-empty contract basic-memory uses. bun:sqlite surfaces
     // them with varying messages ("fts5: syntax error", "unterminated string", "no such
     // column: X" for an unquoted hyphen query) — all are query-shape problems, not DB bugs.
-    const isMatchParseError = (e: any) =>
-      /syntax error|unterminated string|no such column|malformed MATCH|fts5/i.test(String(e?.message || e));
-    let rows: DocRow[];
     try {
-      rows = db.query(sql).all(...params) as DocRow[];
+      return db.query(sql).all(...params) as DocRow[];
     } catch (e: any) {
-      if (isMatchParseError(e)) return [];
+      if (/syntax error|unterminated string|no such column|malformed MATCH|fts5/i.test(String(e?.message || e))) {
+        return [];
+      }
       throw e;
     }
-    // Relaxed-recall retry (P0-3): strict AND semantics found nothing → one OR retry with
-    // the same SQL/ranking. Sanitized (natural-language) queries only — raw callers own
-    // their query semantics (turn-context already builds its own OR query).
-    if (rows.length === 0 && !raw && process.env.LLMWIKI_SEARCH_RELAX !== "off") {
-      const relaxed = ftsRelax(query); // env kill-switch: A/B measurement + safety valve
-      if (relaxed && relaxed !== match) {
-        params[0] = relaxed;
-        try {
-          rows = db.query(sql).all(...params) as DocRow[];
-        } catch {
-          rows = [];
-        }
-      }
+  }
+
+  // Every term must appear (implicit AND, as in the MATCH path). There is no bm25 here, so the
+  // stand-in for relevance is density: the shortest chunk that still contains every term.
+  _substringRows(db: Database, tokens: readonly string[], limit: number, kind: string | null): DocRow[] {
+    // `%` and `_` are LIKE wildcards and must survive as literals — unescaped, a query of "%"
+    // would match every chunk in the wiki.
+    const params: any[] = tokens.map((t) => `%${t.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
+    let sql =
+      "SELECT dc.content, dc.header_breadcrumb, d.relative_path, d.title, d.source_kind, NULL AS score " +
+      "FROM document_chunks dc JOIN documents d ON dc.document_id = d.id " +
+      `WHERE ${tokens.map(() => "dc.content LIKE ? ESCAPE '\\'").join(" AND ")} AND d.status != 'failed' `;
+    if (kind) {
+      sql += "AND d.source_kind = ? ";
+      params.push(kind);
     }
-    return rows.map(WikiIndex.row);
+    sql += WikiIndex._orderBy("length(dc.content), d.relative_path, dc.chunk_index");
+    params.push(limit);
+    return db.query(sql).all(...params) as DocRow[];
   }
 
   static row(r: DocRow): DocRow {
