@@ -174,7 +174,8 @@ export function createMaintenanceHandlers(dependencies: MaintenanceDependencies)
         console.log(ko ? "  ✓ overview 정상 (정규화 불필요)" : "  ✓ overview already normalized");
       } else {
         const verb = check ? (ko ? "정규화 필요" : "would normalize") : ko ? "정규화함" : "normalized";
-        console.log(`  ✅ ${verb}: Recent Updates → [[log.md]] 포인터 (${result.before}B → ${result.after}B)`);
+        const target = ko ? "[[log.md]] 포인터" : "an [[log.md]] pointer";
+        console.log(`  ✅ ${verb}: Recent Updates → ${target} (${result.before}B → ${result.after}B)`);
       }
       if (result.oversized) {
         console.log(

@@ -8,7 +8,7 @@
 // --commit writes docs/wiki/0_review/semantic-review-<date>.md, status: draft) for a
 // human to act on. Single WRITE pass (no VERIFY second model).
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { getConfig, renderBodyStyleRule } from "./config.ts";
+import { effectiveKo, getConfig, renderBodyStyleRule } from "./config.ts";
 import { createHash } from "node:crypto";
 import { basename, join, relative as relpath, resolve } from "node:path";
 import { llm } from "./claude.ts";
@@ -289,6 +289,19 @@ function _writeState(root: string, st: { hash: string; date: string; dest: strin
   writeFileSync(_statePath(root), JSON.stringify(st, null, 2), "utf-8");
 }
 
+// The two lines appended to log.md when a report lands. This is page content in the user's
+// repository, so it follows the wiki's language (exported for the language contract test).
+export function _reviewLogEntry(dest: string, scoped: number, total: number, bounded: boolean, ko: boolean): string[] {
+  const scopeMsg = bounded
+    ? ko
+      ? `${scoped}/${total}p 검사(범위 한정), advisory draft`
+      : `${scoped}/${total}p checked (scoped), advisory draft`
+    : ko
+      ? `${scoped}p 검사, advisory draft`
+      : `${scoped}p checked, advisory draft`;
+  return [`${dest} (${scopeMsg})`, ko ? "의미 lint — 사람이 검토 후 반영" : "semantic lint — apply after human review"];
+}
+
 export interface ReviewOpts {
   commit?: boolean;
   minPages?: number;
@@ -332,11 +345,14 @@ export async function review(ws: string, opts: ReviewOpts): Promise<Record<strin
 
   const briefs = _briefs(ws);
   if (briefs.length < minPages) {
+    const ko = effectiveKo(getConfig(root));
     return {
       verdict: "skip",
       n_pages: briefs.length,
       ...prevIncomplete,
-      reason: `검사 재료 부족: ${briefs.length} < min_pages ${minPages}. 페이지 더 쌓인 뒤 재시도.`,
+      reason: ko
+        ? `검사 재료 부족: ${briefs.length} < min_pages ${minPages}. 페이지 더 쌓인 뒤 재시도.`
+        : `too little to review: ${briefs.length} < min_pages ${minPages}. Retry once more pages have accumulated.`,
     };
   }
 
@@ -395,14 +411,11 @@ export async function review(ws: string, opts: ReviewOpts): Promise<Record<strin
   writeFileSync(dest, page + (page.endsWith("\n") ? "" : "\n"), "utf-8");
   _writeState(root, { hash: runHash, date, dest: result.dest as string });
   new WikiIndex(ws).indexAll();
-  const scopeMsg = result.scope.bounded
-    ? `${scoped.length}/${briefs.length}p 검사(범위 한정), advisory draft`
-    : `${scoped.length}p 검사, advisory draft`;
   appendLog(
     ws,
     "review",
     _title(page) || "semantic-review",
-    [`${result.dest} (${scopeMsg})`, "의미 lint — 사람이 검토 후 반영"],
+    _reviewLogEntry(result.dest as string, scoped.length, briefs.length, result.scope.bounded, effectiveKo(getConfig(root))),
     date,
   );
   result.accepted = true; // accepted = report written (not auto-applied to wiki)
