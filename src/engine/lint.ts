@@ -88,6 +88,17 @@ export const TOPIC_BUDGET = Math.max(
   parseInt(process.env.LLMWIKI_TOPIC_BUDGET ?? "10000", 10) || 10000,
 );
 
+// Body-shape advisory thresholds. Deliberately generous: a page only gets nagged once it is long
+// enough that a human genuinely needs grouping, or once one line has clearly swallowed a list.
+// Structure-only counts, so they read the same for Korean, English, and Chinese prose.
+const FLAT_BODY_BULLETS = 6; // top-level `-` lines with no `## N.` section — matches the written contract
+// A crammed line is long AND multi-item. Separator count alone punishes the shape the contract
+// actually wants — a child bullet holding a few short sibling tokens (`a` · `b` · `c` · `d` · `e`)
+// is easier to scan than five more nested lines, and real pages are full of them.
+const DENSE_BULLET_SEPARATORS = 4; // `·`-joined items inside a single bullet…
+const DENSE_BULLET_MIN_CHARS = 100; // …and long enough that the line stops being scannable
+const DENSE_BULLET_CHARS = 240; // or one bullet this long regardless of separators
+
 function clamp(href: string, currentDir: string): string {
   if (href.startsWith("./")) {
     return currentDir ? currentDir + href.slice(2) : href.slice(2);
@@ -228,6 +239,57 @@ export class Linter {
     issues.push(...this._noCitation(doc, content));
     issues.push(...this._oversizedL0(doc, content));
     issues.push(...this._oversizedTopic(doc, content));
+    issues.push(...this._bodyStructure(doc, content));
+    return issues;
+  }
+
+  /**
+   * Advisory shape checks for what a HUMAN scans: numbered sections over a flat wall of bullets,
+   * and one point per line instead of an enumeration crammed behind separators.
+   *
+   * Both are warnings by design. The format is a writing contract, not a gate — but drift has to
+   * be visible or the contract is only aspirational. Structure, never prose: the thresholds count
+   * bullets and separators, so a Korean, English, or Chinese page is judged identically. Machine-
+   * managed files (log, ledgers, L0/overview) are exempt — their shape is fixed elsewhere.
+   */
+  _bodyStructure(doc: WikiDoc, content: string): LintIssue[] {
+    const path = this._p(doc);
+    const name = doc.filename || path.split("/").pop() || "";
+    if (this._isLedger(doc) || this.l0Pages.has(name) || name === this.cfg.files.log) return [];
+    if (path.includes(`/${this.cfg.quizDir}/`)) return [];
+
+    const body = content.replace(/^---\n[\s\S]*?\n---\n/, "");
+    const lines = body.split("\n");
+    const topLevel = lines.filter((line) => /^- \S/.test(line)).length;
+    const hasNumberedSection = lines.some((line) => /^#{2,3} \d+(-\d+)*\. \S/.test(line));
+    const issues: LintIssue[] = [];
+
+    if (topLevel >= FLAT_BODY_BULLETS && !hasNumberedSection) {
+      issues.push({
+        severity: "warn",
+        code: "flat-body",
+        path,
+        message: this.ko
+          ? `본문이 최상위 불릿 ${topLevel}개의 평면 나열 — 사람이 훑을 수 있게 \`## 1. <제목>\` 번호 섹션으로 묶고(필요하면 \`### 1-1.\`), 각 섹션 안에서 \`-\` → \`    -\` → \`        -\` 계층으로 쓸 것`
+          : `body is a flat run of ${topLevel} top-level bullets — group it under numbered sections (\`## 1. <label>\`, split as \`### 1-1.\` when needed) and keep the \`-\` → \`    -\` → \`        -\` hierarchy inside each`,
+      });
+    }
+
+    for (const line of lines) {
+      if (!/^\s*- \S/.test(line)) continue;
+      const separators = (line.match(/·/g) ?? []).length;
+      const crammed = separators >= DENSE_BULLET_SEPARATORS && line.length >= DENSE_BULLET_MIN_CHARS;
+      if (!crammed && line.length <= DENSE_BULLET_CHARS) continue;
+      issues.push({
+        severity: "warn",
+        code: "dense-bullet",
+        path,
+        message: this.ko
+          ? `한 불릿에 열거가 뭉쳐 있음(구분자 ${separators}개, ${line.length}자) — 부모 한 줄 + 항목별 자식 불릿(\`    -\`)으로 펼칠 것: ${line.trim().slice(0, 60)}…`
+          : `one bullet carries a whole enumeration (${separators} separators, ${line.length} chars) — expand it into a parent line plus one child bullet (\`    -\`) per item: ${line.trim().slice(0, 60)}…`,
+      });
+      break; // one advisory per page is enough to start the rework
+    }
     return issues;
   }
 
