@@ -5,7 +5,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import * as capture from "./capture.ts";
-import { effectiveKo, getConfig, logDirs, type WikiConfig } from "./config.ts";
+import { getConfig, pickLang, logDirs, type WikiConfig } from "./config.ts";
 import { render } from "./extract.ts";
 import { sourceForKind, sourceForPath } from "./source.ts";
 import { WikiIndex } from "./db.ts";
@@ -73,7 +73,6 @@ export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(w
   const wiki = join(root, "docs", "wiki");
   // Skeleton template language adapts to LLMWIKI_LANG (default English, Korean when set) — a
   // fresh adopter's wiki should start in their language. (Page CONTENT later matches the conversation.)
-  const ko = effectiveKo(cfg);
   mkdirSync(wiki, { recursive: true });
   for (const c of logDirs(cfg)) mkdirSync(join(wiki, c), { recursive: true });
   mkdirSync(join(wiki, cfg.queueDir), { recursive: true });
@@ -91,11 +90,23 @@ export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(w
       overview,
       `---\ntitle: Overview — ${name}\ndescription: Front page / cold-start context for ${name}\n` +
         `date: ${today}\ntags: [overview, meta]\n---\n\n` +
-        (ko
-          ? `이 위키는 **${name}** 프로젝트의 살아있는 지식이다 (작업할수록 자동 누적).\n\n` +
-            "## 방향성 (사람 확인)\n\n## Key Findings\n\n아직 update된 소스 없음.\n\n## Recent Updates\n\n"
-          : `This wiki is the living knowledge of the **${name}** project (it auto-accumulates as you work).\n\n` +
-            "## Direction (human-confirmed)\n\n## Key Findings\n\nNo sources condensed yet.\n\n## Recent Updates\n\n"),
+        pickLang<(project: string) => string>(
+          {
+            en: (project) =>
+              `This wiki is the living knowledge of the **${project}** project (it auto-accumulates as you work).\n\n` +
+              "## Direction (human-confirmed)\n\n## Key Findings\n\nNo sources condensed yet.\n\n## Recent Updates\n\n",
+            ko: (project) =>
+              `이 위키는 **${project}** 프로젝트의 살아있는 지식이다 (작업할수록 자동 누적).\n\n` +
+              "## 방향성 (사람 확인)\n\n## Key Findings\n\n아직 update된 소스 없음.\n\n## Recent Updates\n\n",
+            ja: (project) =>
+              `このウィキは **${project}** プロジェクトの生きた知識です（作業するほど自動で蓄積されます）。\n\n` +
+              "## 方向性（人が確認）\n\n## Key Findings\n\nまだ要約されたソースはありません。\n\n## Recent Updates\n\n",
+            zh: (project) =>
+              `本 wiki 是 **${project}** 项目的活知识（随着工作自动积累）。\n\n` +
+              "## 方向（由人确认）\n\n## Key Findings\n\n尚未归纳任何来源。\n\n## Recent Updates\n\n",
+          },
+          cfg,
+        )(name),
     );
   }
   const cs = join(wiki, cfg.files.l0);
@@ -103,31 +114,53 @@ export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(w
     writeRepoFile(
       cs,
       `---\ntitle: Current State — ${name} (L0)\n` +
-        (ko
-          ? `description: cold-start L0 — '지금'과 '다음'의 한눈 스냅샷 (사람이 소유·승격)\n`
-          : `description: cold-start L0 — a one-glance snapshot of 'now' and 'next' (human-owned)\n`) +
+        pickLang(
+          {
+            en: "description: cold-start L0 — a one-glance snapshot of 'now' and 'next' (human-owned)\n",
+            ko: "description: cold-start L0 — '지금'과 '다음'의 한눈 스냅샷 (사람이 소유·승격)\n",
+            ja: "description: cold-start L0 — 「現在」と「次」の一目スナップショット（人が所有）\n",
+            zh: "description: cold-start L0 — “现在”与“下一步”的一眼快照（由人所有）\n",
+          },
+          cfg,
+        ) +
         `updated: ${today}\ntags: [current-state, L0, meta]\n---\n\n` +
-        (ko
-          ? "> **L0(현재 상태)는 판단층 — 사람이 소유한다.** LLM은 `/wiki-save`·`/wiki-deep` 때 '지금/다음'\n" +
-            "> 갱신을 *제안*만 하고, 방향성·절대 규칙은 사람이 확정한다. (포크용 템플릿 플레이스홀더)\n\n" +
-            "## 방향성 (사람 확정)\n\n- <프로젝트의 큰 방향 — 사람만 변경>\n\n" +
-            "## 지금 (TL;DR)\n\n- <현재 핵심 상태 한 줄>\n    - <필요한 근거·조건>\n\n" +
-            "## 다음 (남은 작업)\n\n- <바로 다음 할 일>\n    - <담당·차단 요인·완료 조건>\n"
-          : "> **L0 (current state) is the judgment layer — the human owns it.** The LLM only *proposes* 'now/next'\n" +
-            "> updates during /wiki-save·/wiki-deep; direction and absolute rules are confirmed by the human. (fork template placeholder)\n\n" +
-            "## Direction (human-confirmed)\n\n- <big project direction — human changes only>\n\n" +
-            "## Now (TL;DR)\n\n- <current core state in one line>\n    - <necessary evidence or condition>\n\n" +
-            "## Next (remaining work)\n\n- <immediate next action>\n    - <owner, blocker, or completion condition>\n"),
+        pickLang(
+          {
+            en:
+              "> **L0 (current state) is the judgment layer — the human owns it.** The LLM only *proposes* 'now/next'\n" +
+              "> updates during /wiki-save·/wiki-deep; direction and absolute rules are confirmed by the human. (fork template placeholder)\n\n" +
+              "## Direction (human-confirmed)\n\n- <big project direction — human changes only>\n\n" +
+              "## Now (TL;DR)\n\n- <current core state in one line>\n    - <necessary evidence or condition>\n\n" +
+              "## Next (remaining work)\n\n- <immediate next action>\n    - <owner, blocker, or completion condition>\n",
+            ko:
+              "> **L0(현재 상태)는 판단층 — 사람이 소유한다.** LLM은 `/wiki-save`·`/wiki-deep` 때 '지금/다음'\n" +
+              "> 갱신을 *제안*만 하고, 방향성·절대 규칙은 사람이 확정한다. (포크용 템플릿 플레이스홀더)\n\n" +
+              "## 방향성 (사람 확정)\n\n- <프로젝트의 큰 방향 — 사람만 변경>\n\n" +
+              "## 지금 (TL;DR)\n\n- <현재 핵심 상태 한 줄>\n    - <필요한 근거·조건>\n\n" +
+              "## 다음 (남은 작업)\n\n- <바로 다음 할 일>\n    - <담당·차단 요인·완료 조건>\n",
+            ja:
+              "> **L0（現在の状態）は判断層 — 人が所有します。** LLM は `/wiki-save`・`/wiki-deep` の際に「現在/次」の\n" +
+              "> 更新を*提案*するだけで、方向性と絶対ルールは人が確定します。（フォーク用テンプレートのプレースホルダ）\n\n" +
+              "## 方向性（人が確定）\n\n- <プロジェクトの大きな方向 — 人のみ変更>\n\n" +
+              "## 現在 (TL;DR)\n\n- <現在の核心状態を一行で>\n    - <必要な根拠・条件>\n\n" +
+              "## 次 (残りの作業)\n\n- <すぐ次にやること>\n    - <担当・ブロッカー・完了条件>\n",
+            zh:
+              "> **L0（当前状态）是判断层 — 由人所有。** LLM 只在 `/wiki-save`·`/wiki-deep` 时*建议*“现在/下一步”的\n" +
+              "> 更新；方向与绝对规则由人确认。（供 fork 使用的模板占位）\n\n" +
+              "## 方向（由人确认）\n\n- <项目的大方向 — 仅由人修改>\n\n" +
+              "## 现在 (TL;DR)\n\n- <用一行写清当前核心状态>\n    - <必要的依据或条件>\n\n" +
+              "## 下一步 (剩余工作)\n\n- <紧接着要做的事>\n    - <负责人·阻塞点·完成条件>\n",
+          },
+          cfg,
+        ),
     );
   }
   const log = join(wiki, cfg.files.log);
   if (!repoFileExists(log)) {
     writeRepoFile(
       log,
-      `---\ntitle: Log\ndescription: ${ko ? "시간순 ingest/update/lint 기록" : "chronological ingest/update/lint record"}\ndate: ${today}\ntags: [log, meta]\n---\n\n` +
-        (ko
-          ? "ingest·update·lint·decide 의 시간순 기록 (append-only).\n"
-          : "chronological record of ingest·update·lint·decide (append-only).\n"),
+      `---\ntitle: Log\ndescription: ${pickLang(LOG_DESCRIPTION, cfg)}\ndate: ${today}\ntags: [log, meta]\n---\n\n` +
+        pickLang(LOG_BODY, cfg),
     );
   }
   // Team-safety files (idempotent; harmless solo). Without these, a shared project commits the
@@ -161,6 +194,20 @@ export function ensurePrivateDirs(root: string, cfg: WikiConfig): void {
 // Seed .mailmap with a commented example plus this machine's identity, so `git log --format=%aN`
 // (and anything reading it) collapses a person's several git identities into one. Idempotent and
 // additive: an existing file is never rewritten, and a missing git identity writes only the note.
+const LOG_DESCRIPTION = {
+  en: "chronological ingest/update/lint record",
+  ko: "시간순 ingest/update/lint 기록",
+  ja: "時系列の ingest/update/lint 記録",
+  zh: "按时间顺序的 ingest/update/lint 记录",
+};
+
+const LOG_BODY = {
+  en: "chronological record of ingest·update·lint·decide (append-only).\n",
+  ko: "ingest·update·lint·decide 의 시간순 기록 (append-only).\n",
+  ja: "ingest·update·lint·decide の時系列記録（追記のみ）。\n",
+  zh: "ingest·update·lint·decide 的时间顺序记录（仅追加）。\n",
+};
+
 function _ensureMailmap(root: string): void {
   const path = join(root, ".mailmap");
   if (repoFileExists(path)) return;

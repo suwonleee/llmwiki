@@ -21,7 +21,7 @@ test("collapses a grown Recent Updates body to the pointer; preserves curated co
 - 2026-06-29 — 긴 세션 단락 2 ...
 - 2026-06-28 — 긴 세션 단락 3 ...
 `;
-  const { text, collapsed } = normalizeOverviewText(bloated, true);
+  const { text, collapsed } = normalizeOverviewText(bloated, "ko");
   expect(collapsed).toBe(true);
   expect(text).toContain("## Key Findings"); // curated kept
   expect(text).toContain("큐레이션된 통찰 A");
@@ -32,13 +32,13 @@ test("collapses a grown Recent Updates body to the pointer; preserves curated co
 
 test("idempotent: already-canonical overview is unchanged", () => {
   const canonical = CURATED + `\n## Recent Updates\n\n${RECENT_POINTER_KO}\n`;
-  const { text, collapsed } = normalizeOverviewText(canonical, true);
+  const { text, collapsed } = normalizeOverviewText(canonical, "ko");
   expect(collapsed).toBe(false);
   expect(text).toBe(canonical);
 });
 
 test("no Recent Updates section → untouched", () => {
-  const { text, collapsed } = normalizeOverviewText(CURATED, true);
+  const { text, collapsed } = normalizeOverviewText(CURATED, "ko");
   expect(collapsed).toBe(false);
   expect(text).toBe(CURATED);
 });
@@ -47,7 +47,7 @@ test("preserves a section that comes AFTER Recent Updates", () => {
   const withTrailing =
     CURATED +
     `\n## Recent Updates\n- ZZSESSIONPROSE 세션 기록 ...\n\n## 관련 기록\n- [[2_milestone/z]]\n`;
-  const { text, collapsed } = normalizeOverviewText(withTrailing, true);
+  const { text, collapsed } = normalizeOverviewText(withTrailing, "ko");
   expect(collapsed).toBe(true);
   expect(text).toContain("## 관련 기록"); // trailing curated section survives
   expect(text).toContain("[[2_milestone/z]]");

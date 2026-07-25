@@ -333,11 +333,44 @@ export function isHumanReviewDir(dir: string, cfg: WikiConfig = getConfig()): bo
   return cfg.categories.find((c) => c.dir === dir)?.review === "human";
 }
 
-// The effective UI/skeleton language: env wins (session-scoped override), then config, then en.
+// ---- wiki language ------------------------------------------------------------------------
+//
+// `lang` never decides the language of a PAGE: page prose follows the session's own language (that
+// rule lives in the WRITE prompt). What it decides is the text the ENGINE authors — the skeleton it
+// seeds, the pointer `overview.md` collapses to, the ledger headers — plus its own UI where a
+// catalog exists. Any BCP-47-ish code is accepted; a code with no catalog resolves to English, so a
+// typo or an unsupported language degrades to consistent English instead of failing.
+export const WIKI_LANGS = ["en", "ko", "ja", "zh"] as const;
+export type WikiLang = (typeof WIKI_LANGS)[number];
+
+/** One catalog per language, English required — the fallback for every unsupported code. */
+export type LangCatalog<T> = Partial<Record<WikiLang, T>> & { en: T };
+
+function normalizeLang(raw: string): WikiLang | null {
+  const primary = raw.trim().toLowerCase().split(/[-_]/)[0] ?? "";
+  return (WIKI_LANGS as readonly string[]).includes(primary) ? (primary as WikiLang) : null;
+}
+
+/** The wiki's language: LLMWIKI_LANG (session override) → config `[wiki] lang` → English. */
+export function resolveLang(cfg: { readonly lang?: string } = getConfig()): WikiLang {
+  const env = normalizeLang(process.env.LLMWIKI_LANG ?? "");
+  if (env) return env;
+  if ((process.env.LLMWIKI_LANG ?? "").trim()) return "en"; // set but unsupported → English
+  return normalizeLang(cfg.lang ?? "") ?? "en";
+}
+
+/** Pick this wiki's entry from a catalog, falling back to English. */
+export function pickLang<T>(catalog: LangCatalog<T>, cfg: { readonly lang?: string } = getConfig()): T {
+  return catalog[resolveLang(cfg)] ?? catalog.en;
+}
+
+/**
+ * Korean-or-not, for the surfaces whose catalogs are still en/ko only (cold-start operating rules,
+ * CLI, lint messages). Those fall back to English for every other language — a half-translated
+ * cold-start reads worse than a consistent English one.
+ */
 export function effectiveKo(cfg: WikiConfig = getConfig()): boolean {
-  const env = (process.env.LLMWIKI_LANG ?? "").trim().toLowerCase();
-  if (env) return env.startsWith("ko");
-  return cfg.lang.trim().toLowerCase().startsWith("ko");
+  return resolveLang(cfg) === "ko";
 }
 
 /**

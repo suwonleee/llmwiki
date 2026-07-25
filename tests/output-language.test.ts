@@ -55,12 +55,12 @@ afterEach(() => {
 
 describe("engine output follows the wiki language", () => {
   test("the overview pointer is written in the wiki's language", () => {
-    const en = normalizeOverviewText(BLOATED_OVERVIEW, false);
+    const en = normalizeOverviewText(BLOATED_OVERVIEW, "en");
     expect(en.collapsed).toBe(true);
     expect(en.text).toContain(RECENT_POINTER_EN);
     expect(en.text).not.toMatch(HANGUL);
 
-    const ko = normalizeOverviewText(BLOATED_OVERVIEW, true);
+    const ko = normalizeOverviewText(BLOATED_OVERVIEW, "ko");
     expect(ko.collapsed).toBe(true);
     expect(ko.text).toContain(RECENT_POINTER_KO);
   });
@@ -68,10 +68,10 @@ describe("engine output follows the wiki language", () => {
   test("either language's canonical pointer counts as normalized — no cross-language churn", () => {
     const koPage = `---\ntitle: Overview\n---\n\n## Recent Updates\n\n${RECENT_POINTER_KO}\n`;
     const enPage = `---\ntitle: Overview\n---\n\n## Recent Updates\n\n${RECENT_POINTER_EN}\n`;
-    expect(normalizeOverviewText(koPage, false).collapsed).toBe(false);
-    expect(normalizeOverviewText(koPage, false).text).toBe(koPage);
-    expect(normalizeOverviewText(enPage, true).collapsed).toBe(false);
-    expect(normalizeOverviewText(enPage, true).text).toBe(enPage);
+    expect(normalizeOverviewText(koPage, "en").collapsed).toBe(false);
+    expect(normalizeOverviewText(koPage, "en").text).toBe(koPage);
+    expect(normalizeOverviewText(enPage, "ko").collapsed).toBe(false);
+    expect(normalizeOverviewText(enPage, "ko").text).toBe(enPage);
   });
 
   test("the missing-overview skip reason follows the wiki language", () => {
@@ -118,13 +118,13 @@ describe("engine output follows the wiki language", () => {
       firstSeen: "2026-07-25",
       lastSeen: "2026-07-25",
     };
-    const en = renderQueue([gap], "2026-07-25", false);
+    const en = renderQueue([gap], "2026-07-25", "en");
     expect(en).not.toMatch(HANGUL);
     expect(en).toContain("## Open (1)");
     // the header language must never break the machine-managed rows
     expect(parseQueue(en).map((g) => g.hash)).toEqual(["abc123"]);
 
-    const ko = renderQueue([gap], "2026-07-25", true);
+    const ko = renderQueue([gap], "2026-07-25", "ko");
     expect(ko).toMatch(HANGUL);
     expect(parseQueue(ko).map((g) => g.hash)).toEqual(["abc123"]);
   });

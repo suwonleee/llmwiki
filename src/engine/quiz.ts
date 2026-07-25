@@ -29,7 +29,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { getConfig, isHumanReviewDir, logDirs, effectiveKo, type WikiConfig } from "./config.ts";
+import { getConfig, isHumanReviewDir, logDirs, resolveLang, type LangCatalog, type WikiConfig, type WikiLang } from "./config.ts";
 import { parseFrontmatter } from "./lint.ts";
 import { writeRepoFile } from "./repo-write.ts";
 
@@ -193,24 +193,45 @@ export function parseLedger(md: string): QuizEntry[] {
   return out;
 }
 
-export function renderLedger(entries: QuizEntry[], date: string, ko: boolean): string {
+// The ledger is engine-managed, but a human reads its header — so it follows the wiki's language,
+// while `## Items (N)` and the row markers stay language-invariant (parseLedger reads them back).
+const LEDGER_DESCRIPTION: LangCatalog<string> = {
+  en: "human memory ledger — day-granular spaced-repetition schedule. Engine-managed (quiz-record); never hand-edit markers",
+  ko: "사람 기억 장부 — 망각곡선(일 단위) 복습 스케줄. 엔진 관리(quiz-record), 마커 수동 수정 금지",
+  ja: "人の記憶台帳 — 忘却曲線（日単位）の復習スケジュール。エンジン管理（quiz-record）。マーカーの手編集は禁止",
+  zh: "人的记忆台账 — 按天的遗忘曲线复习计划。由引擎管理（quiz-record）；请勿手改标记",
+};
+
+const LEDGER_NOTE: LangCatalog<(intervals: string) => string> = {
+  en: (intervals) =>
+    "> Auto-managed (LLM-0): /wiki-quiz authors questions (warm); quiz-record updates this ledger (deterministic).\n" +
+    `> correct → next box (${intervals} days), wrong/skip → reset to box 0. due ≤ today = up for review.\n` +
+    "> This folder (the quiz layer) is excluded from index/search/cold-start — one-directional wiki → human.\n",
+  ko: (intervals) =>
+    "> 자동 관리(LLM-0): /wiki-quiz 가 문항을 내고(웜), quiz-record 가 이 장부를 갱신한다(결정적).\n" +
+    `> 정답 → 다음 박스(${intervals}일), 오답·모름 → box 0 리셋. due ≤ 오늘 = 복습 대상.\n` +
+    "> 이 폴더(퀴즈 레이어)는 인덱스·검색·콜드스타트에서 제외된다 — 위키→사람 단방향.\n",
+  ja: (intervals) =>
+    "> 自動管理（LLM-0）: /wiki-quiz が問題を出し（ウォーム）、quiz-record がこの台帳を更新します（決定的）。\n" +
+    `> 正解 → 次のボックス（${intervals} 日）、誤答・不明 → box 0 にリセット。due ≤ 今日 = 復習対象。\n` +
+    "> このフォルダ（クイズ層）はインデックス・検索・コールドスタートから除外されます — ウィキ→人の一方向。\n",
+  zh: (intervals) =>
+    "> 自动管理（LLM-0）: /wiki-quiz 出题（warm），quiz-record 更新本台账（确定性）。\n" +
+    `> 答对 → 进入下一个盒子（${intervals} 天），答错/不会 → 重置为 box 0。due ≤ 今天 = 需要复习。\n` +
+    "> 本文件夹（测验层）不进索引/搜索/冷启动 — wiki→人的单向流动。\n",
+};
+
+export function renderLedger(entries: QuizEntry[], date: string, lang: WikiLang): string {
   const sorted = [...entries].sort((a, b) => (a.due !== b.due ? (a.due < b.due ? -1 : 1) : a.page < b.page ? -1 : 1));
   const row = (e: QuizEntry) =>
     `- ${e.page} — box ${e.box} · due ${e.due} · ${e.correct}/${e.asked} · last ${e.last} ${e.lastResult}` +
     `  <!-- quiz:${JSON.stringify(e)} -->`;
+  const pick = <T,>(catalog: LangCatalog<T>): T => catalog[lang] ?? catalog.en;
   const fm =
     `---\ntitle: Quiz ledger\n` +
-    (ko
-      ? `description: 사람 기억 장부 — 망각곡선(일 단위) 복습 스케줄. 엔진 관리(quiz-record), 마커 수동 수정 금지\n`
-      : `description: human memory ledger — day-granular spaced-repetition schedule. Engine-managed (quiz-record); never hand-edit markers\n`) +
+    `description: ${pick(LEDGER_DESCRIPTION)}\n` +
     `date: ${date}\nupdated: ${date}\ntags: [quiz, meta]\nstatus: ready\ndomain: meta\nsource: quiz-engine\n---\n`;
-  const note = ko
-    ? `\n> 자동 관리(LLM-0): /wiki-quiz 가 문항을 내고(웜), quiz-record 가 이 장부를 갱신한다(결정적).\n` +
-      `> 정답 → 다음 박스(${INTERVALS.join("·")}일), 오답·모름 → box 0 리셋. due ≤ 오늘 = 복습 대상.\n` +
-      `> 이 폴더(퀴즈 레이어)는 인덱스·검색·콜드스타트에서 제외된다 — 위키→사람 단방향.\n\n`
-    : `\n> Auto-managed (LLM-0): /wiki-quiz authors questions (warm); quiz-record updates this ledger (deterministic).\n` +
-      `> correct → next box (${INTERVALS.join("·")} days), wrong/skip → reset to box 0. due ≤ today = up for review.\n` +
-      `> This folder (the quiz layer) is excluded from index/search/cold-start — one-directional wiki → human.\n\n`;
+  const note = `\n${pick(LEDGER_NOTE)(INTERVALS.join("·"))}\n`;
   return fm + note + `## Items (${sorted.length})\n\n` + (sorted.length ? sorted.map(row).join("\n") : "(none)") + "\n";
 }
 
@@ -229,7 +250,7 @@ function saveLedger(root: string, cfg: WikiConfig, entries: QuizEntry[], date: s
   const dir = join(root, "docs", "wiki", cfg.quizDir);
   mkdirSync(dir, { recursive: true });
   const path = ledgerPath(root, cfg);
-  writeRepoFile(path, renderLedger(entries, date, effectiveKo(cfg)));
+  writeRepoFile(path, renderLedger(entries, date, resolveLang(cfg)));
   return path;
 }
 

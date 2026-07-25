@@ -145,7 +145,7 @@ describe("quiz", () => {
     expect(entries.length).toBe(2);
     const dec = entries.find((e) => e.page === "3_decision/dec-b.md")!;
     expect(dec.lastQ).toBe("A → B 를 왜 택했나?"); // "-->" would terminate the HTML marker
-    const reparsed = parseLedger(renderLedger(entries, D0, false));
+    const reparsed = parseLedger(renderLedger(entries, D0, "en"));
     expect(reparsed).toEqual([...entries].sort((a, b) => (a.due < b.due ? -1 : 1)));
   });
 
@@ -154,7 +154,7 @@ describe("quiz", () => {
       page: "3_decision/dec-b.md", box: 2, due: "2026-07-20", asked: 3, correct: 2,
       last: D0, lastResult: "correct", lastQ: "q",
     };
-    const md = renderLedger([good], D0, false) + `\n- junk <!-- quiz:{"page":"x.md","box":99} -->\n- worse <!-- quiz:{not json} -->\n`;
+    const md = renderLedger([good], D0, "en") + `\n- junk <!-- quiz:{"page":"x.md","box":99} -->\n- worse <!-- quiz:{not json} -->\n`;
     expect(parseLedger(md)).toEqual([good]);
   });
 

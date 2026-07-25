@@ -15,7 +15,35 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
-import { effectiveKo, getConfig, isRepoKorean } from "./config.ts";
+import { getConfig, resolveLang, type LangCatalog, type WikiLang } from "./config.ts";
+
+function pickLangValue<T>(catalog: LangCatalog<T>, lang: WikiLang): T {
+  return catalog[lang] ?? catalog.en;
+}
+
+// The queue page is machine-managed, but its header is read by people — so it follows the wiki's
+// language while the `## Open (N)` / row markers below stay language-invariant (this file's own
+// parser reads them back).
+const QUEUE_DESCRIPTION: LangCatalog<string> = {
+  en: "open gaps surfaced by review (missing concepts · next questions) — auto-closes once filled",
+  ko: "review가 표면화한 미해결 갭(개념 누락·다음 질문) 추적 — 채우면 자동 close",
+  ja: "review が浮かび上げた未解決ギャップ（概念の欠落・次の問い）— 埋まれば自動クローズ",
+  zh: "review 浮现出的未解决缺口（概念缺失·下一步问题）— 填补后自动关闭",
+};
+
+const QUEUE_NOTE: LangCatalog<string> = {
+  en: "> Auto-managed (LLM-0): fact gaps surfaced by review (concept pages · cross-links). Filling them is the LLM's bookkeeping too — /wiki-deep writes them; humans judge only contradictions and direction.",
+  ko: "> 자동 관리(LLM-0): review가 표면화한 사실 갭(개념 페이지·교차링크). 채우는 것도 LLM의 북키핑 — /wiki-deep 가 직접 작성. 사람 판단은 모순·방향성만.",
+  ja: "> 自動管理（LLM-0）: review が浮かび上げた事実ギャップ（概念ページ・相互リンク）。埋めるのも LLM の記帳作業で、/wiki-deep が直接書きます。人が判断するのは矛盾と方向性だけです。",
+  zh: "> 自动管理（LLM-0）: review 浮现出的事实缺口（概念页·交叉链接）。填补同样是 LLM 的记账工作，由 /wiki-deep 直接写入。人只判断矛盾与方向。",
+};
+
+const QUEUE_CLOSE_RULE: LangCatalog<(n: number) => string> = {
+  en: (n) => `Absent from ${n} consecutive reviews → closed automatically.`,
+  ko: (n) => `${n}회 연속 review에서 안 보이면 자동 close.`,
+  ja: (n) => `${n} 回連続の review で現れなければ自動クローズ。`,
+  zh: (n) => `连续 ${n} 次 review 都未出现 → 自动关闭。`,
+};
 import { gapStatePath, loadResolvedGapState, writeResolvedGapState } from "./gap-state.ts";
 import { readRepoFile, writeRepoFile } from "./repo-write.ts";
 
@@ -133,7 +161,7 @@ function compareRecentResolved(a: Gap, b: Gap): number {
   return aDate === bDate ? a.hash.localeCompare(b.hash) : bDate.localeCompare(aDate);
 }
 
-export function renderQueue(gaps: Gap[], date: string, ko: boolean = effectiveKo()): string {
+export function renderQueue(gaps: Gap[], date: string, lang: WikiLang = resolveLang()): string {
   const open = gaps.filter((g) => g.status === "open").sort(compareOpen);
   const resolved = gaps.filter((g) => g.status === "resolved");
   const recentResolved = [...resolved].sort(compareRecentResolved).slice(0, RECENT_RESOLVED_LIMIT);
@@ -145,15 +173,9 @@ export function renderQueue(gaps: Gap[], date: string, ko: boolean = effectiveKo
   // machine-managed part this file's own parser reads back.
   const fm =
     `---\ntitle: Gap queue\n` +
-    (ko
-      ? `description: review가 표면화한 미해결 갭(개념 누락·다음 질문) 추적 — 채우면 자동 close\n`
-      : `description: open gaps surfaced by review (missing concepts · next questions) — auto-closes once filled\n`) +
+    `description: ${pickLangValue(QUEUE_DESCRIPTION, lang)}\n` +
     `date: ${date}\nupdated: ${date}\ntags: [gap-queue, meta]\nstatus: ready\ndomain: meta\nsource: semantic-lint\n---\n`;
-  const note = ko
-    ? `\n> 자동 관리(LLM-0): review가 표면화한 사실 갭(개념 페이지·교차링크). 채우는 것도 LLM의 북키핑 — /wiki-deep 가 직접 작성. 사람 판단은 모순·방향성만.\n` +
-      `> ${RESOLVE_AFTER}회 연속 review에서 안 보이면 자동 close.\n\n`
-    : `\n> Auto-managed (LLM-0): fact gaps surfaced by review (concept pages · cross-links). Filling them is the LLM's bookkeeping too — /wiki-deep writes them; humans judge only contradictions and direction.\n` +
-      `> Absent from ${RESOLVE_AFTER} consecutive reviews → closed automatically.\n\n`;
+  const note = `\n${pickLangValue(QUEUE_NOTE, lang)}\n> ${pickLangValue(QUEUE_CLOSE_RULE, lang)(RESOLVE_AFTER)}\n\n`;
   return (
     fm +
     note +
@@ -191,7 +213,7 @@ export function refreshGapQueue(ws: string, date: string, opts: { check?: boolea
   const root = resolve(ws);
   const reviewPath = _latestReview(root);
   if (!reviewPath) {
-    const ko = isRepoKorean(root);
+    const ko = resolveLang(getConfig(root)) === "ko";
     return { verdict: "skip", reason: ko ? "review 리포트 없음(먼저 review 실행)" : "no review report yet (run review first)" };
   }
   const current = extractGapsFromReview(readFileSync(reviewPath, "utf-8"));
@@ -244,7 +266,7 @@ export function refreshGapQueue(ws: string, date: string, opts: { check?: boolea
   if (!opts.check) {
     const dir = join(root, "docs", "wiki", getConfig(root).queueDir);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeRepoFile(queuePath, renderQueue(gaps, date, isRepoKorean(root)));
+    writeRepoFile(queuePath, renderQueue(gaps, date, resolveLang(getConfig(root))));
     const stateDir = join(root, ".llmwiki");
     if (!existsSync(stateDir)) mkdirSync(stateDir, { recursive: true });
     writeResolvedGapState(gapStatePath(root), gaps);
