@@ -122,6 +122,9 @@ function* walkFiles(walkRoot: string, workspaceRoot: string): Generator<string> 
 export class WikiIndex {
   root: string;
   dbPath: string;
+  // Rows updated by the current index pass. Staleness is propagated once the pass is complete,
+  // so pages edited together never mark each other (flushStaleness).
+  private readonly _updatedInPass = new Set<string>();
   static SOURCE_FILE_CAP = 5000;
   // Per-file content cap for SOURCE files. Large data files
   // (multi-MB yaml/json fixtures) bloat the trigram index ~5-6x their raw size while
@@ -295,6 +298,7 @@ export class WikiIndex {
       if (r === "new") neu += 1;
       else if (r === "updated") updated += 1;
     }
+    this.flushStaleness(db);
     if (sourceCapped) {
       process.stderr.write(
         `⚠️  source-file cap (${WikiIndex.SOURCE_FILE_CAP}) reached — some non-wiki files were ` +
@@ -395,7 +399,9 @@ export class WikiIndex {
       // content became null (e.g. the file grew past SOURCE_CONTENT_CAP): drop the stale
       // chunks so the FTS no longer serves the old body (delete trigger cleans chunks_fts).
       else db.run("DELETE FROM document_chunks WHERE document_id = ?", [existing.id]);
-      this.propagateStaleness(db, existing.id);
+      // Staleness is propagated by the CALLER once the whole pass is known — a page edited in the
+      // same pass is not behind this change (see propagateStaleness).
+      this._updatedInPass.add(existing.id);
       return "updated";
     }
 
@@ -555,13 +561,28 @@ export class WikiIndex {
     );
   }
 
-  propagateStaleness(db: Database, docId: string): void {
+  /**
+   * Mark the pages that link to `docId` as stale — "a source I cite moved on without me".
+   *
+   * Pages updated in the SAME pass are excluded: a close-out routinely edits cross-linked pages
+   * together, and marking each other turned a fully-current wiki into a list of stale pages.
+   */
+  propagateStaleness(db: Database, docId: string, excludeIds: ReadonlySet<string> = new Set()): void {
+    const placeholders = excludeIds.size ? ` AND id NOT IN (${[...excludeIds].map(() => "?").join(", ")})` : "";
     db.run(
       "UPDATE documents SET stale_since = datetime('now') WHERE id IN " +
         "(SELECT source_document_id FROM document_references " +
-        " WHERE target_document_id = ? AND reference_type = 'links_to') AND stale_since IS NULL",
-      [docId],
+        " WHERE target_document_id = ? AND reference_type = 'links_to') AND stale_since IS NULL" +
+        placeholders,
+      [docId, ...excludeIds],
     );
+  }
+
+  /** Propagate for every page updated in this pass, then reset the pass. */
+  flushStaleness(db: Database): void {
+    const updated = new Set(this._updatedInPass);
+    this._updatedInPass.clear();
+    for (const id of updated) this.propagateStaleness(db, id, updated);
   }
 
   getBacklinks(db: Database, docId: string): DocRow[] {
