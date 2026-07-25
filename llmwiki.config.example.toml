@@ -25,13 +25,19 @@ config_version = 1
 #  (current-state.md · overview.md · log.md), the pointer it collapses overview.md to,
 #  and the headers of the gap queue and quiz ledger. Those files live in your repo.
 #
-#  "en" (default) · "ko" · "ja" · "zh"; region tags like "zh-Hans" are fine, and any
-#  unsupported value falls back to English. Engine MESSAGES (terminal, lint, session-start
-#  briefing) are translated for en/ko only — with "ja"/"zh" those stay English.
+#  Leave it unset (or "auto") and the engine follows YOUR SESSION: it reads the language the
+#  wiki's own content pages are written in, and before any page exists, the language you type
+#  to your agent — code identifiers and paths are ignored, so a Korean sentence full of English
+#  API names still reads as Korean. English is the last resort, not the default.
+#
+#  Set it to pin one language: "en" · "ko" · "ja" · "zh" (region tags like "zh-Hans" are fine;
+#  an unsupported value falls back to English). Pinning is worth it on a team where members type
+#  different languages. Engine MESSAGES (terminal, lint, session-start briefing) are translated
+#  for en/ko only — with "ja"/"zh" those stay English.
 #  One-off override: LLMWIKI_LANG=ja llmwiki init <path>   (env always wins)
 #
 # [wiki]
-# lang = "ko"
+# lang = "auto"   # or "en" · "ko" · "ja" · "zh"
 
 
 # ── 2. WIKI FOLDERS ───────────────────────────────────────────────────────────────────

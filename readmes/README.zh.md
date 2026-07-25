@@ -64,7 +64,7 @@ cp llmwiki.config.example.toml llmwiki.config.toml   # 英文，注释齐全
 
 | 配置项 | 改变什么 |
 |---|---|
-| `[wiki] lang` | **引擎**书写所用的语言（`en` · `ko` · `ja` · `zh`）— 页面语言不看这里，始终跟随你的对话 |
+| `[wiki] lang` | **引擎**书写所用的语言。不设置时跟随本次会话（先看 wiki 已有页面，没有就看你打给智能体的话）；要固定就写 `en` · `ko` · `ja` · `zh`。页面语言无论如何都跟随你的对话 |
 | `[[category]]` | wiki 的文件夹结构，以及每个文件夹放什么 |
 | `[topic]` `[queue]` `[quiz]` | 这些文件夹的名字，以及一次测验出几道题 |
 | `[private] dirs` | 对你可索引、但永不提交的文件夹 |

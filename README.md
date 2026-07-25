@@ -70,7 +70,7 @@ cp llmwiki.config.example.toml llmwiki.config.toml   # English, fully commented
 
 | Setting | What it changes |
 |---|---|
-| `[wiki] lang` | the language the **engine** writes in (`en` · `ko` · `ja` · `zh`) — your pages always follow your conversation, not this |
+| `[wiki] lang` | the language the **engine** writes in. Unset = follows your session (the wiki's own pages, then what you type to your agent); pin it with `en` · `ko` · `ja` · `zh`. Your pages always follow your conversation either way |
 | `[[category]]` | the wiki folders and what belongs in each |
 | `[topic]` `[queue]` `[quiz]` | those folder names, and how many questions a quiz session asks |
 | `[private] dirs` | folders indexed for you but never committed |
