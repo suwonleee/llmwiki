@@ -50,6 +50,9 @@ Don't create or reference other folders (`concepts/`, `entities/`, `synthesis/`,
 - Write pages in the SAME language as the session/conversation (or the existing wiki pages) — do not force or translate to a fixed language; instructions are English but content matches the source.
 - Regardless of the prose language, keep code identifiers, file paths, function/API names, CLI commands, config keys, and error strings VERBATIM (never translate/transliterate) — they are the language-invariant search anchors of the wiki.
 - Terminology (lint-enforced, advisory): avoid jargon a person wouldn't naturally say — e.g. when writing Korean prefer `방향성` over 진북/북극성, `업데이트` over distill.
+- **Body structure**: use compact hierarchical Markdown bullets — one concrete claim, decision, result, or action per `-` line; supporting detail at four spaces (`    -`); deeper detail at eight (`        -`).
+- **Endings**: prefer noun phrases or telegraphic endings natural to the page language; avoid polite/full-sentence endings and abstract framing. Keep verbs when actor, action, condition, or outcome would otherwise be unclear.
+- **Density**: keep each bullet to one useful line when possible; do not restate the heading/TL;DR or add a child that merely paraphrases its parent. Frontmatter, evidence/quotes, code, conflict/Q&A callouts, and the one-line TL;DR are exempt.
 
 ## Topic consolidation (the heart of this ritual)
 
@@ -84,6 +87,8 @@ source: <transcript>.jsonl
 TL;DR — one line.
 
 - <core fact / mechanism> [^s1]
+    - <supporting condition / result> [^s1]
+        - <deeper implementation detail, only when useful> [^s1]
 - <a later session adds this; existing lines stay untouched> [^s2]
 
 > [conflict] <other-page> claims X; this session says Y — needs human review
@@ -143,6 +148,7 @@ $ARGUMENTS
 
 4. **Refresh L0 freshness** (the reading input — most important):
    - Read `docs/wiki/current-state.md` and propose updating **only the 'now (TL;DR)' and 'next (remaining work)' sections** from this session + recent milestones + new topic pages.
+   - Apply the compact hierarchy contract above to Now/Next: main state or task on `-`, evidence/owner/blocker under `    -`, and only necessary deeper detail under `        -`.
    - **L0 is the team handoff packet**: on a shared wiki, write 'now/next' assuming the NEXT reader may be a teammate's session, not yours — name the owner on a 'next' item when it belongs to someone (`- <task> (→ name)`).
    - Direction and absolute rules are the human's. A direction change → propose a `1_direction/` draft + a draft-marked direction section. Show as a diff; record after approval. Refresh `updated:`.
 
@@ -152,6 +158,11 @@ $ARGUMENTS
 
 7. **Close out (deterministic)**: `llmwiki register-transcript <repo>` → `llmwiki index <repo>` → `llmwiki reconcile <repo> --commit` → `llmwiki lint <repo> --errors-only`. Thanks to validate-as-you-write this should **confirm** 0 errors, not open a repair phase; fix any residue until **0 errors**. Warnings arrive collapsed to per-code counts — report the counts as advisory backlog, don't over-format to silence them.
    - **Unresolved-citation guard (never strip to silence):** if lint flags `unresolved-citation`, **fix** the footnote — never delete it (deleting only downgrades to a `no-citation` warning and discards provenance). First decide the claim's KIND: **a human decision / judgment / statement** → the source is the **session transcript**, NOT code (normally already citable via `update-next`; else `llmwiki register-transcript <repo>`), cite `[^n]: <transcript>.jsonl` — **never repoint a decision to a code file**; **a factual claim about code** → cite **one repo-relative path that exists**. One path per footnote (no globs/commas/parentheticals); one footnote per source. **Keep the definition LINE to the bare source** — an evidence excerpt belongs on the indented line below it (v3), never appended to the definition, which would break teammate citations. Only if no real source exists, drop the underlying claim.
+   - **Maintenance signal (cheap; never repair here)**: run exactly this opt-in notice after lint. It records the notification cooldown but does not compact, VACUUM, or alter wiki pages:
+     ```sh
+     llmwiki db-health <repo> --notice
+     ```
+     If the CLI emits threshold guidance, report the measured `databaseBytes`, `freeBytes`, and `freeRatio = freeBytes / databaseBytes`, then name **`/wiki-deep`** as the exact next pass. Otherwise report `maintenance: no action`. Never run `compact`, `VACUUM`, `wiki-clean`, or `wiki-clean-apply` from `/wiki-save`.
 
 8. **Semantic review — engine-gated, launched in the background**: whenever this session created or updated pages, launch `llmwiki review <repo> --commit --if-due` **in the background** (harness background execution) and **continue to the report immediately — never wait for it**. Rationale: the review is the one heavy step in an otherwise minutes-scale close-out, and it hits every repo's *first* close-out unconditionally (no prior state → always due) — inline it breaks the latency contract exactly when first impressions matter; backgrounded, cadence and wall-clock are both kept. The engine skips it deterministically unless the cadence interval (~7 days, `LLMWIKI_REVIEW_INTERVAL_DAYS`) has passed since the last committed review — trust the gate; don't re-derive it from `log.md` and don't `--force` in a per-session close-out.
    - **Silent-death check (required with backgrounding)**: if any review output you DO see carries `prev_launch_incomplete`, report it in chat ("이전 백그라운드 리뷰가 커밋 없이 종료") — the cadence gate makes the died review due again, so this launch already re-runs it; the flag exists so a background death is never invisible.
@@ -159,7 +170,7 @@ $ARGUMENTS
    - Then run **`llmwiki gaps <repo>`** (fast, deterministic — folds committed reviews to date; today's backgrounded findings get folded on the next pass) to keep the tracked, self-closing `0_review/gap-queue.md` current (a gap auto-closes once review stops re-flagging it for 2 runs; review is bounded+cached by P1-A2).
    - **Fast gap quota — fill at most 2 quick gaps now**, oldest first, and only the cheap kinds: a `next-question` cross-link gap → add the wikilinks with explicit relation words, or the `> [conflict]` callout. *Missing-concept* pages and the rest of the queue are **`/wiki-deep`'s** job — announce the open count. A deferred gap is never lost: it stays tracked in the queue until some pass fills it (never hand-edit the queue's `<!-- gap:… -->` markers).
 
-9. **Report** (1–2 lines): "log reflected N (this session) / **backlog deferred: B sessions** / **topic pages: created A, updated B** / **gaps filled K (open M)** / 0_review pending N / L0 refreshed: yes/no / lint error·warn counts / review: launched-bg|not-due|prev-incomplete / **deep pass (`/wiki-deep`) recommended: yes/no (why)**". Recommend `/wiki-deep` when any of these holds: pending backlog ≥ 5 sessions · lint shows `topic-oversize` · open gaps keep being deferred.
+9. **Report** (1–2 lines): "log reflected N (this session) / **backlog deferred: B sessions** / **topic pages: created A, updated B** / **gaps filled K (open M)** / 0_review pending N / L0 refreshed: yes/no / lint error·warn counts / review: launched-bg|not-due|prev-incomplete / maintenance: no-action|db <databaseBytes>B free <freeBytes>B ratio <freeRatio> → `/wiki-deep` / **deep pass (`/wiki-deep`) recommended: yes/no (why)**". Recommend `/wiki-deep` when any of these holds: pending backlog ≥ 5 sessions · lint shows `topic-oversize` · open gaps keep being deferred · the maintenance notice emits threshold guidance.
 
 ### 0_review file format — Q./A. form (no emojis)
 After the routine-judgment rule, `0_review` is almost entirely **direction-shift confirmation**. Labels/guidance in English; content (question + draft) in the wiki's own language. Separate paragraphs with blank lines so the human can write the answer directly under `A.`:

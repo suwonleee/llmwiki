@@ -10,12 +10,15 @@ status: ready
 > L0 — injected before overview at session start. Keep it tight; detail lives in milestones/decisions.
 
 ## Now
-**pennywise** = a single-binary CLI that imports bank CSVs, categorizes transactions, and
-reports monthly spend. Storage is SQLite; import is the core path (parse→categorize→dedup→persist).
+- **pennywise**: single-binary CLI for bank CSV import, transaction categorization, and monthly-spend reporting
+    - Storage: SQLite
+    - Core path: parse → categorize → dedup → persist
 
 ## Next
-- Rule-based categorizer is brittle on merchant aliases — consider a learned fallback.
-- No multi-currency support yet (everything assumes one account currency).
+- Merchant-alias brittleness in the rule-based categorizer
+    - Candidate: learned fallback
+- Missing multi-currency support
+    - Current assumption: one account currency
 
 ## Entry
 check `llmwiki doctor` · ask `/wiki-ask` · close out `/wiki-save` · deep pass `/wiki-deep`

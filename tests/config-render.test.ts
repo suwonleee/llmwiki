@@ -1,10 +1,9 @@
-// Byte-stability contract (P2): with STOCK conventions, every config-rendered prompt/rules text
-// is byte-identical to the historical hardcoded text — proving the render refactor is a no-op
-// for default users without any LLM A/B. Custom configs take the generic branch (also pinned).
+// Canonical-default contract: stock prompt/rules text is pinned so intentional format changes
+// reach every writer together. Custom configs take the generic branch (also pinned).
 import { test, expect } from "bun:test";
 import {
   defaults, isStockConventions, renderDomainBullets, renderDomainList,
-  renderGroundingRule, renderTerminologyLine, renderRuleCategories, renderRuleHumanQueue,
+  renderBodyStyleRule, renderGroundingRule, renderTerminologyLine, renderRuleCategories, renderRuleHumanQueue,
 } from "../src/engine/config.ts";
 import { schemaText, writePromptTemplate } from "../src/engine/autoupdate.ts";
 
@@ -12,7 +11,7 @@ test("stock conventions are detected", () => {
   expect(isStockConventions(defaults())).toBe(true);
 });
 
-test("schemaText renders byte-identical to the historical _SCHEMA prompt (stock)", () => {
+test("schemaText renders the canonical stock prompt", () => {
   expect(schemaText(defaults())).toBe(`Wiki page rules (strict):
 - Begin the file with a YAML frontmatter block containing: title, description (one sentence), date (YYYY-MM-DD), tags ([2+ entries]), status (ready|draft), domain, source.
 - Choose ONE domain for this page and set the \`domain:\` field to it:
@@ -23,9 +22,19 @@ test("schemaText renders byte-identical to the historical _SCHEMA prompt (stock)
 - Every factual claim must carry a footnote citation \`[^1]\`, and the file must end with \`[^1]: <TRANSCRIPT_FILENAME>\`.
 - Grounding rule: write only what is grounded in the transcript. For milestone, record stated facts. For insight / decision / direction, summarize what the HUMAN actually realized or decided — never invent judgments, opinions, or decisions the human did not make. When unsure, omit.
 - Usefulness rule: everything written must help the NEXT work session. No filler, no restating the obvious.
+- Body style: compact hierarchical bullets — one concrete claim, decision, result, or action per \`-\` line; supporting detail at four spaces (\`    -\`); deeper detail at eight (\`        -\`). Prefer noun phrases or telegraphic endings natural to the page language; avoid abstract framing or repetition, but keep verbs when actor, action, condition, or outcome would be unclear. One useful line per bullet when possible; never add a child that merely repeats its parent.
 - Write the page body in the SAME language as the session transcript / conversation (match the source; do not force or translate to a fixed language). Use English if the source language is unclear.
 - Regardless of the prose language, keep code identifiers, file paths, function/API names, CLI commands, config keys, and error strings VERBATIM in their original form (do not translate or transliterate them) — they are the language-invariant search anchors of this wiki.
 - Terminology (lint-enforced, advisory): avoid jargon a person wouldn't naturally say — e.g. when writing Korean prefer \`방향성\` (NOT 진북/북극성/north-star) and \`업데이트\`/\`update\` (NOT distill).`);
+});
+
+test("body style contract is compact and carries exact nesting examples", () => {
+  const rule = renderBodyStyleRule();
+  expect(rule).toContain("one concrete claim, decision, result, or action");
+  expect(rule).toContain("`    -`");
+  expect(rule).toContain("`        -`");
+  expect(rule).toContain("noun phrases or telegraphic endings");
+  expect(rule.length).toBeLessThan(500);
 });
 
 test("writePromptTemplate keeps the historical domain-pick phrase and terminology line (stock)", () => {

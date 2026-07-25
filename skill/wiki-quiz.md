@@ -40,7 +40,7 @@ $ARGUMENTS
 
 5. **Record every asked item** (including skips) AFTER the last answer, in one sequential batch: `llmwiki quiz-record <repo> --page <page> --result <r> --question "<the question you asked>"` per item. Deferring the records to the end keeps the ask loop free of engine calls; sequential because the ledger rewrite is not safe from parallel writers.
 
-6. **Write the human-readable session record** `docs/wiki/6_quiz/<YYYY-MM-DD>-quiz.md` (same-day rerun → append a `## 2회차` section, don't overwrite). Frontmatter: `title` `description` `date` `tags: [quiz, memory]` `status: ready` `domain: quiz` `source: quiz session`. Body per question: the question / the human's answer / verdict / the grounded answer + `[[<page>]]` link. This file is the human's review notebook — write it for the human, not the machine.
+6. **Write the human-readable session record** `docs/wiki/6_quiz/<YYYY-MM-DD>-quiz.md` (same-day rerun → append a `## 2회차` section, don't overwrite). Frontmatter: `title` `description` `date` `tags: [quiz, memory]` `status: ready` `domain: quiz` `source: quiz session`. Use one `-` bullet per question with four-space children (`    -`) for answer, verdict, and grounded answer + `[[<page>]]`; use eight spaces (`        -`) only for necessary detail. Prefer compact noun-phrase/telegraphic endings. This file is the human's review notebook — write it for the human, not the machine.
 
 7. **Log**: append `## [YYYY-MM-DD] quiz | N asked, M correct, K to re-review` to `docs/wiki/log.md`.
 

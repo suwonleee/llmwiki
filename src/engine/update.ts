@@ -110,14 +110,14 @@ export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(w
         (ko
           ? "> **L0(현재 상태)는 판단층 — 사람이 소유한다.** LLM은 `/wiki-save`·`/wiki-deep` 때 '지금/다음'\n" +
             "> 갱신을 *제안*만 하고, 방향성·절대 규칙은 사람이 확정한다. (포크용 템플릿 플레이스홀더)\n\n" +
-            "## 방향성 (사람 확정)\n\n<이 프로젝트가 향하는 큰 방향. 사람만 바꾼다.>\n\n" +
-            "## 지금 (TL;DR)\n\n<현재 상태 한 줄~몇 줄>\n\n" +
-            "## 다음 (남은 작업)\n\n<바로 다음에 할 일>\n"
+            "## 방향성 (사람 확정)\n\n- <프로젝트의 큰 방향 — 사람만 변경>\n\n" +
+            "## 지금 (TL;DR)\n\n- <현재 핵심 상태 한 줄>\n    - <필요한 근거·조건>\n\n" +
+            "## 다음 (남은 작업)\n\n- <바로 다음 할 일>\n    - <담당·차단 요인·완료 조건>\n"
           : "> **L0 (current state) is the judgment layer — the human owns it.** The LLM only *proposes* 'now/next'\n" +
             "> updates during /wiki-save·/wiki-deep; direction and absolute rules are confirmed by the human. (fork template placeholder)\n\n" +
-            "## Direction (human-confirmed)\n\n<the big direction this project heads toward. only the human changes this.>\n\n" +
-            "## Now (TL;DR)\n\n<current state in a line or a few>\n\n" +
-            "## Next (remaining work)\n\n<what to do right next>\n"),
+            "## Direction (human-confirmed)\n\n- <big project direction — human changes only>\n\n" +
+            "## Now (TL;DR)\n\n- <current core state in one line>\n    - <necessary evidence or condition>\n\n" +
+            "## Next (remaining work)\n\n- <immediate next action>\n    - <owner, blocker, or completion condition>\n"),
       "utf-8",
     );
   }

@@ -342,10 +342,9 @@ export function effectiveKo(cfg: WikiConfig = getConfig()): boolean {
 
 // ---- prompt / rules rendering (P2) --------------------------------------------------------
 //
-// BYTE-STABILITY CONTRACT: with the default config, every rendered text below is byte-identical
-// to the historical hardcoded prompt/rules text (pinned by tests/config-render.test.ts), so the
-// refactor is provably a no-op for stock users — no LLM A/B needed. Custom configs take the
-// generic branch. When editing legacy strings here, update the prompts' consumers' intent too.
+// CANONICAL-DEFAULT CONTRACT: tests/config-render.test.ts pins the stock prompt/rules text so
+// intentional writing-contract changes land everywhere together. Custom configs take the generic
+// branch. When editing these strings, update the prompts' consumers' intent too.
 
 // Are the conventions (categories + banned terms) unchanged from stock? Legacy artisanal text
 // is only safe to emit when yes.
@@ -391,6 +390,12 @@ export function renderTerminologyLine(cfg: WikiConfig = getConfig()): string {
   if (!cfg.bannedTerms.length) return "";
   const pairs = cfg.bannedTerms.map(([a, b]) => `\`${a}\` (prefer \`${b}\`)`).join(", ");
   return `- Terminology (lint-enforced, advisory): avoid jargon a person wouldn't naturally say — banned: ${pairs}.`;
+}
+
+// Compact enough to repeat across every model-written surface. The exact indentation examples
+// carry the structure without spending prompt tokens on a separate style essay.
+export function renderBodyStyleRule(): string {
+  return "- Body style: compact hierarchical bullets — one concrete claim, decision, result, or action per `-` line; supporting detail at four spaces (`    -`); deeper detail at eight (`        -`). Prefer noun phrases or telegraphic endings natural to the page language; avoid abstract framing or repetition, but keep verbs when actor, action, condition, or outcome would be unclear. One useful line per bullet when possible; never add a child that merely repeats its parent.";
 }
 
 // Cold-start operating-rule fragments (rule 2's category listing + rule 3's human-queue line).

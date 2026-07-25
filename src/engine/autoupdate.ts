@@ -27,7 +27,7 @@ import * as capture from "./capture.ts";
 import * as update from "./update.ts";
 import {
   domainToDir, effectiveKo, getConfig, isHumanReviewDir, isStockConventions,
-  renderDomainBullets, renderDomainList, renderGroundingRule, renderTerminologyLine,
+  renderBodyStyleRule, renderDomainBullets, renderDomainList, renderGroundingRule, renderTerminologyLine,
   type WikiConfig,
 } from "./config.ts";
 
@@ -57,8 +57,8 @@ export const VERIFY_MODEL = MODEL_HEAVY;
 // resolved per repo inside updateOne/run. The LLM-facing WRITE/VERIFY prompts stay English
 // by design regardless.
 
-// Rendered per resolved config (per-repo). Stock config renders byte-identical to the
-// historical `_SCHEMA` const (pinned by tests/config-render.test.ts).
+// Rendered per resolved config (per-repo). The canonical stock contract is pinned by
+// tests/config-render.test.ts so every writer receives intentional format changes together.
 export function schemaText(cfg: WikiConfig = getConfig()): string {
   return `Wiki page rules (strict):
 - Begin the file with a YAML frontmatter block containing: title, description (one sentence), date (YYYY-MM-DD), tags ([2+ entries]), status (ready|draft), domain, source.
@@ -67,6 +67,7 @@ ${renderDomainBullets(cfg)}
 - Every factual claim must carry a footnote citation \`[^1]\`, and the file must end with \`[^1]: <TRANSCRIPT_FILENAME>\`.
 ${renderGroundingRule(cfg)}
 - Usefulness rule: everything written must help the NEXT work session. No filler, no restating the obvious.
+${renderBodyStyleRule()}
 - Write the page body in the SAME language as the session transcript / conversation (match the source; do not force or translate to a fixed language). Use English if the source language is unclear.
 - Regardless of the prose language, keep code identifiers, file paths, function/API names, CLI commands, config keys, and error strings VERBATIM in their original form (do not translate or transliterate them) — they are the language-invariant search anchors of this wiki.
 ${renderTerminologyLine(cfg)}`;
