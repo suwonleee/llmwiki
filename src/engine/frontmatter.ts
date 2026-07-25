@@ -17,6 +17,31 @@ export type Frontmatter = {
   readonly tier: KnowledgeTier | null;
 };
 
+// Python str.title(): capitalize the first letter of each alphabetic run, lower the rest.
+// Non-alpha (digits, Hangul, spaces) are word boundaries; Hangul has no case → unchanged.
+function titleCase(value: string): string {
+  return value.replace(/[A-Za-z]+/g, (word) => word[0]!.toUpperCase() + word.slice(1).toLowerCase());
+}
+
+/**
+ * The title a document claims for itself, with its filename as the fallback.
+ *
+ * One rule for every consumer: a page's own `title:` is the label the human wrote and the one
+ * every surface should show; the filename-derived form is what remains for pages (and source
+ * files) that declare nothing. The filename derivation is byte-stable with the pre-frontmatter
+ * behavior, so an index only changes where a page actually declares a title.
+ */
+export function resolveDocumentTitle(
+  frontmatter: { readonly title?: string | null } | null,
+  relativePath: string,
+): string {
+  const declared = frontmatter?.title;
+  if (typeof declared === "string" && declared.trim()) return declared.trim();
+  const name = relativePath.split("/").pop() ?? relativePath;
+  const stem = name.includes(".") ? name.slice(0, name.lastIndexOf(".")) : name;
+  return titleCase(stem.replace(/-/g, " ").replace(/_/g, " ").trim());
+}
+
 function stripQuotes(value: string): string {
   return value.replace(/^['"]+|['"]+$/g, "");
 }

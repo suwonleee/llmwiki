@@ -10,7 +10,7 @@ import { join, relative as relpath, resolve } from "node:path";
 import { storeChunks, chunkText } from "./chunker.ts";
 import { stripEvidence } from "./refs.ts";
 import { getConfig } from "./config.ts";
-import { parseFrontmatter } from "./frontmatter.ts";
+import { parseFrontmatter, resolveDocumentTitle } from "./frontmatter.ts";
 import {
   COLD_INDEX_RELATIVE_PATH,
   coldDiscoveryChunk,
@@ -53,12 +53,6 @@ function sha256(path: string): string | null {
 
 function sourceKind(relative: string): string {
   return relative.startsWith(WIKI_DIR + "/") ? "wiki" : "source";
-}
-
-// Python str.title(): capitalize first letter of each alphabetic run, lower the rest.
-// Non-alpha (digits, Hangul, spaces) are word boundaries; Hangul has no case → unchanged.
-function titleCase(s: string): string {
-  return s.replace(/[A-Za-z]+/g, (w) => w[0]!.toUpperCase() + w.slice(1).toLowerCase());
 }
 
 // Sanitize a free-text query into a safe FTS5 MATCH string. Raw user input may contain FTS5
@@ -338,8 +332,8 @@ export class WikiIndex {
     const contentHash = sha256(full);
 
     const existing = db
-      .query("SELECT id, content_hash FROM documents WHERE relative_path = ?")
-      .get(relative) as { id: string; content_hash: string | null } | null;
+      .query("SELECT id, content_hash, title FROM documents WHERE relative_path = ?")
+      .get(relative) as { id: string; content_hash: string | null; title: string | null } | null;
 
     let sourceContent: string | null = null;
     const capExempt = sourceKind(relative) === "wiki"; // wiki pages are never capped
@@ -360,11 +354,16 @@ export class WikiIndex {
 
     const parts = relative.split("/");
     const dirPath = parts.length > 1 ? "/" + parts.slice(0, -1).join("/") + "/" : "/";
-    const stem = name.includes(".") ? name.slice(0, name.lastIndexOf(".")) : name;
-    const title = titleCase(stem.replace(/-/g, " ").replace(/_/g, " ").trim());
+    const title = resolveDocumentTitle(frontmatter, relative);
 
     if (existing) {
-      if (existing.content_hash === contentHash) return null; // unchanged → skip
+      if (existing.content_hash === contentHash) {
+        // The title is derived state, so an index written before titles came from frontmatter
+        // heals here rather than waiting for the page's bytes to change (self-heal, same stance
+        // as the citation graph) — one cheap UPDATE, and the row still counts as unchanged.
+        if (existing.title !== title) db.run("UPDATE documents SET title=? WHERE id=?", [title, existing.id]);
+        return null;
+      }
       db.run(
         "UPDATE documents SET content=?, file_size=?, content_hash=?, mtime_ns=?, file_type=?, " +
           "description=CASE WHEN source_kind='wiki' THEN ? ELSE description END, " +
