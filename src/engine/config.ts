@@ -298,6 +298,7 @@ export function getConfig(repo?: string): WikiConfig {
 }
 export function _resetForTests(configRoot?: string): void {
   _cache.clear();
+  _langCache.clear();
   _candidates = null;
   _configRoot = configRoot ?? CLONE_ROOT;
 }
@@ -390,8 +391,16 @@ export function resolveWikiLang(root: string, cfg: { readonly lang?: string } = 
   if ((process.env.LLMWIKI_LANG ?? "").trim()) return "en";
   const explicit = explicitLang(cfg.lang);
   if (explicit) return explicit;
-  return detectSessionLang(root, getConfig(root)) ?? "en";
+  // Detection touches the disk, and one command can write several files (a close-out normalizes
+  // the overview, refreshes the queue and appends the log). Resolve once per repo per process.
+  const cached = _langCache.get(root);
+  if (cached) return cached;
+  const detected = detectSessionLang(root, getConfig(root)) ?? "en";
+  _langCache.set(root, detected);
+  return detected;
 }
+
+const _langCache = new Map<string, WikiLang>();
 
 /** Pick this wiki's entry from a catalog, falling back to English. */
 export function pickLang<T>(catalog: LangCatalog<T>, cfg: { readonly lang?: string } = getConfig()): T {

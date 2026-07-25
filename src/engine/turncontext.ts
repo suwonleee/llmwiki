@@ -23,7 +23,7 @@ import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { WikiIndex } from "./db.ts";
-import { effectiveKo, getConfig } from "./config.ts";
+import { isRepoKorean, effectiveKo, getConfig } from "./config.ts";
 import { COLD_INDEX_RELATIVE_PATH } from "./cold-index.ts";
 
 const MAX_TERMS = 12;
@@ -185,12 +185,12 @@ export function buildTurnContext(repo: string, prompt: string, sessionId = ""): 
     const cfg = getConfig(repo);
     // L0 / meta pages are already injected whole at session start — never re-suggest them.
     const l0Basenames = new Set([cfg.files.overview, cfg.files.l0, cfg.files.log, "index.md"]);
-    const head = HEADS[effectiveKo(cfg) ? "ko" : "en"];
     const terms = extractTerms(prompt ?? "");
     if (!terms.length) return "";
 
     const w = new WikiIndex(repo);
     if (!existsSync(w.dbPath)) return ""; // no index yet — stay silent, never create state
+    const head = HEADS[isRepoKorean(w.root) ? "ko" : "en"]; // the same answer the writers use
 
     // HQE-lite (P1): fold prior-turn terms into this turn's query. Persist the merged
     // weights immediately so even a silent turn feeds the next one.

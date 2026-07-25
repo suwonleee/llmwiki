@@ -16,7 +16,7 @@ import { buildSpine, topicGaps } from "./synthesis.ts";
 import { auditNudge } from "./context-audit.ts";
 import { parseQueue } from "./gaps.ts";
 import { dueCount } from "./quiz.ts";
-import { effectiveKo, getConfig, renderRuleCategories, renderRuleHumanQueue, scanDirs, type WikiConfig } from "./config.ts";
+import { isRepoKorean, effectiveKo, getConfig, renderRuleCategories, renderRuleHumanQueue, scanDirs, type WikiConfig } from "./config.ts";
 import { detectConfigDrift } from "./migrate.ts";
 
 
@@ -173,7 +173,7 @@ function categoryPages(wiki: string, catDirs: string[]): string[] {
 export function buildContext(repo: string): string {
   const proj = repo;
   const cfg = getConfig(proj); // per-repo conventions (configs/ → root file → defaults)
-  const lang: "ko" | "en" = effectiveKo(cfg) ? "ko" : "en";
+  const lang: "ko" | "en" = isRepoKorean(repo) ? "ko" : "en"; // same answer the writers use
   const T = makeT(lang, cfg);
   const catDirs = scanDirs(cfg);
   const wiki = join(proj, "docs", "wiki");

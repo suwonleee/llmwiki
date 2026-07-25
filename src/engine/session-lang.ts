@@ -18,6 +18,9 @@ import type { WikiLang, WikiConfig } from "./config.ts";
 const MAX_PAGES = 12; // newest pages sampled — enough that one stray page cannot decide
 const MAX_TRANSCRIPTS = 3;
 const MAX_UTTERANCE_CHARS = 4000;
+// Read only the tail of a transcript: a language needs a few sentences, not a whole session, and
+// sessions reach many megabytes. The tail is also the most recent part, which is what we want.
+const TRANSCRIPT_TAIL_BYTES = 256 * 1024;
 
 /**
  * Human-written wiki pages — the category folders and the topic encyclopedia only, newest first.
@@ -72,8 +75,15 @@ function humanUtterances(root: string): string[] {
     const said: string[] = [];
     for (const { path } of transcripts) {
       if (!existsSync(path)) continue;
+      let start = 0;
+      try {
+        const size = statSync(path).size;
+        start = size > TRANSCRIPT_TAIL_BYTES ? size - TRANSCRIPT_TAIL_BYTES : 0;
+      } catch {
+        continue;
+      }
       const text = extract
-        .extractIncrement(path, 0)
+        .extractIncrement(path, start) // a truncated first line simply fails to parse and is skipped
         .users.map((turn) => turn.text)
         .join("\n")
         .slice(0, MAX_UTTERANCE_CHARS);
