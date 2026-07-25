@@ -15,9 +15,11 @@
 //     LLM-scored layer, not here
 //   • never breaks a session: every failure path returns "" (adapters also exit 0)
 //
-// Works with the trigram FTS (schema.sql): term extraction is language-neutral — ASCII
-// identifier-ish tokens (any user language keeps code terms in ASCII) + CJK runs ≥3 chars
-// (the FTS5 trigram floor; shorter runs cannot match and are dropped).
+// Works with the trigram FTS (schema.sql). Term extraction is language-neutral in the literal
+// sense — EVERY writing system, not just the two that happen to be easy: ASCII identifier-ish
+// tokens (any user language keeps code terms in ASCII), word runs in any script, and word-sized
+// windows over scripts that write without spaces. Everything is floored at 3 characters, the
+// FTS5 trigram matching floor; shorter terms cannot match and are dropped.
 import { closeSync, constants as fsConstants, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
@@ -37,23 +39,63 @@ const HEADS = {
 // ---- term extraction (deterministic, language-neutral) ------------------------
 
 // ASCII identifier-ish tokens: words, dotted/slashed paths, snake/kebab identifiers.
-// ≥4 chars keeps "the/and/for"-class noise out without a stopword list.
+// ≥4 chars keeps "the/and/for"-class noise out without a stopword list. Runs FIRST so
+// `src/engine/db.ts` stays one term instead of being cut at every separator.
 const ASCII_RE = /[A-Za-z_][A-Za-z0-9_./-]{3,}/g;
-// Unspaced CJK runs (Hangul / Han / Kana). ≥3 chars — the FTS5 trigram matching floor.
-const CJK_RE = /[\p{Script=Hangul}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]{3,}/gu;
+
+// Scripts written without spaces between words. A run of these is a whole CLAUSE, not a word,
+// and a clause is a literal substring no page will ever contain — so runs are sliced into
+// word-sized windows below rather than queried whole. Hangul is deliberately absent: Korean
+// puts spaces between words, so its runs already arrive word-sized.
+// Script_Extensions, not Script: the prolonged-sound mark "ー" that ends マイグレーション is
+// Script=Common, so a plain Script= class breaks the run in half at exactly the wrong place.
+const UNSPACED_CHAR =
+  "\\p{scx=Han}\\p{scx=Hiragana}\\p{scx=Katakana}\\p{scx=Thai}\\p{scx=Lao}\\p{scx=Khmer}\\p{scx=Myanmar}";
+const UNSPACED_RUN_RE = new RegExp(`[${UNSPACED_CHAR}]{3,}`, "gu");
+const UNSPACED_ONLY_RE = new RegExp(`^[${UNSPACED_CHAR}]+$`, "u");
+
+// Any other script's words. \p{M} keeps combining marks attached, so "überhaupt" and Vietnamese
+// "ngôn" survive whole — the ASCII pattern above cannot even start on ü, and used to hand back
+// the fragment "berhaupt". Without this pass, Cyrillic, Thai, Devanagari, Arabic, Greek and
+// Hebrew prompts yielded NOTHING and the turn injected nothing, ever.
+const WORD_RE = /[\p{L}\p{N}][\p{L}\p{M}\p{N}_]{2,}/gu;
+
+// Window size for unspaced scripts — about a word in Han/Kana/Thai, and short enough to occur
+// inside a page. Overlapping windows so a word straddling two of them is still covered.
+const UNSPACED_WINDOW = 4;
+const UNSPACED_MAX_WINDOWS = 8;
+
+function unspacedWindows(run: string): string[] {
+  const chars = [...run];
+  if (chars.length <= UNSPACED_WINDOW + 1) return [run];
+  // Spread the windows over the whole run: a fixed stride would cover only its head.
+  const stride = Math.max(2, Math.ceil((chars.length - UNSPACED_WINDOW) / (UNSPACED_MAX_WINDOWS - 1)));
+  const out: string[] = [];
+  for (let i = 0; i + UNSPACED_WINDOW <= chars.length; i += stride) {
+    out.push(chars.slice(i, i + UNSPACED_WINDOW).join(""));
+  }
+  return out;
+}
 
 export function extractTerms(prompt: string): string[] {
   const seen = new Set<string>();
   const terms: string[] = [];
-  for (const re of [ASCII_RE, CJK_RE]) {
-    for (const m of prompt.matchAll(re)) {
-      const t = m[0]!.replace(/[./-]+$/, ""); // trim trailing punctuation-ish tail
-      if (t.length < 3) continue;
-      const key = t.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      terms.push(t);
-    }
+  const add = (raw: string): void => {
+    const t = raw.replace(/[./-]+$/, ""); // trim trailing punctuation-ish tail
+    // 3 is the FTS5 trigram matching floor; Latin gets 4, because that is what keeps the
+    // "the/and/for" class out without a stopword list. A dense script needs no such margin —
+    // three characters of Hangul or Han are already a content word.
+    if ([...t].length < (/^[\x00-\x7F]+$/.test(t) ? 4 : 3)) return;
+    const key = t.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    terms.push(t);
+  };
+  for (const m of prompt.matchAll(ASCII_RE)) add(m[0]!);
+  for (const m of prompt.matchAll(UNSPACED_RUN_RE)) for (const w of unspacedWindows(m[0]!)) add(w);
+  for (const m of prompt.matchAll(WORD_RE)) {
+    if (UNSPACED_ONLY_RE.test(m[0]!)) continue; // already windowed above; the whole run cannot match
+    add(m[0]!);
   }
   // longer = more specific; keep the most specific MAX_TERMS
   return terms.sort((a, b) => b.length - a.length).slice(0, MAX_TERMS);
@@ -175,9 +217,12 @@ export function accumulate(
 // break one-of-two exact matches, so a pure distinct-count gate over-silences CJK prompts.
 // Weighted instead: a long term is specific enough to stand alone (CJK run ≥5 — e.g.
 // 트랜스크립트; ASCII identifier ≥8 — e.g. turncontext), short terms need a second witness.
+// A term is "specific" (worth 2 of the 2 points the confidence gate needs) once it is long
+// enough to be unlikely by chance. Non-ASCII scripts carry more meaning per character than
+// English, so they reach that point sooner — one crude threshold rather than per-language tuning.
 function termWeight(t: string): number {
-  const cjk = /[^\x00-\x7F]/.test(t);
-  return (cjk ? t.length >= 5 : t.length >= 8) ? 2 : 1;
+  const dense = /[^\x00-\x7F]/.test(t);
+  return ([...t].length >= (dense ? 5 : 8)) ? 2 : 1;
 }
 
 export function buildTurnContext(repo: string, prompt: string, sessionId = ""): string {

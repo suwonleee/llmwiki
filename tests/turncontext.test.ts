@@ -15,7 +15,10 @@ describe("extractTerms / ftsQuery", () => {
     expect(terms).toContain("src/engine/db.ts");
     expect(terms).toContain("watch.ts");
     expect(terms).toContain("데몬이");
-    expect(terms).toContain("索引更新失败");
+    // An unspaced run comes out as word-sized windows, not one clause: "索引更新失败" as a
+    // literal substring only matches a page that wrote those six characters in a row.
+    expect(terms).toContain("索引更新");
+    expect(terms).toContain("更新失败");
     expect(terms).not.toContain("캡처"); // 2-char CJK — below the trigram matching floor
     expect(terms).not.toContain("the"); // <4 ascii
     expect(terms).not.toContain("bug");
