@@ -10,16 +10,22 @@
 //
 // Engine-authored files (skeleton, log, ledgers, cold index) are excluded on purpose: an English
 // skeleton seeded on day one must never lock a Korean team into English.
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { detectLangOfMany } from "./lang-detect.ts";
 import type { WikiLang, WikiConfig } from "./config.ts";
 
-const MAX_PAGES = 12; // newest-first sample; enough to outvote one stray page
+const MAX_PAGES = 12; // newest pages sampled — enough that one stray page cannot decide
 const MAX_TRANSCRIPTS = 3;
 const MAX_UTTERANCE_CHARS = 4000;
 
-/** Human-written wiki pages: the category folders and the topic encyclopedia only. */
+/**
+ * Human-written wiki pages — the category folders and the topic encyclopedia only, newest first.
+ *
+ * Newest matters: a wiki that ran in English for a year and switched to Korean last month should
+ * follow the switch, not be outvoted by its own history. Sampling the most recent pages also keeps
+ * this cheap on a large wiki.
+ */
 function contentPages(root: string, cfg: WikiConfig): string[] {
   const wiki = join(root, "docs", "wiki");
   const dirs = [...cfg.categories.map((c) => c.dir), cfg.topicDir];
@@ -29,14 +35,18 @@ function contentPages(root: string, cfg: WikiConfig): string[] {
     if (!existsSync(full)) continue;
     for (const entry of readdirSync(full, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+      const path = join(full, entry.name);
       try {
-        files.push({ path: join(full, entry.name), mtime: Date.now() });
+        files.push({ path, mtime: statSync(path).mtimeMs });
       } catch {
-        /* unreadable entry → skip */
+        /* vanished mid-scan → skip */
       }
     }
   }
-  return files.slice(-MAX_PAGES).map((f) => f.path);
+  return files
+    .sort((a, b) => b.mtime - a.mtime)
+    .slice(0, MAX_PAGES)
+    .map((f) => f.path);
 }
 
 function readAll(paths: readonly string[]): string[] {

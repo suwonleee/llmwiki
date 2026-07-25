@@ -11,7 +11,7 @@
 // Order overall: LLMWIKI_LANG → an explicit `[wiki] lang` → detected → English. Explicit always
 // wins, so a team can pin a language and never think about this again.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _resetForTests, resolveWikiLang } from "../src/engine/config.ts";
@@ -133,6 +133,32 @@ describe("the session language becomes the default", () => {
     expect(resolveWikiLang(root)).toBe("en");
     ensureSkeleton(root);
     expect(readFileSync(join(root, "docs", "wiki", "current-state.md"), "utf8")).toContain("## Now (TL;DR)");
+  });
+
+  // "Whichever language is used most" — one vote per page, and when a wiki has been going for a
+  // while, the sample is the MOST RECENT pages, so a wiki that switched language follows the switch
+  // instead of being outvoted by its own history.
+  test("the majority of pages decides, and a language switch is followed", () => {
+    const root = mkRepo();
+    page(root, "혼합-1.md", "TL;DR — 한국어 페이지.\n\n- 결제 파싱 경로를 한 곳으로 모았고, 앞으로도 이 경로만 쓴다.\n");
+    page(root, "혼합-2.md", "TL;DR — 한국어 페이지.\n\n- 중복 로직을 제거했고 테스트로 고정했다. 다음 세션도 여기서 이어간다.\n");
+    page(root, "혼합-3.md", "TL;DR — 한국어 페이지.\n\n- 카테고리 구조를 정리했다. 읽는 순서는 그대로 유지한다.\n");
+    page(root, "mixed-4.md", "TL;DR — an English page.\n\n- One page in English does not decide the language of the whole wiki here.\n");
+    expect(resolveWikiLang(root)).toBe("ko"); // 3 of 4 pages
+
+    // a wiki that ran in English for a long time and has now switched to Korean
+    const switched = mkRepo();
+    const old = Date.UTC(2026, 0, 1) / 1000;
+    for (let i = 0; i < 14; i++) {
+      const name = `z-old-english-${String(i).padStart(2, "0")}.md`;
+      page(switched, name, `TL;DR — an English page.\n\n- This wiki spent a long time being written in English, page ${i}.\n`);
+      utimesSync(join(switched, "docs", "wiki", "3_decision", name), old, old);
+    }
+    for (let i = 0; i < 6; i++) {
+      page(switched, `a-새-한국어-${i}.md`, `TL;DR — 한국어로 전환했다.\n\n- 이제부터 이 위키는 한국어로 쓴다. ${i}번째 페이지.\n`);
+    }
+    _resetForTests();
+    expect(resolveWikiLang(switched)).toBe("ko"); // the recent pages carry it
   });
 
   test("engine-authored files never vote — only what a human's session produced", () => {
