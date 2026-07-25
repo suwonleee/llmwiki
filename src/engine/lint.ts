@@ -10,6 +10,7 @@ import {
   buildLinkIndex,
   lookupKey,
   parseCitationFilename,
+  parseWikiLinkTargets,
   resolveWikiLink,
   stripCode,
   stripEvidence,
@@ -193,9 +194,13 @@ export class Linter {
     const conn = this.conn!;
     // 0_review/ is the human-judgment queue (auto-quarantine + LLM-posed questions),
     // not a real wiki category — its files aren't finished pages, so skip them entirely.
-    const allDocs = idx
-      .listDocumentsWithContent(conn)
-      .filter((d) => !this._p(d).includes(`/${this.cfg.queueDir}/`));
+    // The link index is built from EVERY document, including the queue: a page may legitimately
+    // link into 0_review (the gap queue is linked from the pages it tracks), and the indexer
+    // creates that edge. Lint must judge links against the same set or it would warn about links
+    // that do resolve.
+    const everyDoc = idx.listDocumentsWithContent(conn);
+    const linkIndex = buildLinkIndex(everyDoc as any);
+    const allDocs = everyDoc.filter((d) => !this._p(d).includes(`/${this.cfg.queueDir}/`));
     const wikiPages = allDocs.filter((d) => this._isWiki(d));
     const sourceLookup = this._sourceLookup(allDocs);
     const wikiLookup = this._wikiLookup(allDocs);
@@ -211,7 +216,7 @@ export class Linter {
     const issues: LintIssue[] = [];
     for (const d of docs) {
       if (this._isWiki(d)) {
-        issues.push(...this._lintPage(d, sourceLookup, wikiLookup, wikiPages.length));
+        issues.push(...this._lintPage(d, sourceLookup, wikiLookup, linkIndex, wikiPages.length));
       }
     }
     if (scope === "all" || scope === "sources") {
@@ -228,6 +233,7 @@ export class Linter {
     doc: WikiDoc,
     sourceLookup: Record<string, WikiDoc>,
     wikiLookup: Record<string, WikiDoc>,
+    linkIndex: LinkIndex,
     wikiCount: number,
   ): LintIssue[] {
     const path = this._p(doc);
@@ -241,7 +247,7 @@ export class Linter {
     issues.push(...this._citations(path, content, sourceLookup));
     issues.push(...this._excerpts(doc, content, sourceLookup));
     issues.push(...this._pageSecrets(doc, content));
-    issues.push(...this._links(doc, content, wikiLookup));
+    issues.push(...this._links(doc, content, wikiLookup, linkIndex));
     issues.push(...this._graph(doc, content, sourceLookup));
     issues.push(...this._orphan(doc, wikiCount));
     issues.push(...this._noCitation(doc, content));
@@ -636,7 +642,7 @@ export class Linter {
     return out;
   }
 
-  _links(doc: WikiDoc, content: string, wikiLookup: Record<string, WikiDoc>): LintIssue[] {
+  _links(doc: WikiDoc, content: string, wikiLookup: Record<string, WikiDoc>, linkIndex: LinkIndex): LintIssue[] {
     const path = this._p(doc);
     let curDir = "";
     if (doc.path.includes("/docs/wiki/")) {
@@ -665,6 +671,23 @@ export class Linter {
         code: "dangling-link",
         path,
         message: `wiki link \`${href}\` does not resolve`,
+      });
+    }
+    // [[wikilink]] targets. The loop above only sees markdown links, so until now the wiki's
+    // PRIMARY linking idiom was the one nobody checked: a [[...]] pointing at nothing produced no
+    // edge, no warning, and an orphaned page — invisible rot.
+    //
+    // Advisory, unlike the error above: pages deliberately link forward to work not written yet
+    // (the gap queue is built on exactly that), and an intention must never block a close-out.
+    for (const target of parseWikiLinkTargets(content)) {
+      if (resolveWikiLink(target, linkIndex)) continue;
+      out.push({
+        severity: "warn",
+        code: "dangling-wikilink",
+        path,
+        message: this.ko
+          ? `\`[[${target}]]\` 가 아무 페이지도 가리키지 않는다 — 대상을 만들거나 링크를 고칠 것 (아직 쓰지 않은 페이지를 가리키는 것이면 그대로 둬도 된다)`
+          : `\`[[${target}]]\` points at no page — create the target or fix the link (leave it if it names a page you have yet to write)`,
       });
     }
     return out;

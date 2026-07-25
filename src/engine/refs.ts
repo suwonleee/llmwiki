@@ -147,15 +147,26 @@ export function parseWikiLinks(content: string, currentDir: string): string[] {
       paths.push(resolved);
     }
   }
-  // [[wikilink]] targets — pass raw (path-qualified like 'milestones/foo' resolves via relpath+'.md';
-  // bare like 'current-state' resolves by filename in updateReferences). No relative rewrite.
-  for (const m of content.matchAll(_WIKILINK_BRACKET_RE)) {
+  paths.push(...parseWikiLinkTargets(content));
+  return paths;
+}
+
+/**
+ * `[[target]]` / `[[target|alias]]` / `[[target#anchor]]` targets, code spans excluded.
+ *
+ * Targets are raw: a path-qualified one ('5_topic/foo') resolves via relpath + '.md', a bare one
+ * ('current-state') by filename. No relative rewrite. Shared with lint so a dangling-link warning
+ * can only ever be raised about a link the indexer also failed to turn into an edge.
+ */
+export function parseWikiLinkTargets(content: string): string[] {
+  const out: string[] = [];
+  for (const m of stripCode(content).matchAll(_WIKILINK_BRACKET_RE)) {
     const t = m[1]!.trim();
     if (t && !t.startsWith("http") && !t.startsWith("#") && !t.startsWith("../")) {
-      paths.push(t);
+      out.push(t);
     }
   }
-  return paths;
+  return out;
 }
 
 // The lookup key for a path, filename, title or link target: case-folded AND Unicode-normalized.
