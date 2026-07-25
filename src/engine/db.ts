@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative as relpath, resolve } from "node:path";
-import { storeChunks, chunkText } from "./chunker.ts";
+import { storeChunks, chunkText, CHUNKER_VERSION } from "./chunker.ts";
 import { stripEvidence } from "./refs.ts";
 import { getConfig } from "./config.ts";
 import { parseFrontmatter, resolveDocumentTitle } from "./frontmatter.ts";
@@ -180,6 +180,7 @@ export class WikiIndex {
     this.migrateFts(db); // must run BEFORE exec(SCHEMA): drop the old-tokenizer table first
     db.exec(SCHEMA); // idempotent (IF NOT EXISTS) → any command self-initializes
     this.migrateFrontmatterMetadata(db);
+    this.migrateChunker(db);
     const ws = db.query("SELECT 1 FROM workspace LIMIT 1").get();
     if (!ws) {
       db.run("INSERT INTO workspace (id, name, root_path) VALUES (?, ?, ?)", [
@@ -200,6 +201,36 @@ export class WikiIndex {
   // 'porter unicode61' chunks_fts. The index is derived state, so the migration is just:
   // drop the old FTS table + its triggers (SCHEMA recreates them with trigram) and
   // repopulate from document_chunks. Idempotent — a trigram table is left untouched.
+  // Chunker migration: chunk boundaries are a function of how tokens are counted, so a DB whose
+  // chunks were cut under an older rule holds retrieval units of the wrong size. Indexing is
+  // incremental by content hash and the FILES did not change, so nothing else would ever notice.
+  // The index is derived state, so the migration is just: drop the chunks and clear the hashes
+  // that make indexing skip them. Idempotent — a current marker is left untouched.
+  private migrateChunker(db: Database): void {
+    const row = db.query("SELECT value FROM index_build WHERE key = 'chunker'").get() as { value: string } | null;
+    if (row?.value === CHUNKER_VERSION) return;
+    // One transaction: an interruption must not leave the chunks gone AND the marker current,
+    // which would look migrated while serving an empty index.
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.run("DELETE FROM document_chunks");
+      db.run("UPDATE documents SET content_hash = NULL");
+      db.run(
+        "INSERT INTO index_build (key, value) VALUES ('chunker', ?) " +
+          "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [CHUNKER_VERSION],
+      );
+      db.exec("COMMIT");
+    } catch (e) {
+      try {
+        db.exec("ROLLBACK");
+      } catch {
+        /* already rolled back */
+      }
+      throw e;
+    }
+  }
+
   private migrateFts(db: Database): void {
     const row = db
       .query("SELECT sql FROM sqlite_master WHERE type='table' AND name='chunks_fts'")

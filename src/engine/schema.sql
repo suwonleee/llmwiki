@@ -8,6 +8,14 @@ PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
 
 -- Identity row for the indexed repo: id + display name + absolute root path.
+-- Derived-index build markers (key → value). Chunk boundaries are a function of how tokens are
+-- counted, so a change to that estimate has to invalidate chunks cut under the old one: indexing
+-- is incremental by content hash, and the FILES did not change.
+CREATE TABLE IF NOT EXISTS index_build (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS workspace (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
