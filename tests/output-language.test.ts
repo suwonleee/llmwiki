@@ -10,7 +10,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RECENT_POINTER_EN, RECENT_POINTER_KO, normalizeOverview, normalizeOverviewText } from "../src/engine/overview.ts";
-import { refreshGapQueue } from "../src/engine/gaps.ts";
+import { parseQueue, refreshGapQueue, renderQueue } from "../src/engine/gaps.ts";
 import { _reviewLogEntry, review } from "../src/engine/review.ts";
 import { _resetForTests } from "../src/engine/config.ts";
 
@@ -106,6 +106,27 @@ describe("engine output follows the wiki language", () => {
     withLang("ko");
     const ko = await review(root, { date: "2026-07-25" });
     expect(String(ko.reason ?? "")).toMatch(HANGUL);
+  });
+
+  test("the generated gap queue page follows the wiki language and still parses", () => {
+    const gap = {
+      hash: "abc123",
+      type: "missing-concept" as const,
+      text: "amount parsing has no page of its own",
+      status: "open" as const,
+      absent: 0,
+      firstSeen: "2026-07-25",
+      lastSeen: "2026-07-25",
+    };
+    const en = renderQueue([gap], "2026-07-25", false);
+    expect(en).not.toMatch(HANGUL);
+    expect(en).toContain("## Open (1)");
+    // the header language must never break the machine-managed rows
+    expect(parseQueue(en).map((g) => g.hash)).toEqual(["abc123"]);
+
+    const ko = renderQueue([gap], "2026-07-25", true);
+    expect(ko).toMatch(HANGUL);
+    expect(parseQueue(ko).map((g) => g.hash)).toEqual(["abc123"]);
   });
 
   test("the review entry appended to log.md follows the wiki language", () => {

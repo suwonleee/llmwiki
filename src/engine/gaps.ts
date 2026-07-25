@@ -132,20 +132,30 @@ function compareRecentResolved(a: Gap, b: Gap): number {
   return aDate === bDate ? a.hash.localeCompare(b.hash) : bDate.localeCompare(aDate);
 }
 
-export function renderQueue(gaps: Gap[], date: string): string {
+export function renderQueue(gaps: Gap[], date: string, ko: boolean = effectiveKo()): string {
   const open = gaps.filter((g) => g.status === "open").sort(compareOpen);
   const resolved = gaps.filter((g) => g.status === "resolved");
   const recentResolved = [...resolved].sort(compareRecentResolved).slice(0, RECENT_RESOLVED_LIMIT);
   const row = (g: Gap) =>
     `- [${g.status === "resolved" ? "x" : " "}] (${g.type}) ${g.text}` +
     `  <!-- gap:${g.hash} absent:${g.absent} seen:${g.firstSeen}..${g.lastSeen}${g.resolvedAt ? ` resolved:${g.resolvedAt}` : ""} -->`;
+  // Page content in the user's repository — the header follows the wiki's language. The rows and
+  // the `## Open (N)` / `## Resolved (N …)` headings stay language-invariant: they are the
+  // machine-managed part this file's own parser reads back.
   const fm =
-    `---\ntitle: Gap queue\ndescription: review가 표면화한 미해결 갭(개념 누락·다음 질문) 추적 — 채우면 자동 close\n` +
+    `---\ntitle: Gap queue\n` +
+    (ko
+      ? `description: review가 표면화한 미해결 갭(개념 누락·다음 질문) 추적 — 채우면 자동 close\n`
+      : `description: open gaps surfaced by review (missing concepts · next questions) — auto-closes once filled\n`) +
     `date: ${date}\nupdated: ${date}\ntags: [gap-queue, meta]\nstatus: ready\ndomain: meta\nsource: semantic-lint\n---\n`;
+  const note = ko
+    ? `\n> 자동 관리(LLM-0): review가 표면화한 사실 갭(개념 페이지·교차링크). 채우는 것도 LLM의 북키핑 — /wiki-deep 가 직접 작성. 사람 판단은 모순·방향성만.\n` +
+      `> ${RESOLVE_AFTER}회 연속 review에서 안 보이면 자동 close.\n\n`
+    : `\n> Auto-managed (LLM-0): fact gaps surfaced by review (concept pages · cross-links). Filling them is the LLM's bookkeeping too — /wiki-deep writes them; humans judge only contradictions and direction.\n` +
+      `> Absent from ${RESOLVE_AFTER} consecutive reviews → closed automatically.\n\n`;
   return (
     fm +
-    `\n> 자동 관리(LLM-0): review가 표면화한 사실 갭(개념 페이지·교차링크). 채우는 것도 LLM의 북키핑 — /wiki-deep 가 직접 작성. 사람 판단은 모순·방향성만.\n` +
-    `> ${RESOLVE_AFTER}회 연속 review에서 안 보이면 자동 close.\n\n` +
+    note +
     `> Summary: ${open.length} open · ${resolved.length} resolved total · showing ${recentResolved.length} most recent resolved.\n\n` +
     `## Open (${open.length})\n\n` +
     (open.length ? open.map(row).join("\n") : "(none)") +
@@ -231,7 +241,7 @@ export function refreshGapQueue(ws: string, date: string, opts: { check?: boolea
   if (!opts.check) {
     const dir = join(root, "docs", "wiki", getConfig(root).queueDir);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(queuePath, renderQueue(gaps, date), "utf-8");
+    writeFileSync(queuePath, renderQueue(gaps, date, effectiveKo(getConfig(root))), "utf-8");
     const stateDir = join(root, ".llmwiki");
     if (!existsSync(stateDir)) mkdirSync(stateDir, { recursive: true });
     writeResolvedGapState(gapStatePath(root), gaps);
