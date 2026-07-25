@@ -59,6 +59,7 @@ describe("screenSecrets — must not eat real evidence", () => {
     ["file paths", "edit src/engine/grounding.ts and tests/quiz.test.ts"],
     ["a commit line", "git commit -m 'fix(engine): bucket plain-drop ingests'"],
     ["a long identifier", "session 3bd9cac5-8e77-462e-b86b-b5b94871981e.jsonl"],
+    ["a Codex rollout filename", "rollout-2026-07-24T07-56-03-019f9131-6f47-72f1-8a1c-373e2cf535c4.jsonl"],
     ["a plain command", "bun src/cli.ts quiz-next ~/work/app --limit 5"],
   ])("leaves %s untouched", (_label, sample) => {
     const r = screenSecrets(sample);

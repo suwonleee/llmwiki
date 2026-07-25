@@ -8,6 +8,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { RETIRED_CODEX_SKILLS } from "./install-history.ts";
 import { CLONE_ROOT } from "./paths.ts";
 import { claudeConfigDirs } from "./sources/claude.ts";
 
@@ -23,6 +24,7 @@ const CORE = [
   "src/engine/capture.ts",
   "src/engine/autoupdate.ts",
   "src/engine/review.ts",
+  "src/engine/wiki-doctor.ts",
   "src/engine/doctor.ts",
   "src/engine/claude.ts",
   "src/cli.ts",
@@ -39,12 +41,13 @@ const CORE = [
   "skill/wiki-ask.md",
   "skill/wiki-deep.md",
   "skill/wiki-quiz.md",
+  "skill/wiki-doctor.md",
 ];
 // slash commands that must be present in every profile's commands/ dir.
 // Must stay in sync with wire.ts SKILLS and the repo's skill/ dir — tests/skills-drift.test.ts
 // enforces all three (drift here is silent: wire installs a command doctor never checks, so its
 // loss is invisible — the same success-looking-failure class as the CLI value-flag allowlist).
-const COMMANDS = ["wiki-save.md", "wiki-ask.md", "wiki-deep.md", "wiki-quiz.md"] as const;
+const COMMANDS = ["wiki-save.md", "wiki-ask.md", "wiki-deep.md", "wiki-quiz.md", "wiki-doctor.md"] as const;
 const PLIST = join(HOME, "Library", "LaunchAgents", "com.llmwiki.daemon.plist");
 const LABEL = "com.llmwiki.daemon";
 // canonical SessionStart read-injection hook — what --fix re-registers if a profile lost it
@@ -67,13 +70,9 @@ const TURNCTX_SCRIPT = `${CLONE_ROOT}/hooks/userpromptsubmit-inject.sh`;
 const WIRE_CLAUDE_CMD = `bun ${shellQuote(join(CLONE_ROOT, "src", "daemon", "wire.ts"))}`;
 const WIRE_CODEX_CMD = `bun ${shellQuote(join(CLONE_ROOT, "src", "daemon", "wire-codex.ts"))}`;
 const WIRE_OPENCODE_CMD = `bun ${shellQuote(join(CLONE_ROOT, "src", "daemon", "wire-opencode.ts"))}`;
-const CODEX_SKILLS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz"] as const;
-// explicit install history (mirrors wire-codex.ts LEGACY_SKILLS) — deriving legacy names from
-// the current ones breaks on every rename: it fabricates never-installed names and goes blind
-// to the ones that actually exist on disk
-const LEGACY_CODEX_SKILLS = ["llmwiki-fast", "llmwiki-ask", "llmwiki-deep", "llmwiki-quiz", "wiki-fast"];
+const CODEX_SKILLS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"] as const;
 const CODEX_MANAGED = "llmwiki-codex-managed";
-const OPENCODE_COMMANDS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz"] as const;
+const OPENCODE_COMMANDS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"] as const;
 const OPENCODE_MANAGED = "llmwiki-opencode-managed";
 
 export interface CodexInstallStatus {
@@ -173,7 +172,7 @@ export function inspectCodexInstall(
       return true;
     }
   });
-  result.legacySkills = LEGACY_CODEX_SKILLS.filter((name) =>
+  result.legacySkills = RETIRED_CODEX_SKILLS.filter((name) =>
     existsSync(join(home, ".agents", "skills", name, "SKILL.md")),
   );
   const launcher = join(binDir, "llmwiki");
@@ -430,7 +429,7 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
     }
   }
 
-  // Codex is a first-class setup target. The hook file, both lifecycle events, four skills,
+  // Codex is a first-class setup target. The hook file, both lifecycle events, all skills,
   // and the launcher must all point at this clone. Hook trust itself is owned by Codex's
   // current-hash review UI; config records are only a conservative "review happened" signal.
   if (harness === "all" || harness === "codex") {

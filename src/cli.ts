@@ -2,19 +2,18 @@
 // llmwiki — local-first compounding wiki engine (CLI).
 // Markdown under <workspace>/docs/wiki is the source of truth; .llmwiki/index.db is a
 // rebuildable derived index. No server, no MCP registration required.
+// allow: SIZE_OK — stable CLI dispatch remains co-located with legacy handlers to preserve command/help ordering; parsing and maintenance commands now have dedicated boundaries, while further migration is outside this behavior-preserving Todo.
 import { WikiIndex, dedupeByPage } from "./engine/db.ts";
+import { MissingCliFlagValueError, parseCliArgs, type ParsedCliArgs as Parsed } from "./cli-args.ts";
+import { createMaintenanceHandlers } from "./commands/maintenance.ts";
 import * as excerpt from "./engine/excerpt.ts";
-import { updateReferences, autoRegisterCitedTranscripts } from "./engine/refs.ts";
+import { rebuildReferenceGraph } from "./engine/refs.ts";
 import { effectiveKo, getConfig, CONFIG_BASENAME, CONFIGS_DIR } from "./engine/config.ts";
-import { migrate } from "./engine/migrate.ts";
 import { Linter, formatReport } from "./engine/lint.ts";
 import * as update from "./engine/update.ts";
 import { sourceForPath } from "./engine/source.ts";
 import * as autoupdate from "./engine/autoupdate.ts";
 import { review } from "./engine/review.ts";
-import { normalizeOverview } from "./engine/overview.ts";
-import { refreshGapQueue } from "./engine/gaps.ts";
-import { runDoctor } from "./engine/doctor.ts";
 import { buildContext } from "./engine/context.ts";
 import { buildTurnContext } from "./engine/turncontext.ts";
 import { buildDigest, buildTopicView } from "./engine/synthesis.ts";
@@ -37,70 +36,15 @@ import { join, resolve } from "node:path";
 let LANG = effectiveKo() ? "ko" : "en";
 let ko = LANG === "ko";
 
-// ---- tiny arg parser (replaces argparse) ----
-interface Parsed {
-  cmd: string;
-  positionals: string[];
-  flags: Record<string, string | boolean>;
-}
-
-function parseArgs(argv: string[]): Parsed {
-  const cmd = argv[0] ?? "";
-  const positionals: string[] = [];
-  const flags: Record<string, string | boolean> = {};
-  // Flags that take a value (others are boolean switches). MISSING AN ENTRY FAILS SILENTLY: the
-  // flag parses as `true`, its value falls through to positionals, and the command runs happily
-  // with a default — `excerpt --offset N` quoted the wrong part of a transcript and `migrate
-  // --map old=new` applied no mapping, both without a word. tests/cli-flags.test.ts pins this set
-  // against every flag cli.ts reads as a value, so adding a value flag without listing it fails.
-  const valueFlags = new Set([
-    "--path", "--scope", "--limit", "--kind", "--session", "--offset", "--map",
-    "--write-model", "--verify-model", "--source", "--dest", "--model", "--date", "--min-pages",
-    "--repo", "--max-pages", "--prompt", "--corpus", "--label",
-    "--page", "--result", "--question", "--harness",
-  ]);
-  for (let i = 1; i < argv.length; i++) {
-    const a = argv[i]!;
-    if (a.startsWith("--")) {
-      if (valueFlags.has(a)) {
-        flags[a] = argv[++i] ?? "";
-      } else {
-        flags[a] = true;
-      }
-    } else {
-      positionals.push(a);
-    }
-  }
-  return { cmd, positionals, flags };
-}
-
 function die(msg: string): never {
   process.stderr.write(msg + "\n");
   process.exit(2);
 }
 
+const MAINTENANCE_HANDLERS = createMaintenanceHandlers({ die, isKorean: () => ko });
+
 function idx(ws: string): WikiIndex {
   return new WikiIndex(ws);
-}
-
-// Rebuild the citation/link reference graph for all wiki pages. Shared by `refs`, and
-// auto-run after `index`/`reindex` so a file move never leaves a stale graph (which
-// surfaces as citation-graph-mismatch lint errors). Returns edge + page counts.
-function rebuildRefs(w: WikiIndex): { tc: number; tl: number; pages: number } {
-  autoRegisterCitedTranscripts(w); // durable provenance self-heal before materializing edges
-  const conn = w.connect();
-  const docs = w
-    .listDocumentsWithContent(conn)
-    .filter((d) => String(d.relative_path).includes("docs/wiki/"));
-  let tc = 0;
-  let tl = 0;
-  for (const d of docs) {
-    const [c, l] = updateReferences(w, conn, d as any, (d.content as string) || "");
-    tc += c;
-    tl += l;
-  }
-  conn.close();
-  return { tc, tl, pages: docs.length };
 }
 
 // ---- command handlers ----
@@ -124,37 +68,37 @@ function cmdInit(p: Parsed) {
   // Materialize the citation/link graph too (same as `index`). Without this, a fresh clone's
   // first `lint` right after setup.sh's `init` reports a spurious citation-graph-mismatch on
   // any page that has footnotes (e.g. the EXAMPLE page) — a bad first impression for adopters.
-  const r = rebuildRefs(w);
+  const r = rebuildReferenceGraph(w);
   console.log(`✓ Initialized ${w.root}`);
   console.log(`  docs/wiki/ + .llmwiki/index.db created; indexed ${neu} file(s)`);
   console.log(`  categories scaffolded: ${scaffold.join(" · ")}`);
   if (cfg.privateDirs.length) console.log(`  private (local-only, auto-gitignored): ${cfg.privateDirs.join(" · ")}`);
   console.log(`  skeleton: L0 · overview · log templates + .gitignore(.llmwiki/) · .gitattributes · .mailmap (idempotent)`);
-  console.log(`  refs: ${r.tc} citation, ${r.tl} link edge(s) across ${r.pages} page(s)`);
+  console.log(`  refs: ${r.citations} citation, ${r.links} link edge(s) across ${r.pages} page(s)`);
 }
 
 function cmdIndex(p: Parsed) {
   const ws = p.positionals[0] ?? die("index <workspace> required");
   const w = idx(ws);
   const [neu, updated] = w.indexAll();
-  const r = rebuildRefs(w);
+  const r = rebuildReferenceGraph(w);
   console.log(`✓ Indexed: ${neu} new, ${updated} updated (unchanged skipped via content_hash)`);
-  console.log(`  refs: ${r.tc} citation, ${r.tl} link edge(s) across ${r.pages} page(s)`);
+  console.log(`  refs: ${r.citations} citation, ${r.links} link edge(s) across ${r.pages} page(s)`);
 }
 
 function cmdReindex(p: Parsed) {
   const ws = p.positionals[0] ?? die("reindex <workspace> required");
   const w = idx(ws);
   const [neu] = w.reindex();
-  const r = rebuildRefs(w);
+  const r = rebuildReferenceGraph(w);
   console.log(`✓ Reindexed from disk: ${neu} file(s)`);
-  console.log(`  refs: ${r.tc} citation, ${r.tl} link edge(s) across ${r.pages} page(s)`);
+  console.log(`  refs: ${r.citations} citation, ${r.links} link edge(s) across ${r.pages} page(s)`);
 }
 
 function cmdRefs(p: Parsed) {
   const ws = p.positionals[0] ?? die("refs <workspace> required");
-  const { tc, tl, pages } = rebuildRefs(idx(ws));
-  console.log(`✓ Reference graph rebuilt: ${tc} citation edge(s), ${tl} link edge(s) across ${pages} page(s)`);
+  const { citations, links, pages } = rebuildReferenceGraph(idx(ws));
+  console.log(`✓ Reference graph rebuilt: ${citations} citation edge(s), ${links} link edge(s) across ${pages} page(s)`);
 }
 
 function cmdLint(p: Parsed) {
@@ -268,14 +212,6 @@ function cmdUpdateDone(p: Parsed) {
   const skipped = !!p.flags["--skipped"];
   update.markUpdated(ws, transcript, offset, skipped);
   console.log(`✓ watermark advanced to ${offset} (${skipped ? "skipped" : "distilled"})`);
-}
-
-function cmdCapturePrune(p: Parsed) {
-  const raw = p.flags["--older-than"];
-  const days = raw === undefined ? 30 : parseInt(raw as string, 10);
-  if (Number.isNaN(days) || days < 0) die("capture-prune [--older-than <days>] — days must be a non-negative number");
-  const r = capture.prune(days);
-  console.log(`✓ capture queue pruned: ${r.removed} dead pending row(s) removed, ${r.kept} pending kept (age guard ${days}d)`);
 }
 
 function cmdUpdateEnqueue(p: Parsed) {
@@ -429,14 +365,6 @@ function cmdRegisterTranscript(p: Parsed) {
     }
   }
   console.log(`✓ registered ${n} transcript(s) as citable sources in ${basename(resolve(ws))}`);
-}
-
-function cmdDoctor(p: Parsed) {
-  const harness = ((p.flags["--harness"] as string) || "all") as "all" | "codex" | "claude" | "opencode";
-  if (!new Set(["all", "codex", "claude", "opencode"]).has(harness)) {
-    die("doctor --harness must be one of: all, codex, claude, opencode");
-  }
-  process.exit(runDoctor(!!p.flags["--fix"], harness));
 }
 
 // Cold-start read-injection blob for <repo> (default: cwd). Harness-neutral: the Claude
@@ -631,51 +559,6 @@ function cmdTopics(p: Parsed) {
   process.stdout.write(buildTopicView(repo) + "\n");
 }
 
-async function cmdOverview(p: Parsed) {
-  const ws = p.positionals[0] ?? die("overview <workspace> required");
-  const check = !!p.flags["--check"];
-  const r = normalizeOverview(ws, { check });
-  if (r.verdict === "skip") {
-    console.log(`  ⏭  ${r.reason}`);
-    return;
-  }
-  if (r.verdict === "unchanged") {
-    console.log(ko ? `  ✓ overview 정상 (정규화 불필요)` : `  ✓ overview already normalized`);
-  } else {
-    const verb = check ? (ko ? "정규화 필요" : "would normalize") : ko ? "정규화함" : "normalized";
-    console.log(`  ✅ ${verb}: Recent Updates → [[log.md]] 포인터 (${r.before}B → ${r.after}B)`);
-  }
-  if (r.oversized) {
-    console.log(
-      ko
-        ? `  ⚠️  overview가 여전히 예산 초과 — Key Findings를 토픽 페이지로 분산 권장`
-        : `  ⚠️  overview still over budget — move Key Findings detail into topic pages`,
-    );
-  }
-}
-
-async function cmdGaps(p: Parsed) {
-  const ws = p.positionals[0] ?? die("gaps <workspace> required");
-  const date = (p.flags["--date"] as string) || new Date().toISOString().slice(0, 10);
-  const r = refreshGapQueue(ws, date, { check: !!p.flags["--check"] });
-  if (r.verdict === "skip") {
-    console.log(`  ⏭  ${r.reason}`);
-    return;
-  }
-  console.log(
-    ko
-      ? `  ✅ 갭 큐 갱신: open ${r.open} (신규 ${r.added}) · resolved ${r.resolved} → ${r.path}`
-      : `  ✅ gap queue: open ${r.open} (new ${r.added}) · resolved ${r.resolved} → ${r.path}`,
-  );
-  if (r.open) {
-    console.log(
-      ko
-        ? `  ※ 사실 갭(개념 페이지·교차링크)은 LLM의 북키핑 — 다음 /wiki-deep 가 직접 채움 (사람 판단은 모순·방향성만; 채워지면 자동 close)`
-        : `  ※ fact gaps (concept pages·cross-links) are the LLM's bookkeeping — the next /wiki-deep fills them (humans judge only contradictions·direction; auto-closes once filled)`,
-    );
-  }
-}
-
 // P0-1a: deterministic retrieval benchmark (LLM-0, engine-dev tool — not part of any loop).
 function cmdBench(p: Parsed) {
   const ws = p.positionals[0] ?? die("bench <workspace> [--tune-only|--sealed] required");
@@ -766,36 +649,13 @@ function cmdConventions(p: Parsed) {
   console.log(`- ${c.queueDir} | human-judgment queue (Q./A. items; empty when idle)`);
   console.log(`- ${c.quizDir} | quiz layer — the HUMAN's memory loop (never indexed/searched; engine quiz-status/next/record + /wiki-quiz)`);
   console.log(`special files: L0=${c.files.l0} (human-owned) · ${c.files.overview} (entry point) · ${c.files.log} (append-only ledger)`);
-  console.log("frontmatter (required): title · description · date · tags(≥2) · status(ready|draft) · domain · source; queue items also stamp owner(github login); optional: author, updated");
+  console.log("frontmatter (required): title · description · date · tags(≥2) · status(ready|draft) · domain · source; queue items also stamp owner(github login); authorship comes from git history (mailmap-aware), never `author:`; optional: updated");
   if (c.bannedTerms.length) console.log(`banned terms: ${c.bannedTerms.map(([a, b]) => `${a}→${b}`).join(" · ")}`);
 }
 
 // Restructure the wiki to the effective config (folder renames + link rewriting + domain
 // updates + .schema-version). Dry-run by default; --commit applies; --map old=new[,…] resolves
 // ambiguous pairs. Never runs automatically — cold-start/doctor only suggest it.
-function cmdMigrate(p: Parsed) {
-  const ws = p.positionals[0] ?? die("migrate <workspace> [--commit] [--map old=new,old=new]");
-  const map: Record<string, string> = {};
-  for (const kv of String(p.flags["--map"] ?? "").split(",").map((x) => x.trim()).filter(Boolean)) {
-    const eq = kv.indexOf("=");
-    if (eq > 0) map[kv.slice(0, eq)] = kv.slice(eq + 1);
-  }
-  const r = migrate(ws, { commit: !!p.flags["--commit"], map });
-  if (r.verdict === "skip") return console.log(`skip: ${r.reason}`);
-  if (r.verdict === "conforms") {
-    console.log(`✓ structure already conforms to the config${p.flags["--commit"] ? " (schema-version stamped)" : ""}`);
-    if (r.strays?.length) console.log(`  ⚠ unmapped numbered dir(s) left untouched: ${r.strays.join(", ")} (use --map old=new)`);
-    return;
-  }
-  console.log(`=== migrate [${r.verdict === "migrated" ? "COMMIT" : "DRY-RUN"}] ===`);
-  for (const pair of r.pairs ?? []) console.log(`  ${pair.from} → ${pair.to}${pair.domain ? `  (domain → ${pair.domain})` : ""}`);
-  if (r.strays?.length) console.log(`  ⚠ unmapped: ${r.strays.join(", ")} (use --map old=new)`);
-  console.log(`  links rewritten: ${r.linksRewritten}   frontmatter domains: ${r.domainsRewritten}`);
-  if (r.quizLedgerRemapped) console.log(`  quiz ledger identities remapped: ${r.quizLedgerRemapped}`);
-  if (r.verdict === "migrated") console.log(`  reindexed · lint errors: ${r.lintErrors}`);
-  else console.log(`  (dry-run — apply with --commit)`);
-}
-
 // ---- quiz (the human memory loop; scheduling = engine, authoring/grading = /wiki-quiz) ----
 
 const QUIZ_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -895,7 +755,12 @@ const HANDLERS: Record<string, (p: Parsed) => void | Promise<void>> = {
   init: cmdInit,
   config: cmdConfig,
   conventions: cmdConventions,
-  migrate: cmdMigrate,
+  migrate: MAINTENANCE_HANDLERS.migrate,
+  "db-health": MAINTENANCE_HANDLERS["db-health"],
+  compact: MAINTENANCE_HANDLERS.compact,
+  "wiki-clean": MAINTENANCE_HANDLERS["wiki-clean"],
+  "wiki-clean-apply": MAINTENANCE_HANDLERS["wiki-clean-apply"],
+  "wiki-doctor": MAINTENANCE_HANDLERS["wiki-doctor"],
   bench: cmdBench,
   "compare-arm": cmdCompareArm,
   "compare-verdict": cmdCompareVerdict,
@@ -917,16 +782,16 @@ const HANDLERS: Record<string, (p: Parsed) => void | Promise<void>> = {
   "register-transcript": cmdRegisterTranscript,
   excerpt: cmdExcerpt,
   review: cmdReview,
-  overview: cmdOverview,
-  gaps: cmdGaps,
+  overview: MAINTENANCE_HANDLERS.overview,
+  gaps: MAINTENANCE_HANDLERS.gaps,
   "git-rules": cmdGitRules,
-  doctor: cmdDoctor,
+  doctor: MAINTENANCE_HANDLERS.doctor,
   context: cmdContext,
   "turn-context": cmdTurnContext,
   digest: cmdDigest,
   "context-audit": cmdContextAudit,
   reconcile: cmdReconcile,
-  "capture-prune": cmdCapturePrune,
+  "capture-prune": MAINTENANCE_HANDLERS["capture-prune"],
   "quiz-status": cmdQuizStatus,
   "quiz-next": cmdQuizNext,
   "quiz-record": cmdQuizRecord,
@@ -936,7 +801,13 @@ function usage(): string {
   return `usage: llmwiki <command> ...\ncommands: ${Object.keys(HANDLERS).join(", ")}\n`;
 }
 
-const parsed = parseArgs(process.argv.slice(2));
+let parsed: Parsed;
+try {
+  parsed = parseCliArgs(process.argv.slice(2));
+} catch (error) {
+  if (error instanceof MissingCliFlagValueError) die(error.message);
+  throw error;
+}
 if (parsed.cmd === "--help" || parsed.cmd === "-h") {
   process.stdout.write(usage());
   process.exit(0);

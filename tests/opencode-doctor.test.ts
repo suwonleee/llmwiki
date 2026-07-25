@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { inspectOpenCodeInstall } from "../src/engine/doctor.ts";
 
 const ROOT = join(import.meta.dir, "..");
-const COMMANDS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz"] as const;
+const COMMANDS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"] as const;
 
 describe("OpenCode doctor status", () => {
   let dir: string;

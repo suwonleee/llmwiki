@@ -42,7 +42,7 @@ describe("fresh OpenCode setup", () => {
 
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  test("installs a usable CLI, global plugin, slash commands, and capture environment", () => {
+  test("installs refreshed maintenance commands idempotently with the plugin and capture environment", () => {
     const env = {
       ...process.env,
       HOME: home,
@@ -63,6 +63,7 @@ describe("fresh OpenCode setup", () => {
     expect(result.exitCode).toBe(0);
     expect(output).toContain("setup installed");
     expect(output).toContain("OpenCode close-out: /wiki-save");
+    expect(output).toContain("Verify the installation anytime: llmwiki doctor --harness opencode");
     const plist = readFileSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"), "utf8");
     expect(plist).toContain(`<key>XDG_DATA_HOME</key><string>${dataRoot.replaceAll("&", "&amp;")}</string>`);
     expect(plist).toContain(`<key>OPENCODE_DB</key><string>${dbPath.replaceAll("&", "&amp;")}</string>`);
@@ -71,9 +72,26 @@ describe("fresh OpenCode setup", () => {
     expect(readFileSync(join(opencodeRoot, "plugin", "llmwiki.ts"), "utf8")).toContain(
       `llmwiki-opencode-managed root=${ROOT}`,
     );
-    for (const name of ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz"]) {
+    for (const name of ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"]) {
       expect(readFileSync(join(opencodeRoot, "commands", `${name}.md`), "utf8")).toContain(`# /${name}`);
     }
+    const savePath = join(opencodeRoot, "commands", "wiki-save.md");
+    const deepPath = join(opencodeRoot, "commands", "wiki-deep.md");
+    expect(readFileSync(savePath, "utf8")).toContain("llmwiki db-health <repo> --notice");
+    expect(readFileSync(deepPath, "utf8")).toContain("llmwiki compact <repo> --commit");
+    expect(readFileSync(deepPath, "utf8")).not.toContain("llmwiki wiki-clean <repo> --commit");
+    const firstSaveCommand = readFileSync(savePath, "utf8");
+    const firstDeepCommand = readFileSync(deepPath, "utf8");
+
+    const rerun = Bun.spawnSync(["bash", join(ROOT, "setup.sh"), "--harness", "opencode"], {
+      cwd: ROOT,
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(rerun.exitCode).toBe(0);
+    expect(readFileSync(savePath, "utf8")).toBe(firstSaveCommand);
+    expect(readFileSync(deepPath, "utf8")).toBe(firstDeepCommand);
     const cli = Bun.spawnSync([join(home, ".local", "bin", "llmwiki"), "--help"], {
       cwd: ROOT,
       env,

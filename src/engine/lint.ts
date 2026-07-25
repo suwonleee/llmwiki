@@ -2,8 +2,7 @@
 //
 // Checks: required frontmatter, footnote hygiene,
 // citation resolution, citation-graph edges, dangling wiki links, orphan pages,
-// uncited sources, stale pages. Self-contained frontmatter parser (no YAML
-// dependency) so tests stay byte-faithful to the Python implementation.
+// uncited sources, stale pages.
 import type { Database } from "bun:sqlite";
 import { resolve as pathResolve, dirname as pathDirname } from "node:path";
 import { existsSync } from "node:fs";
@@ -12,6 +11,15 @@ import { parseExcerpts, verifyExcerpt } from "./excerpt.ts";
 import { hasSecret } from "./screen.ts";
 import { L0_BUDGET, L0_LINT_BUDGET } from "./budgets.ts";
 import { effectiveKo, getConfig, type WikiConfig } from "./config.ts";
+import { parseFrontmatter as parseFrontmatterBoundary } from "./frontmatter.ts";
+
+export function parseFrontmatter(content: string): Record<string, string | string[]> {
+  const legacy: Record<string, string | string[]> = {};
+  for (const [key, value] of Object.entries(parseFrontmatterBoundary(content).fields)) {
+    legacy[key] = typeof value === "string" ? value : [...value];
+  }
+  return legacy;
+}
 
 // NOTE: WikiIndex (./db.ts) is being ported in parallel. We declare a minimal
 // structural interface here for the methods we call; once db.ts lands, that
@@ -100,41 +108,6 @@ function clamp(href: string, currentDir: string): string {
     return currentDir ? currentDir + href : href;
   }
   return href;
-}
-
-// Strip leading/trailing single or double quotes (Python: `.strip("'\"")`).
-function stripQuotes(s: string): string {
-  return s.replace(/^['"]+|['"]+$/g, "");
-}
-
-/** Minimal YAML frontmatter parser: top-of-file `---` block, scalar + simple list. */
-export function parseFrontmatter(content: string): Record<string, string | string[]> {
-  if (!content.startsWith("---")) return {};
-  const end = content.indexOf("\n---", 3);
-  if (end === -1) return {};
-  // Python: content[3:end].strip("\n")
-  const block = content.slice(3, end).replace(/^\n+|\n+$/g, "");
-  const meta: Record<string, string | string[]> = {};
-  for (const line of block.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#") || !trimmed.includes(":")) continue;
-    if (!line.includes(":")) continue;
-    const colonIdx = line.indexOf(":");
-    const key = line.slice(0, colonIdx).trim();
-    const val = line.slice(colonIdx + 1).trim();
-    if (val.startsWith("[") && val.endsWith("]")) {
-      const inner = val.slice(1, -1);
-      const items = inner
-        .split(",")
-        .map((x) => x.trim())
-        .filter((x) => x.length > 0)
-        .map((x) => stripQuotes(x));
-      meta[key] = items;
-    } else {
-      meta[key] = stripQuotes(val);
-    }
-  }
-  return meta;
 }
 
 // Glob match minimal — mirrors Python fnmatch.fnmatch for the `_match` use case.
@@ -242,7 +215,7 @@ export class Linter {
     const content = doc.content || "";
     const issues: LintIssue[] = [];
     if (!this._isLedger(doc)) {
-      issues.push(...this._frontmatter(doc, parseFrontmatter(content)));
+      issues.push(...this._frontmatter(doc, parseFrontmatterBoundary(content).fields));
       issues.push(...this._footnotes(path, content));
     }
     issues.push(...this._banned(path, content));
@@ -319,7 +292,7 @@ export class Linter {
     ];
   }
 
-  _frontmatter(doc: WikiDoc, meta: Record<string, string | string[]>): LintIssue[] {
+  _frontmatter(doc: WikiDoc, meta: Readonly<Record<string, string | readonly string[]>>): LintIssue[] {
     const path = this._p(doc);
     if (!meta || Object.keys(meta).length === 0) {
       return [
@@ -340,7 +313,7 @@ export class Linter {
         message: "frontmatter missing `description`",
       });
     }
-    const dateRaw = (meta["date"] ?? meta["updated"] ?? "") as string | string[];
+    const dateRaw = meta["date"] ?? meta["updated"] ?? "";
     if (!String(dateRaw).trim()) {
       out.push({
         severity: "warn",
@@ -575,7 +548,7 @@ export class Linter {
     // Judgment pages assert what a human decided and why; that is the class a teammate cannot
     // re-derive from code, so it is where portable evidence pays. Canonical domains only — a
     // custom config's domains simply don't trigger this, which is the safe direction to fail.
-    const domain = String(parseFrontmatter(content).domain ?? "");
+    const domain = String(parseFrontmatterBoundary(content).fields["domain"] ?? "");
     if (domain === "direction" || domain === "decision") {
       for (const fid of footnotes) {
         if (withExcerpt.has(fid) || !localTranscript.has(fid)) continue;

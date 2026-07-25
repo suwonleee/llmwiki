@@ -20,6 +20,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { RETIRED_CLAUDE_COMMANDS } from "../engine/install-history.ts";
 import { CLONE_ROOT } from "../engine/paths.ts";
 import { claudeConfigDirs } from "../engine/sources/claude.ts";
 
@@ -27,7 +28,7 @@ const HOME = process.env.HOME?.trim() || homedir();
 const ROOT = CLONE_ROOT; // resolved from this file's location — path/name-agnostic
 const INJECT = `bash ${ROOT}/hooks/sessionstart-inject.sh`;
 const TURN_INJECT = `bash ${ROOT}/hooks/userpromptsubmit-inject.sh`;
-const SKILLS = ["wiki-save.md", "wiki-ask.md", "wiki-deep.md", "wiki-quiz.md"];
+const SKILLS = ["wiki-save.md", "wiki-ask.md", "wiki-deep.md", "wiki-quiz.md", "wiki-doctor.md"];
 // When the clone IS ~/llmwiki, the skills' `~/llmwiki` references resolve correctly at runtime
 // (shell ~-expansion), so we can SYMLINK the installed commands to the repo skills instead of
 // copying. That eliminates installed-vs-repo drift (an edit to skill/*.md is immediately live, no
@@ -39,9 +40,6 @@ const CANONICAL = ROOT === join(HOME, "llmwiki");
 const NEW_MARK = "hooks/sessionstart-inject.sh";
 const TURN_MARK = "hooks/userpromptsubmit-inject.sh";
 const OLD_MARKS = ["wiki-distill-check.sh", "wiki-distill-enqueue.py"];
-// retired slash commands — removed from <profile>/commands on re-wire so a hard rename
-// doesn't strand a broken command (wiki-update→wiki-fast→wiki-save, wiki-sync→wiki-deep).
-const RETIRED_COMMANDS = ["wiki-update.md", "wiki-sync.md", "wiki-fast.md"];
 
 interface HookEntry {
   type?: string;
@@ -151,7 +149,7 @@ function apply(): number {
     // engine via `~/llmwiki` (canonical placeholder); rewrite to THIS clone's path.
     mkdirSync(join(prof, "commands"), { recursive: true });
     // prune retired commands before re-installing so renamed skills leave no broken command
-    for (const stale of RETIRED_COMMANDS) {
+    for (const stale of RETIRED_CLAUDE_COMMANDS) {
       rmSync(join(prof, "commands", stale), { force: true });
     }
     for (const skill of SKILLS) {

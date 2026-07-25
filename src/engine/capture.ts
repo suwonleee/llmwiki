@@ -67,6 +67,11 @@ function sizeOf(path: string): number {
   return existsSync(path) ? statSync(path).size : 0;
 }
 
+function hasUnreadTail(row: CaptureRow): boolean {
+  if (existsSync(row.transcript_path)) return statSync(row.transcript_path).size > row.byte_offset;
+  return !row.transcript_path.endsWith(".zst") && existsSync(`${row.transcript_path}.zst`);
+}
+
 export function enqueue(
   transcriptPath: string,
   sessionId: string | null,
@@ -103,16 +108,49 @@ export function pending(repo: string | null = null): CaptureRow[] {
     : (db
         .query("SELECT * FROM capture_queue WHERE status='pending' ORDER BY repo, first_seen")
         .all() as CaptureRow[]);
-  const out = rows.filter((r) => {
-    if (existsSync(r.transcript_path)) return statSync(r.transcript_path).size > r.byte_offset;
-    // A harness may compress a finished transcript in place (Codex: foo.jsonl → foo.jsonl.zst).
-    // Keep the row alive so the adapter's parse() can resolve the sibling — compressed size is
-    // meaningless against a decompressed-byte watermark, so let parse decide (empty increment
-    // → update-done advances and the row retires normally).
-    return !r.transcript_path.endsWith(".zst") && existsSync(`${r.transcript_path}.zst`);
-  });
+  const out = rows.filter(hasUnreadTail);
   db.close();
   return out;
+}
+
+/** Read the live pending slice without creating or migrating the central capture database.
+ *
+ * `wiki-doctor` is diagnostic by default. Calling the normal `pending()` helper would create
+ * `.state/capture.db` on a machine that has never installed the daemon, so the read-only path
+ * opens an existing database explicitly and otherwise reports an empty queue.
+ */
+export interface PendingReadOnlyInspection {
+  readonly status: "absent" | "current" | "unreadable";
+  readonly rows: readonly CaptureRow[];
+  readonly error: string | null;
+}
+
+export function inspectPendingReadOnly(repo: string | null = null): PendingReadOnlyInspection {
+  if (!existsSync(DB_PATH)) return { status: "absent", rows: [], error: null };
+  let db: Database | null = null;
+  try {
+    db = new Database(DB_PATH, { readonly: true });
+    const rows = repo
+      ? (db
+          .query("SELECT * FROM capture_queue WHERE status='pending' AND repo=? ORDER BY first_seen")
+          .all(repo) as CaptureRow[])
+      : (db
+          .query("SELECT * FROM capture_queue WHERE status='pending' ORDER BY repo, first_seen")
+          .all() as CaptureRow[]);
+    return { status: "current", rows: rows.filter(hasUnreadTail), error: null };
+  } catch (error) {
+    return {
+      status: "unreadable",
+      rows: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    db?.close();
+  }
+}
+
+export function pendingReadOnly(repo: string | null = null): CaptureRow[] {
+  return [...inspectPendingReadOnly(repo).rows];
 }
 
 export function getOffset(transcriptPath: string): number {

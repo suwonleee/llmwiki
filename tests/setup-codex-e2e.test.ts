@@ -45,7 +45,7 @@ describe("fresh Codex setup", () => {
 
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  test("installs a usable CLI, hooks, and skills while leaving trust to /hooks", () => {
+  test("installs refreshed maintenance skills idempotently while leaving trust to /hooks", () => {
     const env = {
       ...process.env,
       HOME: home,
@@ -64,6 +64,7 @@ describe("fresh Codex setup", () => {
 
     expect(result.exitCode).toBe(0);
     expect(output).toContain("setup installed");
+    expect(output).toContain("Verify the installation anytime: llmwiki doctor --harness codex");
     expect(output).toContain("ACTION REQUIRED");
     expect(output).toContain("one-time review required");
     expect(output).toContain(`export PATH='${join(home, ".local", "bin")}'`);
@@ -71,9 +72,28 @@ describe("fresh Codex setup", () => {
       `<key>CODEX_HOME</key><string>${codexHome.replaceAll("&", "&amp;")}</string>`,
     );
     expect(readFileSync(join(codexHome, "hooks.json"), "utf8")).toContain("sessionstart-inject.sh");
-    expect(readFileSync(join(home, ".agents", "skills", "wiki-save", "SKILL.md"), "utf8")).toContain(
-      "name: wiki-save",
-    );
+    const savePath = join(home, ".agents", "skills", "wiki-save", "SKILL.md");
+    const deepPath = join(home, ".agents", "skills", "wiki-deep", "SKILL.md");
+    const doctorPath = join(home, ".agents", "skills", "wiki-doctor", "SKILL.md");
+    expect(readFileSync(savePath, "utf8")).toContain("name: wiki-save");
+    expect(readFileSync(savePath, "utf8")).toContain("llmwiki db-health <repo> --notice");
+    expect(readFileSync(deepPath, "utf8")).toContain("llmwiki compact <repo> --commit");
+    expect(readFileSync(deepPath, "utf8")).not.toContain("llmwiki wiki-clean <repo> --commit");
+    expect(readFileSync(doctorPath, "utf8")).toContain("name: wiki-doctor");
+    expect(readFileSync(doctorPath, "utf8")).toContain("llmwiki wiki-doctor <repo> --fix");
+    const firstSaveSkill = readFileSync(savePath, "utf8");
+    const firstDeepSkill = readFileSync(deepPath, "utf8");
+
+    const rerun = Bun.spawnSync(["bash", join(ROOT, "setup.sh"), "--harness", "codex"], {
+      cwd: ROOT,
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(rerun.exitCode).toBe(0);
+    expect(readFileSync(savePath, "utf8")).toBe(firstSaveSkill);
+    expect(readFileSync(deepPath, "utf8")).toBe(firstDeepSkill);
+    expect(readFileSync(doctorPath, "utf8")).toContain("name: wiki-doctor");
 
     const cli = Bun.spawnSync([join(home, ".local", "bin", "llmwiki"), "--help"], {
       cwd: ROOT,

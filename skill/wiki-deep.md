@@ -32,7 +32,26 @@ D3. **Re-distill oversized topic pages**: enumerate targets with a plain `llmwik
 
 D4. **Prune dead capture rows** (deterministic, zero LLM): `llmwiki capture-prune`. It deletes queue rows that are still `pending` but whose transcript — and `.zst` sibling — no longer exists and whose `first_seen` is older than 30 days (`--older-than N` to change). Those sessions can never be condensed again (the harness rotated their transcript before any close-out), so removing the rows keeps the pending ledger honest; the age guard protects transcripts on merely-unmounted volumes, and distilled rows are never touched (they are the record of what was filed).
 
-R. **Report** — the /wiki-save report line plus the deep extras: "backlog drained N / review: findings F / gaps filled K (open M) / topics distilled D (distill-verify: pass) / capture pruned P / L0 refreshed / lint error·warn counts".
+D5. **Index maintenance escalation (deterministic; no semantic cleanup)**: rebuild the fresh index and finish its structural lint before consulting the health signal:
+    ```sh
+    llmwiki index <repo>
+    llmwiki lint <repo> --errors-only
+    llmwiki db-health <repo> --notice
+    ```
+    - Record the pre-maintenance `databaseBytes`, `freeBytes`, `freeRatio = freeBytes / databaseBytes`, and `liveIndexedBytes`. **Only** when the CLI reports compaction eligible, run the bounded storage repair, then recheck:
+      ```sh
+      llmwiki compact <repo> --commit
+      llmwiki db-health <repo>
+      ```
+      Otherwise report `action: no-action`; do not run `compact` just because a database exists.
+    - Compare the before/after measurements. If compaction cleared a free-ratio-only pressure, report `action: compacted; wiki-clean: not recommended` — no semantic cleanup follows storage-only reclamation.
+    - Recommend cleanup only when the **post-compact** `liveIndexedBytes` remains above 30 MiB. Print this exact manual, dry-run command in the report; do **not** execute it, do not add `--commit`, and do not run `wiki-clean-apply`:
+      ```sh
+      llmwiki wiki-clean <repo>
+      ```
+      `wiki-clean` is a reversible tiering review, not a deep-pass side effect: dirty worktrees, protected pages, ambiguous cases, and human approval remain its own command's responsibility.
+
+R. **Report** — the /wiki-save report line plus the deep extras: "backlog drained N / review: findings F / gaps filled K (open M) / topics distilled D (distill-verify: pass) / capture pruned P / maintenance before: db D free F ratio R live L / after: db D free F ratio R live L / action: no-action|compacted|recommend `llmwiki wiki-clean <repo>` / L0 refreshed / lint error·warn counts".
 
 ## Deep-specific engine CLI (`bun ~/llmwiki/src/cli.ts`; the rest is listed in `/wiki-save`)
 - `llmwiki review <repo> --commit` — full semantic review (deep runs it WITHOUT `--if-due`; the per-session close-out relies on the cadence gate).
@@ -40,6 +59,9 @@ R. **Report** — the /wiki-save report line plus the deep extras: "backlog drai
 - `llmwiki lint <repo>` (plain, no `--errors-only`) — enumerate `topic-oversize` paths for D3.
 - `llmwiki gaps <repo>` — fold review findings into the tracked, self-closing `0_review/gap-queue.md`.
 - `llmwiki capture-prune [--older-than N]` — delete pending queue rows whose transcript is gone past the age guard (D4; default 30 days).
+- `llmwiki db-health <repo> [--notice]` — cheap storage/integrity report; plain health is read-only, while `--notice` records the maintenance-notice cooldown used by D5.
+- `llmwiki compact <repo>` / `--commit` — default dry-run versus the D5-only committed FTS optimize + VACUUM after the CLI marks compaction eligible.
+- `llmwiki wiki-clean <repo>` — manual, reversible dry-run tiering review; D5 may recommend it only after post-compact live indexed bytes remain above 30 MiB.
 
 ## Principles
 - All `/wiki-save` principles apply (supersession, anti-drift re-grounding, routine judgment vs human direction, defer-never-drop, commits in the user's name only when instructed, team merge recovery).

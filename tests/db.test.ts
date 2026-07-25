@@ -82,6 +82,166 @@ describe("WikiIndex", () => {
     expect(updated).toBe(1);
   });
 
+  test("indexes derived frontmatter metadata without changing operational status", () => {
+    // Given: a page whose knowledge lifecycle is distinct from index processing state.
+    writeFileSync(
+      join(wiki, "metadata.md"),
+      [
+        "---",
+        "title: Derived metadata",
+        "description: Derived descriptions are queryable.",
+        "date: 2026-07-23",
+        "tags: [index, typed]",
+        "status: draft",
+        "tier: hot",
+        "---",
+        "",
+        "Body.",
+      ].join("\n"),
+    );
+
+    // When: the workspace is indexed.
+    idx.indexAll(conn);
+    const row = conn
+      .query<
+        {
+          readonly description: string | null;
+          readonly date: string | null;
+          readonly tags: string;
+          readonly status: string;
+          readonly knowledge_status: string | null;
+          readonly knowledge_tier: string | null;
+        },
+        []
+      >(
+        "SELECT description, date, tags, status, knowledge_status, knowledge_tier FROM documents WHERE relative_path='docs/wiki/metadata.md'",
+      )
+      .get();
+
+    // Then: only derived columns carry page knowledge semantics.
+    expect(row).toEqual({
+      description: "Derived descriptions are queryable.",
+      date: "2026-07-23",
+      tags: '["index","typed"]',
+      status: "ready",
+      knowledge_status: "draft",
+      knowledge_tier: "hot",
+    });
+  });
+
+  test("repopulates stale derived metadata on every idempotent connection migration", () => {
+    // Given: a previously indexed page whose derived columns are stale.
+    writeFileSync(
+      join(wiki, "stale.md"),
+      [
+        "---",
+        "title: Stale derived metadata",
+        "description: Idempotent metadata backfill.",
+        "updated: 2026-07-24",
+        "tags: [migration, idempotent]",
+        "status: ready",
+        "tier: warm",
+        "---",
+        "",
+        "Body.",
+      ].join("\n"),
+    );
+    idx.indexAll(conn);
+    conn.run(
+      "UPDATE documents SET description=NULL, date=NULL, tags='[]', knowledge_status=NULL, knowledge_tier=NULL WHERE relative_path='docs/wiki/stale.md'",
+    );
+    conn.close();
+
+    // When: the derived-state migration runs twice across independent connections.
+    conn = idx.connect();
+    const first = conn
+      .query<
+        {
+          readonly description: string | null;
+          readonly date: string | null;
+          readonly tags: string;
+          readonly knowledge_status: string | null;
+          readonly knowledge_tier: string | null;
+        },
+        []
+      >("SELECT description, date, tags, knowledge_status, knowledge_tier FROM documents WHERE relative_path='docs/wiki/stale.md'")
+      .get();
+    conn.close();
+    conn = idx.connect();
+    const second = conn
+      .query<
+        {
+          readonly description: string | null;
+          readonly date: string | null;
+          readonly tags: string;
+          readonly knowledge_status: string | null;
+          readonly knowledge_tier: string | null;
+        },
+        []
+      >("SELECT description, date, tags, knowledge_status, knowledge_tier FROM documents WHERE relative_path='docs/wiki/stale.md'")
+      .get();
+
+    // Then: both migrations converge on the same values without changing source bodies.
+    expect(first).toEqual({
+      description: "Idempotent metadata backfill.",
+      date: "2026-07-24",
+      tags: '["migration","idempotent"]',
+      knowledge_status: "ready",
+      knowledge_tier: "warm",
+    });
+    expect(second).toEqual(first);
+  });
+
+  test("adds derived metadata columns to a legacy index before backfilling its rows", () => {
+    // Given: an index created before the derived metadata columns existed.
+    conn.exec("ALTER TABLE documents DROP COLUMN description");
+    conn.exec("ALTER TABLE documents DROP COLUMN knowledge_status");
+    conn.exec("ALTER TABLE documents DROP COLUMN knowledge_tier");
+    conn.run(
+      "INSERT INTO documents (id, filename, title, path, relative_path, source_kind, file_type, status, content, tags, version, document_number) " +
+        "VALUES ('legacy-page', 'legacy.md', 'Legacy', '/docs/wiki/', 'docs/wiki/legacy.md', 'wiki', 'md', 'ready', ?, '[]', 1, 100)",
+      [
+        [
+          "---",
+          "title: Legacy page",
+          "description: Legacy metadata backfill.",
+          "date: 2026-07-25",
+          "tags: [legacy, migration]",
+          "status: superseded",
+          "tier: protected",
+          "---",
+          "",
+          "Body.",
+        ].join("\n"),
+      ],
+    );
+    conn.close();
+
+    // When: a current index connection runs the idempotent migration.
+    conn = idx.connect();
+    const row = conn
+      .query<
+        {
+          readonly description: string | null;
+          readonly date: string | null;
+          readonly tags: string;
+          readonly knowledge_status: string | null;
+          readonly knowledge_tier: string | null;
+        },
+        []
+      >("SELECT description, date, tags, knowledge_status, knowledge_tier FROM documents WHERE id='legacy-page'")
+      .get();
+
+    // Then: the schema and stale row converge without altering operational status.
+    expect(row).toEqual({
+      description: "Legacy metadata backfill.",
+      date: "2026-07-25",
+      tags: '["legacy","migration"]',
+      knowledge_status: "superseded",
+      knowledge_tier: "protected",
+    });
+  });
+
   test("links_to edge and staleness propagation", () => {
     idx.indexAll(conn);
     const docs = idx.listDocuments(conn);

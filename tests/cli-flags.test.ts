@@ -7,16 +7,21 @@
 // applied no mapping at all. Both printed a normal, successful-looking result.
 //
 // So the test is deliberately a SOURCE test rather than a behaviour test: the bug is drift between
-// two places in one file, and only reading the file can catch a flag someone adds tomorrow.
+// the parser declaration and command readers, and only reading that boundary can catch a flag someone adds tomorrow.
 import { test, expect, describe } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { MissingCliFlagValueError, parseCliArgs } from "../src/cli-args.ts";
 
-const SRC = readFileSync(join(import.meta.dir, "..", "src", "cli.ts"), "utf8");
+const CLI_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli.ts"), "utf8");
+const ARGUMENT_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli-args.ts"), "utf8");
+const MAINTENANCE_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "commands", "maintenance.ts"), "utf8");
+const SRC = `${CLI_SOURCE}\n${MAINTENANCE_SOURCE}`;
+const ROOT = join(import.meta.dir, "..");
 
 function declaredValueFlags(): Set<string> {
-  const block = SRC.match(/const valueFlags = new Set\(\[([\s\S]*?)\]\)/);
-  if (!block) throw new Error("valueFlags allowlist not found in cli.ts — did parseArgs change shape?");
+  const block = ARGUMENT_SOURCE.match(/const VALUE_FLAG_NAMES = \[([\s\S]*?)\] as const/);
+  if (!block) throw new Error("value flag allowlist not found in cli-args.ts — did parseCliArgs change shape?");
   return new Set(Array.from(block[1]!.matchAll(/"(--[a-z-]+)"/g), (m) => m[1]!));
 }
 
@@ -27,12 +32,43 @@ function valueReadFlags(): Set<string> {
     /p\.flags\["(--[a-z-]+)"\]\s*(?:\?\?[^)]*?)?\s*as string/g, // ... as string
     /String\(p\.flags\["(--[a-z-]+)"\]/g, // String(...)
     /parseInt\(p\.flags\["(--[a-z-]+)"\]/g, // parseInt(...)
+    /getFlagValue\(args, "(--[a-z-]+)"\)/g,
   ];
   for (const re of patterns) for (const m of SRC.matchAll(re)) out.add(m[1]!);
   return out;
 }
 
 describe("cli flag allowlist", () => {
+  test("prints the established command list when help is requested", () => {
+    // Given: the real executable entrypoint in the repository root.
+    // When: a caller asks for CLI help.
+    const result = Bun.spawnSync([process.execPath, "src/cli.ts", "--help"], {
+      cwd: ROOT,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    // Then: help succeeds and advertises an existing public command.
+    expect(result.exitCode).toBe(0);
+    expect(new TextDecoder().decode(result.stdout)).toContain("commands:");
+    expect(new TextDecoder().decode(result.stdout)).toContain("excerpt");
+  });
+
+  test("delegates argument parsing to the typed CLI boundary", () => {
+    expect(CLI_SOURCE).toContain('import { MissingCliFlagValueError, parseCliArgs, type ParsedCliArgs as Parsed } from "./cli-args.ts";');
+    expect(CLI_SOURCE).not.toMatch(/function parseArgs\(/);
+  });
+
+  test("registers maintenance commands through their focused boundary", () => {
+    expect(CLI_SOURCE).toContain('import { createMaintenanceHandlers } from "./commands/maintenance.ts";');
+    expect(MAINTENANCE_SOURCE).toContain("export function createMaintenanceHandlers");
+    expect(CLI_SOURCE).not.toMatch(/function cmdMigrate\(/);
+  });
+
+  test("rejects a value flag with no value", () => {
+    expect(() => parseCliArgs(["turn-context", "--prompt"])).toThrow(MissingCliFlagValueError);
+  });
+
   test("every flag read as a value is declared as a value flag", () => {
     const declared = declaredValueFlags();
     const missing = [...valueReadFlags()].filter((f) => !declared.has(f)).sort();
@@ -48,7 +84,7 @@ describe("cli flag allowlist", () => {
   });
 
   test("the guard can actually fail (it is reading real source, not an empty string)", () => {
-    expect(SRC.length).toBeGreaterThan(1000);
+    expect(CLI_SOURCE.length).toBeGreaterThan(1000);
     expect(declaredValueFlags().size).toBeGreaterThan(5);
     expect(valueReadFlags().size).toBeGreaterThan(5);
   });

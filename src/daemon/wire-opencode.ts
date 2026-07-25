@@ -18,6 +18,7 @@ import {
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { RETIRED_OPENCODE_COMMANDS } from "../engine/install-history.ts";
 import { CLONE_ROOT } from "../engine/paths.ts";
 
 const HOME = process.env.HOME?.trim() || homedir();
@@ -27,10 +28,7 @@ const PLUGIN = join(OPENCODE_ROOT, "plugin", "llmwiki.ts");
 const COMMANDS_ROOT = join(OPENCODE_ROOT, "commands");
 const BIN_DIR = process.env.LLMWIKI_BIN_DIR?.trim() || join(HOME, ".local", "bin");
 const LAUNCHER = join(BIN_DIR, "llmwiki");
-const COMMANDS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz"] as const;
-// command names retired by hard renames (wiki-fast→wiki-save) — any llmwiki-managed copy is
-// pruned on re-wire so the old slash command doesn't linger pointing at a removed skill file
-const RETIRED_COMMANDS = ["wiki-fast"];
+const COMMANDS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"] as const;
 const MANAGED = "llmwiki-opencode-managed";
 const OWNER_MARK = `${MANAGED} root=${CLONE_ROOT}`;
 const PLUGIN_LEGACY_MARK = "llmwiki OpenCode plugin";
@@ -244,7 +242,7 @@ function apply(dryRun: boolean): number {
   if (prior) writeJsonAtomic(INSTALL_BACKUP, prior);
   const pluginChanged = writeAtomic(PLUGIN, pluginBody());
   for (const name of COMMANDS) writeAtomic(join(COMMANDS_ROOT, `${name}.md`), commandBody(name));
-  for (const name of RETIRED_COMMANDS) {
+  for (const name of RETIRED_OPENCODE_COMMANDS) {
     const path = join(COMMANDS_ROOT, `${name}.md`);
     try {
       if (existsSync(path) && readFileSync(path, "utf8").includes(MANAGED)) rmSync(path, { force: true });
@@ -273,7 +271,7 @@ function revert(dryRun: boolean): number {
   } catch {
     /* absent */
   }
-  const ownedCommands = [...COMMANDS, ...RETIRED_COMMANDS].filter((name) => {
+  const ownedCommands = [...COMMANDS, ...RETIRED_OPENCODE_COMMANDS].filter((name) => {
     try {
       return readFileSync(join(COMMANDS_ROOT, `${name}.md`), "utf8").includes(OWNER_MARK);
     } catch {

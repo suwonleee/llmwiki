@@ -68,7 +68,10 @@ const PLACEHOLDER_VALUE_RE =
 // the signal; prose and file paths do not look like this. Kept last and deliberately narrow —
 // a false redaction inside evidence is a real cost, so this only fires on ≥32 chars with both
 // cases AND digits, and never on something containing a path separator or a dot-extension.
-const ENTROPY_RE = /\b(?![A-Za-z]+\b)[A-Za-z0-9+/_-]{32,}={0,2}\b/g;
+// Consume a short extension when present so `looksHighEntropy()` can see the dot and honor the
+// filename/path carve-out. Previously the regex stopped immediately before `.jsonl`, turning a
+// normal Codex `rollout-...<uuid>.jsonl` provenance filename into a false page-secret.
+const ENTROPY_RE = /\b(?![A-Za-z]+\b)[A-Za-z0-9+/_-]{32,}(?:\.[A-Za-z0-9]{1,10})?={0,2}\b/g;
 
 function looksHighEntropy(tok: string): boolean {
   if (/[./\\]/.test(tok)) return false; // paths, filenames, versions

@@ -44,6 +44,7 @@ describe("buildTurnContext", () => {
     wiki = join(root, "docs", "wiki");
     mkdirSync(join(wiki, "3_decision"), { recursive: true });
     mkdirSync(join(wiki, "2_milestone"), { recursive: true });
+    mkdirSync(join(wiki, "4_insight"), { recursive: true });
     // bodies repeated past MIN_CHUNK_TOKENS (32) — pages below the chunker floor are not
     // FTS-searchable by design (real condensed pages are always longer).
     writeFileSync(
@@ -77,6 +78,30 @@ describe("buildTurnContext", () => {
   test("english/identifier prompt matches english page", () => {
     const out = buildTurnContext(root, "why does the trigram tokenizer change affect chunker output?");
     expect(out).toContain("fts-port.md");
+  });
+
+  test("cold discovery metadata points at the original page without surfacing its body", () => {
+    // Given: a cold page with distinct metadata and body terms.
+    writeFileSync(
+      join(wiki, "4_insight", "cold-archive.md"),
+      [
+        "---",
+        "title: Cold archive",
+        "description: metadatahit discovery record",
+        "date: 2025-01-02",
+        "tags: [archive, metadatahit]",
+        "status: ready",
+        "tier: cold",
+        "---",
+        "",
+        "bodyonlymarker ".repeat(200),
+      ].join("\n"),
+    );
+    new WikiIndex(root).indexAll();
+
+    // When / Then: metadata discovers the original page, while body-only terms stay silent.
+    expect(buildTurnContext(root, "metadatahit discovery record")).toContain("cold-archive.md");
+    expect(buildTurnContext(root, "bodyonlymarker")).toBe("");
   });
 
   test("silent on unrelated prompt and on hostile FTS syntax", () => {

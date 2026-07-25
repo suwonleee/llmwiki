@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS documents (
     id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
     filename TEXT NOT NULL,
     title TEXT,
+    description TEXT,
     path TEXT DEFAULT '/' NOT NULL,           -- containing directory, e.g. /docs/wiki/3_decision/
     relative_path TEXT NOT NULL,              -- path from the workspace root (unique key)
     source_kind TEXT NOT NULL CHECK (source_kind IN ('wiki', 'source', 'transcript', 'asset')),
@@ -38,6 +39,8 @@ CREATE TABLE IF NOT EXISTS documents (
     content TEXT,
     tags TEXT DEFAULT '[]',                   -- JSON array from page frontmatter
     date TEXT,
+    knowledge_status TEXT CHECK (knowledge_status IN ('draft', 'ready', 'superseded')),
+    knowledge_tier TEXT CHECK (knowledge_tier IN ('hot', 'warm', 'cold', 'protected')),
     metadata TEXT,
     version INTEGER DEFAULT 0,
     content_hash TEXT,

@@ -232,3 +232,36 @@ export function updateReferences(
   // bun:sqlite autocommits per statement; no explicit commit() needed.
   return [cites, links];
 }
+
+/** Rebuild the complete citation/link graph after an index refresh.
+ *
+ * This is shared by the normal `index`/`reindex` commands and `wiki-doctor --fix`.
+ * Keeping one implementation prevents a repair path from producing a subtly different graph
+ * than the everyday indexing path.
+ */
+export function rebuildReferenceGraph(index: WikiIndex): {
+  readonly citations: number;
+  readonly links: number;
+  readonly pages: number;
+  readonly transcriptsRegistered: number;
+} {
+  const transcriptsRegistered = autoRegisterCitedTranscripts(index);
+  const conn = index.connect();
+  const docs = index
+    .listDocumentsWithContent(conn)
+    .filter((document) => String(document.relative_path).includes("docs/wiki/"));
+  let citations = 0;
+  let links = 0;
+  for (const document of docs) {
+    const [documentCitations, documentLinks] = updateReferences(
+      index,
+      conn,
+      document,
+      String(document.content ?? ""),
+    );
+    citations += documentCitations;
+    links += documentLinks;
+  }
+  conn.close();
+  return { citations, links, pages: docs.length, transcriptsRegistered };
+}

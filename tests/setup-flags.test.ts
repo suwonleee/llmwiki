@@ -77,7 +77,6 @@ describe("setup command contract", () => {
     expect(output).toContain("OpenCode");
     expect(output).toContain("/wiki-save");
     expect(existsSync(join(home, ".config", "opencode"))).toBe(false);
-    expect(existsSync(join(home, ".local", "bin", "llmwiki"))).toBe(false);
     expect(existsSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"))).toBe(false);
   });
 
@@ -96,6 +95,7 @@ describe("setup command contract", () => {
     expect(output).toContain("OpenCode");
     expect(output).toContain("/wiki-save");
     expect(existsSync(join(home, ".config", "opencode"))).toBe(false);
+    expect(existsSync(join(home, ".local", "bin", "llmwiki"))).toBe(false);
     expect(existsSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"))).toBe(false);
   });
 
@@ -103,6 +103,31 @@ describe("setup command contract", () => {
     const result = run(["--wat"]);
     expect(result.exitCode).toBe(2);
     expect(new TextDecoder().decode(result.stderr)).toContain("Usage:");
+  });
+
+  test("Bun older than 1.1 fails before any mutation", () => {
+    const bin = join(dir, "old-bun-bin");
+    mkdirSync(bin, { recursive: true });
+    const oldBun = join(bin, "bun");
+    writeFileSync(oldBun, "#!/bin/sh\nif [ \"${1:-}\" = --version ]; then printf '1.0.35\\n'; fi\nexit 0\n");
+    chmodSync(oldBun, 0o755);
+
+    const result = Bun.spawnSync(["/bin/bash", join(ROOT, "setup.sh"), "--harness", "codex"], {
+      cwd: ROOT,
+      env: {
+        ...process.env,
+        HOME: home,
+        CODEX_HOME: codexHome,
+        PATH: `${bin}:/usr/bin:/bin`,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(new TextDecoder().decode(result.stderr)).toContain("Bun 1.1 or newer is required");
+    expect(existsSync(join(codexHome, "hooks.json"))).toBe(false);
+    expect(existsSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"))).toBe(false);
   });
 
   test("Codex setup fails before mutation when the Codex CLI is missing", () => {

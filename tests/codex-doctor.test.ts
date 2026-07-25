@@ -32,7 +32,7 @@ describe("Codex doctor status", () => {
         },
       }),
     );
-    for (const name of ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz"]) {
+    for (const name of ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"]) {
       const skillDir = join(home, ".agents", "skills", name);
       mkdirSync(skillDir, { recursive: true });
       const hash = createHash("sha256")

@@ -22,6 +22,7 @@ import {
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { RETIRED_CODEX_SKILLS } from "../engine/install-history.ts";
 import { CLONE_ROOT } from "../engine/paths.ts";
 
 const HOME = process.env.HOME?.trim() || homedir();
@@ -40,11 +41,7 @@ const SESSION_MARK = "hooks/sessionstart-inject.sh";
 const TURN_MARK = "hooks/userpromptsubmit-inject.sh";
 const SESSION_CMD = `bash ${shellQuote(`${CLONE_ROOT}/${SESSION_MARK}`)}`;
 const TURN_CMD = `bash ${shellQuote(`${CLONE_ROOT}/${TURN_MARK}`)}`;
-const SKILLS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz"] as const;
-// Every name this wiring may have installed in the past. An explicit list, NOT derived from
-// SKILLS: deriving history from current names breaks on a rename (it would fabricate names
-// that were never installed and stop pruning the ones that were — e.g. llmwiki-fast).
-const LEGACY_SKILLS = ["llmwiki-fast", "llmwiki-ask", "llmwiki-deep", "llmwiki-quiz", "wiki-fast"];
+const SKILLS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"] as const;
 
 interface HookHandler {
   type?: string;
@@ -177,7 +174,7 @@ function capturePriorInstall(hooks: HooksFile): InstallBackup | null {
     .flatMap((groups) => groups)
     .flatMap((group) => group.hooks ?? [])
     .some((hook) => hook.command === SESSION_CMD || hook.command === TURN_CMD);
-  for (const name of [...SKILLS, ...LEGACY_SKILLS]) {
+  for (const name of [...SKILLS, ...RETIRED_CODEX_SKILLS]) {
     const file = join(SKILLS_ROOT, name, "SKILL.md");
     try {
       const content = readFileSync(file, "utf8");
@@ -360,8 +357,10 @@ function apply(dryRun: boolean): number {
     console.log("=== llmwiki Codex wiring [DRY-RUN] ===");
     console.log(`  hooks : merge ${HOOKS_PATH} (preserve unrelated entries; re-point ${repointed})`);
     console.log(`  skills: ${SKILLS.map((skill) => join(SKILLS_ROOT, skill, "SKILL.md")).join(", ")}`);
-    if (LEGACY_SKILLS.some((name) => existsSync(join(SKILLS_ROOT, name, "SKILL.md")))) {
-      console.log(`  migrate: remove managed legacy skill names (${LEGACY_SKILLS.map((name) => `$${name}`).join(", ")})`);
+    if (RETIRED_CODEX_SKILLS.some((name) => existsSync(join(SKILLS_ROOT, name, "SKILL.md")))) {
+      console.log(
+        `  migrate: remove managed retired skill names (${RETIRED_CODEX_SKILLS.map((name) => `$${name}`).join(", ")})`,
+      );
     }
     console.log(`  CLI   : ${LAUNCHER}`);
     if (prior) console.log(`  backup: preserve the previous llmwiki install for --revert (${INSTALL_BACKUP})`);
@@ -370,7 +369,7 @@ function apply(dryRun: boolean): number {
 
   if (prior) writeJsonAtomic(INSTALL_BACKUP, prior);
   const hooksChanged = writeJsonAtomic(HOOKS_PATH, hooks);
-  for (const name of [...SKILLS, ...LEGACY_SKILLS]) removeManagedSkill(name);
+  for (const name of [...SKILLS, ...RETIRED_CODEX_SKILLS]) removeManagedSkill(name);
   for (const sourceName of SKILLS) {
     const dir = join(SKILLS_ROOT, sourceName);
     mkdirSync(dir, { recursive: true });
@@ -402,7 +401,7 @@ function revert(dryRun: boolean): number {
     managedHookSnapshot(hooks)
       .UserPromptSubmit?.flatMap((group) => group.hooks ?? [])
       .some((hook) => hook.command === TURN_CMD) ||
-    [...SKILLS, ...LEGACY_SKILLS].some((name) => {
+    [...SKILLS, ...RETIRED_CODEX_SKILLS].some((name) => {
       try {
         return readFileSync(join(SKILLS_ROOT, name, "SKILL.md"), "utf8").includes(OWNER_MARK);
       } catch {
@@ -426,7 +425,7 @@ function revert(dryRun: boolean): number {
     return 0;
   }
   if (existsSync(HOOKS_PATH)) writeJsonAtomic(HOOKS_PATH, hooks);
-  for (const name of [...SKILLS, ...LEGACY_SKILLS]) removeManagedSkill(name, true);
+  for (const name of [...SKILLS, ...RETIRED_CODEX_SKILLS]) removeManagedSkill(name, true);
   try {
     const launcher = readFileSync(LAUNCHER, "utf8");
     if (isManagedLauncher(launcher) && launcher.includes(CLONE_ROOT) && !openCodeUsesCurrentClone()) {

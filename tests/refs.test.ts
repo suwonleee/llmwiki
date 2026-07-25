@@ -44,6 +44,42 @@ describe("autoRegisterCitedTranscripts (durable provenance self-heal)", () => {
     expect(autoRegisterCitedTranscripts(w)).toBe(1);
     expect(autoRegisterCitedTranscripts(w)).toBe(0); // already registered
   });
+
+  test("hydrates a cold metadata-only page before repairing transcript provenance", () => {
+    // Given: a cold page whose citation body is absent from SQLite storage.
+    const page = [
+      "---",
+      "title: Cold citation",
+      "description: Citation metadata",
+      "date: 2025-01-02",
+      "tags: [cold, citation]",
+      "status: ready",
+      "tier: cold",
+      "---",
+      "",
+      "citation survives hydration[^1]",
+      "",
+      "[^1]: cold-session.jsonl",
+    ].join("\n");
+    writeFileSync(join(root, "docs", "wiki", "3_decision", "cold.md"), page);
+    const w = new WikiIndex(root);
+    w.indexAll();
+    const conn = w.connect();
+
+    try {
+      expect(
+        conn.query("SELECT content IS NULL AS missing_content FROM documents WHERE relative_path='docs/wiki/3_decision/cold.md'").get(),
+      ).toEqual({ missing_content: 1 });
+      expect(
+        w.listDocumentsWithContent(conn).find((document) => document.relative_path === "docs/wiki/3_decision/cold.md")?.content,
+      ).toContain("cold-session.jsonl");
+
+      // When / Then: refs reads the on-disk body and registers its cited transcript.
+      expect(autoRegisterCitedTranscripts(w)).toBe(1);
+    } finally {
+      conn.close();
+    }
+  });
 });
 
 describe("parseCitationFilename", () => {

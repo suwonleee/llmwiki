@@ -3,25 +3,98 @@
 // `new Linter(null, null)._footnotes` is exercisable without an index/conn.
 // Tests assert the *current* behavior of the engine; do not change the engine.
 import { test, expect, describe, beforeEach } from "bun:test";
-import { Linter, parseFrontmatter, formatReport, TOPIC_BUDGET } from "../src/engine/lint.ts";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Linter, formatReport, TOPIC_BUDGET, type WikiDoc } from "../src/engine/lint.ts";
 import { defaults } from "../src/engine/config.ts";
+import { parseFrontmatter } from "../src/engine/frontmatter.ts";
+import { WikiIndex } from "../src/engine/db.ts";
 
 describe("parseFrontmatter", () => {
   test("normal yaml", () => {
     const content = "---\ntitle: Hello\ndescription: A page\n---\nbody";
     const meta = parseFrontmatter(content);
-    expect(meta["title"]).toBe("Hello");
-    expect(meta["description"]).toBe("A page");
+    expect(meta.fields["title"]).toBe("Hello");
+    expect(meta.fields["description"]).toBe("A page");
   });
 
   test("tags list", () => {
     const content = "---\ntitle: T\ntags: [a, b, c]\n---\nbody";
     const meta = parseFrontmatter(content);
-    expect(meta["tags"]).toEqual(["a", "b", "c"]);
+    expect(meta.fields["tags"]).toEqual(["a", "b", "c"]);
   });
 
   test("no frontmatter", () => {
-    expect(parseFrontmatter("just body, no front matter")).toEqual({});
+    expect(parseFrontmatter("just body, no front matter").fields).toEqual({});
+  });
+
+  test("characterizes scalar status and list tags consumed by lint", () => {
+    // Given: the legacy parser's supported scalar/list frontmatter shape.
+    const content = "---\ntitle: Decision\ndate: 2026-07-23\ntags: [architecture, typed]\nstatus: ready\n---\nbody";
+    const doc: WikiDoc = {
+      id: "doc-1",
+      path: "/docs/wiki/",
+      filename: "decision.md",
+      relative_path: "docs/wiki/decision.md",
+    };
+    const linter = new Linter(null, null);
+
+    // When: lint consumes the legacy parser result.
+    const metadata = parseFrontmatter(content);
+    const issues = linter._frontmatter(doc, metadata.fields);
+
+    // Then: page semantics stay accepted; `status` has no operational meaning here.
+    expect(metadata.fields["tags"]).toEqual(["architecture", "typed"]);
+    expect(issues.map((issue) => issue.code)).not.toContain("missing-frontmatter");
+  });
+});
+
+describe("cold page hydration", () => {
+  test("lint reads the on-disk body after the cold page is stored metadata-only", () => {
+    // Given: a cold page missing a lint-required frontmatter field.
+    const root = mkdtempSync(join(tmpdir(), "llmwiki-lint-cold-"));
+    const wiki = join(root, "docs", "wiki", "4_insight");
+    mkdirSync(wiki, { recursive: true });
+    writeFileSync(
+      join(wiki, "cold.md"),
+      [
+        "---",
+        "title: Cold lint page",
+        "date: 2025-01-02",
+        "tags: [cold, lint]",
+        "status: ready",
+        "tier: cold",
+        "---",
+        "",
+        "lint must hydrate this body",
+      ].join("\n"),
+    );
+    const index = new WikiIndex(root);
+    const conn = index.connect();
+
+    try {
+      index.indexAll(conn);
+      expect(
+        conn.query("SELECT content IS NULL AS missing_content FROM documents WHERE relative_path='docs/wiki/4_insight/cold.md'").get(),
+      ).toEqual({ missing_content: 1 });
+
+      // When / Then: the lint reader receives the disk body and reports its missing description.
+      const row = index.listDocumentsWithContent(conn).find((document) => document.relative_path === "docs/wiki/4_insight/cold.md");
+      if (row === undefined || typeof row.content !== "string") throw new Error("cold lint fixture did not hydrate");
+      const document: WikiDoc = {
+        id: String(row.id),
+        path: String(row.path),
+        filename: String(row.filename),
+        relative_path: String(row.relative_path),
+        content: row.content,
+      };
+      const issues = new Linter(null, null, defaults())._frontmatter(document, parseFrontmatter(row.content).fields);
+      expect(issues.map((issue) => issue.code)).toContain("missing-description");
+    } finally {
+      conn.close();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

@@ -20,12 +20,12 @@ Options:
 
 Codex installs:
   - native SessionStart + UserPromptSubmit hooks in \$CODEX_HOME/hooks.json
-  - \$wiki-save, \$wiki-deep, \$wiki-ask, \$wiki-quiz skills
+  - \$wiki-save, \$wiki-deep, \$wiki-ask, \$wiki-quiz, \$wiki-doctor skills
   - a user-level llmwiki command in ~/.local/bin
 
 OpenCode installs:
   - the global read-injection plugin under \$XDG_CONFIG_HOME/opencode/plugin
-  - /wiki-save, /wiki-deep, /wiki-ask, /wiki-quiz commands
+  - /wiki-save, /wiki-deep, /wiki-ask, /wiki-quiz, /wiki-doctor commands
   - the same user-level llmwiki command
 EOF
 }
@@ -64,6 +64,20 @@ esac
 
 BUN="$(command -v bun || true)"
 [ -z "$BUN" ] && { echo "🔴 bun not found on PATH — install Bun first: https://bun.sh"; exit 1; }
+BUN_VERSION="$("$BUN" --version 2>/dev/null || true)"
+BUN_MAJOR="${BUN_VERSION%%.*}"
+BUN_REST="${BUN_VERSION#*.}"
+BUN_MINOR="${BUN_REST%%.*}"
+case "$BUN_MAJOR" in
+    ''|*[!0-9]*) echo "🔴 unable to determine Bun version from: ${BUN_VERSION:-<empty>}" >&2; exit 1 ;;
+esac
+case "$BUN_MINOR" in
+    ''|*[!0-9]*) echo "🔴 unable to determine Bun version from: ${BUN_VERSION:-<empty>}" >&2; exit 1 ;;
+esac
+if [ "$BUN_MAJOR" -lt 1 ] || { [ "$BUN_MAJOR" -eq 1 ] && [ "$BUN_MINOR" -lt 1 ]; }; then
+    echo "🔴 Bun 1.1 or newer is required (found $BUN_VERSION) — update Bun, then re-run setup." >&2
+    exit 1
+fi
 printf -v BUN_Q '%q' "$BUN"
 printf -v ROOT_Q '%q' "$ROOT"
 
@@ -211,18 +225,28 @@ if [ "$POST" -ne 0 ]; then
 fi
 
 echo "=== setup installed. ==="
-echo "  • Initialize a project: llmwiki init <repo>"
+if [ "$USE_CODEX" -eq 1 ] || [ "$USE_OPENCODE" -eq 1 ]; then
+    echo "  • Initialize a project: llmwiki init <repo>"
+    echo "  • Verify the installation anytime: llmwiki doctor --harness $DOCTOR_HARNESS"
+    echo "  • Engine-only project diagnosis: llmwiki wiki-doctor <repo> (add --fix for safe derived-state repair)"
+else
+    echo "  • Initialize a project: $BUN_Q ${ROOT_Q}/src/cli.ts init <repo>"
+    echo "  • Verify the installation anytime: $BUN_Q ${ROOT_Q}/src/cli.ts doctor --harness claude"
+    echo "  • Engine-only project diagnosis: $BUN_Q ${ROOT_Q}/src/cli.ts wiki-doctor <repo> (add --fix for safe derived-state repair)"
+fi
 if [ "$USE_CODEX" -eq 1 ]; then
     echo "  • One-time Codex activation: start Codex, open /hooks, trust both llmwiki hooks."
     echo "  • Then work in a project and close the session with: \$wiki-save"
+    echo "  • Diagnose and repair that project's wiki with: \$wiki-doctor"
 fi
 if [ "$USE_CLAUDE" -eq 1 ]; then
     echo "  • Claude Code close-out: /wiki-save"
+    echo "  • Claude Code project-wiki repair: /wiki-doctor"
 fi
 if [ "$USE_OPENCODE" -eq 1 ]; then
     echo "  • OpenCode close-out: /wiki-save"
+    echo "  • OpenCode project-wiki repair: /wiki-doctor"
 fi
-echo "  • Verify anytime: llmwiki doctor"
 echo "  • Undo Codex: $BUN_Q ${ROOT_Q}/src/daemon/wire-codex.ts --revert"
 echo "  • Undo OpenCode: $BUN_Q ${ROOT_Q}/src/daemon/wire-opencode.ts --revert"
 echo "  • Undo daemon/Claude: bash ${ROOT_Q}/daemon/install.sh --uninstall · $BUN_Q ${ROOT_Q}/src/daemon/wire.ts --revert"

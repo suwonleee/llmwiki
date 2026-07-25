@@ -40,7 +40,7 @@ describe("Codex wiring", () => {
 
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  test("merges hooks, installs four Codex skills, and adds a user CLI", () => {
+  test("merges hooks, installs all Codex skills, and adds a user CLI", () => {
     writeFileSync(
       join(codexHome, "hooks.json"),
       JSON.stringify({ hooks: { Stop: [{ matcher: "", hooks: [{ type: "command", command: "keep-me" }] }] } }),
@@ -63,12 +63,15 @@ describe("Codex wiring", () => {
       expect(commands[0]).toContain(ROOT);
     }
 
-    for (const name of ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz"]) {
+    for (const name of ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"]) {
       const skill = readFileSync(join(home, ".agents", "skills", name, "SKILL.md"), "utf8");
       expect(skill).toContain(`name: ${name}`);
       expect(skill).not.toContain("$CLAUDE_PROJECT_DIR");
       expect(skill).not.toContain("~/llmwiki");
     }
+    const save = readFileSync(join(home, ".agents", "skills", "wiki-save", "SKILL.md"), "utf8");
+    expect(save).toContain("supporting detail at four spaces (`    -`)");
+    expect(save).toContain("noun phrases or telegraphic endings");
     const deep = readFileSync(join(home, ".agents", "skills", "wiki-deep", "SKILL.md"), "utf8");
     expect(deep).toContain("invoke `$wiki-save` before continuing");
     expect(deep).not.toContain("skill$wiki-save.md");
@@ -186,7 +189,7 @@ describe("Codex wiring", () => {
 
     expect(run(home, codexHome).exitCode).toBe(0);
 
-    for (const name of ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz"]) {
+    for (const name of ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"]) {
       expect(readFileSync(join(home, ".agents", "skills", name, "SKILL.md"), "utf8")).toContain(
         `name: ${name}`,
       );
@@ -244,7 +247,7 @@ describe("Codex wiring", () => {
     expect(run(home, codexHome).exitCode).toBe(0);
     expect(readFileSync(hooksPath, "utf8")).toContain(ROOT);
     expect(readFileSync(launcher, "utf8")).toContain(ROOT);
-    for (const name of ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz"]) {
+    for (const name of ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"]) {
       expect(readFileSync(join(home, ".agents", "skills", name, "SKILL.md"), "utf8")).toContain(ROOT);
     }
 

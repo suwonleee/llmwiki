@@ -15,7 +15,7 @@ import { join } from "node:path";
 
 const ROOT = join(import.meta.dir, "..");
 const WIRE = join(ROOT, "src", "daemon", "wire-opencode.ts");
-const COMMANDS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz"] as const;
+const COMMANDS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"] as const;
 
 function run(home: string, configRoot: string, args: string[] = []) {
   return Bun.spawnSync(["bun", WIRE, ...args], {
@@ -42,7 +42,7 @@ describe("OpenCode wiring", () => {
 
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  test("installs an XDG-aware plugin, four slash commands, and a user CLI idempotently", () => {
+  test("installs an XDG-aware plugin, all slash commands, and a user CLI idempotently", () => {
     expect(run(home, configRoot).exitCode).toBe(0);
     expect(run(home, configRoot).exitCode).toBe(0);
 
@@ -58,6 +58,9 @@ describe("OpenCode wiring", () => {
       expect(command).not.toContain("$CLAUDE_PROJECT_DIR");
       expect(command).not.toContain("~/llmwiki");
     }
+    const save = readFileSync(join(opencodeRoot, "commands", "wiki-save.md"), "utf8");
+    expect(save).toContain("supporting detail at four spaces (`    -`)");
+    expect(save).toContain("noun phrases or telegraphic endings");
     expect(readFileSync(join(opencodeRoot, "commands", "wiki-deep.md"), "utf8")).toContain("$ARGUMENTS");
 
     const launcher = join(home, ".local", "bin", "llmwiki");

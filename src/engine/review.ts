@@ -8,7 +8,7 @@
 // --commit writes docs/wiki/0_review/semantic-review-<date>.md, status: draft) for a
 // human to act on. Single WRITE pass (no VERIFY second model).
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { getConfig } from "./config.ts";
+import { getConfig, renderBodyStyleRule } from "./config.ts";
 import { createHash } from "node:crypto";
 import { basename, join, relative as relpath, resolve } from "node:path";
 import { llm } from "./claude.ts";
@@ -84,6 +84,7 @@ Output format (strict): the ENTIRE output is saved verbatim as a \`.md\` file. N
 - **The first character MUST be \`---\`** (YAML frontmatter) with the fields: title, description (one sentence), date: {date},
   tags: [review, semantic, meta], status: draft, source: semantic-lint.
 - Body sections (these 5, in fixed order, no emoji), headings written in the report's language: Contradiction / Stale claim / Missing concept page / Cross-references & next questions / Grounding & citations. (Korean example: \`## 모순\` · \`## 낡은 주장\` · \`## 개념 누락\` · \`## 교차참조·다음 질문\` · \`## 근거·인용 부실\`.)
+${renderBodyStyleRule()}
 - Terminology (lint-enforced, advisory): avoid jargon a person wouldn't say — e.g. when writing Korean prefer \`방향성\` (not 진북/북극성/north-star) and \`업데이트\`/\`update\` (not distill).
 
 {scopenote}=== INPUT: wiki pages ===
@@ -247,6 +248,29 @@ function _readState(root: string): { hash?: string; date?: string; dest?: string
   } catch {
     return {};
   }
+}
+
+export interface ReviewHealth {
+  readonly due: boolean;
+  readonly incompleteLaunch: boolean;
+  readonly lastCompletedDate: string | null;
+  readonly launchedDate: string | null;
+  readonly reportPath: string | null;
+  readonly intervalDays: number;
+}
+
+/** Inspect semantic-review cadence without building briefs, reindexing, or invoking an LLM. */
+export function inspectReviewHealth(ws: string, today = new Date().toISOString().slice(0, 10)): ReviewHealth {
+  const root = resolve(ws);
+  const state = _readState(root);
+  return {
+    due: _isDue(state.date, today, REVIEW_INTERVAL_DAYS),
+    incompleteLaunch: _launchIncomplete(state),
+    lastCompletedDate: state.date ?? null,
+    launchedDate: state.launched ?? null,
+    reportPath: state.dest ?? null,
+    intervalDays: REVIEW_INTERVAL_DAYS,
+  };
 }
 // Stamp "a commit run is past all gates and about to spend the LLM call". Merges into the
 // existing state so the last completed stamp stays readable; the completion _writeState

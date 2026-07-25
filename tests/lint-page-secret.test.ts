@@ -53,6 +53,12 @@ describe("lint — page-secret", () => {
     expect(codes(page("커밋 46007c4 에서 value-flag 허용목록을 고쳤다 (src/cli.ts:123 참고)"))).toEqual([]);
   });
 
+  test("a Codex rollout provenance filename is not a secret-shaped blob", () => {
+    const rollout =
+      "rollout-2026-07-24T07-56-03-019f9131-6f47-72f1-8a1c-373e2cf535c4.jsonl";
+    expect(codes(page(`근거[^1]\n\n[^1]: ${rollout}`))).toEqual([]);
+  });
+
   test("a 40-hex blob errors — the shape is a classic token's; shorten the hash instead", () => {
     expect(codes(page(`전체 해시 ${"a1b2c3d4".repeat(5)} 를 그대로 적으면 걸린다`))).toEqual(["page-secret"]);
   });

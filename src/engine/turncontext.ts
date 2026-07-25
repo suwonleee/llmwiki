@@ -24,6 +24,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { WikiIndex } from "./db.ts";
 import { effectiveKo, getConfig } from "./config.ts";
+import { COLD_INDEX_RELATIVE_PATH } from "./cold-index.ts";
 
 const MAX_TERMS = 12;
 const MAX_PAGES = 3;
@@ -196,7 +197,12 @@ export function buildTurnContext(repo: string, prompt: string, sessionId = ""): 
     for (const r of rows) {
       const rel = String(r.relative_path ?? "");
       const base = rel.split("/").pop() ?? "";
-      if (!rel.includes("docs/wiki/") || l0Basenames.has(base) || rel.includes(`/${cfg.queueDir}/`)) continue;
+       if (
+         rel === COLD_INDEX_RELATIVE_PATH ||
+         !rel.includes("docs/wiki/") ||
+         l0Basenames.has(base) ||
+         rel.includes(`/${cfg.queueDir}/`)
+       ) continue;
       const e =
         byPage.get(rel) ?? { title: String(r.title ?? base), terms: new Set<string>(), cur: 0, hits: 0 };
       e.hits += 1;

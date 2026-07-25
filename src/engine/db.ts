@@ -10,6 +10,14 @@ import { join, relative as relpath, resolve } from "node:path";
 import { storeChunks, chunkText } from "./chunker.ts";
 import { stripEvidence } from "./refs.ts";
 import { getConfig } from "./config.ts";
+import { parseFrontmatter } from "./frontmatter.ts";
+import {
+  COLD_INDEX_RELATIVE_PATH,
+  coldDiscoveryChunk,
+  isColdTier,
+  readColdPageBody,
+  writeColdIndex,
+} from "./cold-index.ts";
 
 const SCHEMA_PATH = join(import.meta.dir, "schema.sql");
 const SCHEMA = readFileSync(SCHEMA_PATH, "utf-8");
@@ -20,6 +28,7 @@ const IGNORE_DIRS = new Set([
   "dist", "build", ".next", ".cache", ".gradle", "coverage", "Pods",
   "examples", "fixtures", "testdata", "__fixtures__", // sample/fixture trees are illustration, not knowledge sources
 ]);
+const GENERATED_DIRS = new Set(["out", "output", "var"]);
 const TEXT_EXTENSIONS = new Set([
   "md", "txt", "csv", "html", "svg", "json", "xml", "yaml", "yml",
   "toml", "ini", "cfg", "rst", "tex",
@@ -92,7 +101,7 @@ export function ftsRelax(query: string): string | null {
 }
 
 // Recursive top-down walk with in-place dir pruning (replaces Python os.walk + dirs[:]).
-function* walkFiles(walkRoot: string): Generator<string> {
+function* walkFiles(walkRoot: string, workspaceRoot: string): Generator<string> {
   let entries;
   try {
     entries = readdirSync(walkRoot, { withFileTypes: true });
@@ -101,15 +110,19 @@ function* walkFiles(walkRoot: string): Generator<string> {
   }
   const subdirs: string[] = [];
   const files: string[] = [];
+  const relativeDir = relpath(workspaceRoot, walkRoot).replace(/\\/g, "/");
+  const isWikiDir = relativeDir === WIKI_DIR || relativeDir.startsWith(WIKI_DIR + "/");
   for (const e of entries) {
     if (e.isDirectory()) {
-      if (!IGNORE_DIRS.has(e.name) && !e.name.startsWith(".")) subdirs.push(e.name);
+      if (!IGNORE_DIRS.has(e.name) && (isWikiDir || !GENERATED_DIRS.has(e.name)) && !e.name.startsWith(".")) {
+        subdirs.push(e.name);
+      }
     } else if (e.isFile()) {
       if (!e.name.startsWith(".")) files.push(e.name);
     }
   }
   for (const fn of files) yield join(walkRoot, fn);
-  for (const d of subdirs) yield* walkFiles(join(walkRoot, d));
+  for (const d of subdirs) yield* walkFiles(join(walkRoot, d), workspaceRoot);
 }
 
 export class WikiIndex {
@@ -149,6 +162,7 @@ export class WikiIndex {
     db.exec("PRAGMA busy_timeout=5000"); // migration DDL vs a concurrent daemon write → wait, not SQLITE_BUSY
     this.migrateFts(db); // must run BEFORE exec(SCHEMA): drop the old-tokenizer table first
     db.exec(SCHEMA); // idempotent (IF NOT EXISTS) → any command self-initializes
+    this.migrateFrontmatterMetadata(db);
     const ws = db.query("SELECT 1 FROM workspace LIMIT 1").get();
     if (!ws) {
       db.run("INSERT INTO workspace (id, name, root_path) VALUES (?, ?, ?)", [
@@ -197,6 +211,51 @@ export class WikiIndex {
     }
   }
 
+  private migrateFrontmatterMetadata(db: Database): void {
+    const columns = new Set(
+      db.query<{ readonly name: string }, []>("PRAGMA table_info(documents)").all().map((column) => column.name),
+    );
+    if (!columns.has("description")) {
+      db.exec("ALTER TABLE documents ADD COLUMN description TEXT");
+    }
+    if (!columns.has("knowledge_status")) {
+      db.exec("ALTER TABLE documents ADD COLUMN knowledge_status TEXT CHECK (knowledge_status IN ('draft', 'ready', 'superseded'))");
+    }
+    if (!columns.has("knowledge_tier")) {
+      db.exec("ALTER TABLE documents ADD COLUMN knowledge_tier TEXT CHECK (knowledge_tier IN ('hot', 'warm', 'cold', 'protected'))");
+    }
+    const rows = db
+      .query<
+        { readonly id: string; readonly content: string | null; readonly relative_path: string; readonly knowledge_tier: string | null },
+        []
+      >(
+        "SELECT id, content, relative_path, knowledge_tier FROM documents WHERE source_kind='wiki'",
+      )
+      .all();
+    for (const row of rows) {
+      const content = row.content ?? (row.knowledge_tier === "cold" ? readColdPageBody(this.root, row.relative_path) : "");
+      const metadata = parseFrontmatter(content);
+      const tags = JSON.stringify(metadata.tags);
+      db.run(
+        "UPDATE documents SET description=?, date=?, tags=?, knowledge_status=?, knowledge_tier=? " +
+          "WHERE id=? AND (description IS NOT ? OR date IS NOT ? OR tags IS NOT ? OR knowledge_status IS NOT ? OR knowledge_tier IS NOT ?)",
+        [
+          metadata.description,
+          metadata.date,
+          tags,
+          metadata.status,
+          metadata.tier,
+          row.id,
+          metadata.description,
+          metadata.date,
+          tags,
+          metadata.status,
+          metadata.tier,
+        ],
+      );
+    }
+  }
+
   // ---- indexing (incremental via content_hash) --------------------------
 
   indexAll(conn: Database | null = null): [number, number] {
@@ -204,6 +263,7 @@ export class WikiIndex {
     const db = conn ?? this.connect();
     let neu = 0;
     let updated = 0;
+    let removed = 0;
     const seen = new Set<string>();
 
     const wikiOnly = this.root === resolve(homedir());
@@ -223,10 +283,11 @@ export class WikiIndex {
     // self-heals rows indexed before this guard existed.
     const quizPrefix = WIKI_DIR + "/" + getConfig(this.root).quizDir + "/";
 
-    for (const full of walkFiles(walkRoot)) {
+    for (const full of walkFiles(walkRoot, this.root)) {
       // posix-normalize the stored relative_path so downstream `docs/wiki/` matching
       // (sourceKind, lint, cold-start) holds on Windows, where relpath yields backslashes.
       const relative = relpath(this.root, full).replace(/\\/g, "/");
+      if (relative === COLD_INDEX_RELATIVE_PATH) continue;
       if (relative.startsWith(quizPrefix)) continue;
       if (!relative.startsWith(WIKI_DIR + "/")) {
         if (sourceCount >= WikiIndex.SOURCE_FILE_CAP) {
@@ -251,14 +312,21 @@ export class WikiIndex {
     for (const row of rows) {
       if (!seen.has(row.relative_path) && !this.isVirtual(row.relative_path)) {
         db.run("DELETE FROM documents WHERE relative_path = ?", [row.relative_path]);
+        removed += 1;
       }
     }
+    this.writeColdIndex(db);
+    if (updated > 0 || removed > 0) this.optimizeFts(db);
     if (own) db.close();
     return [neu, updated];
   }
 
   isVirtual(relative: string): boolean {
     return relative.startsWith("__transcript__/");
+  }
+
+  private optimizeFts(db: Database): void {
+    db.run("INSERT INTO chunks_fts(chunks_fts) VALUES('optimize')");
   }
 
   indexFile(db: Database, full: string, relative: string): "new" | "updated" | null {
@@ -273,15 +341,22 @@ export class WikiIndex {
       .query("SELECT id, content_hash FROM documents WHERE relative_path = ?")
       .get(relative) as { id: string; content_hash: string | null } | null;
 
-    let content: string | null = null;
+    let sourceContent: string | null = null;
     const capExempt = sourceKind(relative) === "wiki"; // wiki pages are never capped
     if (TEXT_EXTENSIONS.has(ext) && (capExempt || size <= WikiIndex.SOURCE_CONTENT_CAP)) {
       try {
-        content = readFileSync(full, "utf-8");
+        sourceContent = readFileSync(full, "utf-8");
       } catch {
         /* ignore */
       }
     }
+    const frontmatter = sourceKind(relative) === "wiki" && sourceContent !== null ? parseFrontmatter(sourceContent) : null;
+    const description = frontmatter?.description ?? null;
+    const tags = JSON.stringify(frontmatter?.tags ?? []);
+    const date = frontmatter?.date ?? null;
+    const knowledgeStatus = frontmatter?.status ?? null;
+    const knowledgeTier = frontmatter?.tier ?? null;
+    const content = isColdTier(knowledgeTier) ? null : sourceContent;
 
     const parts = relative.split("/");
     const dirPath = parts.length > 1 ? "/" + parts.slice(0, -1).join("/") + "/" : "/";
@@ -292,11 +367,32 @@ export class WikiIndex {
       if (existing.content_hash === contentHash) return null; // unchanged → skip
       db.run(
         "UPDATE documents SET content=?, file_size=?, content_hash=?, mtime_ns=?, file_type=?, " +
+          "description=CASE WHEN source_kind='wiki' THEN ? ELSE description END, " +
+          "date=CASE WHEN source_kind='wiki' THEN ? ELSE date END, " +
+          "tags=CASE WHEN source_kind='wiki' THEN ? ELSE tags END, " +
+          "knowledge_status=CASE WHEN source_kind='wiki' THEN ? ELSE knowledge_status END, " +
+          "knowledge_tier=CASE WHEN source_kind='wiki' THEN ? ELSE knowledge_tier END, " +
           "last_indexed_at=datetime('now'), updated_at=datetime('now'), version=version+1, " +
           "stale_since=NULL WHERE id=?",
-        [content, size, contentHash, mtimeNs, ext || "bin", existing.id],
+        [
+          content,
+          size,
+          contentHash,
+          mtimeNs,
+          ext || "bin",
+          description,
+          date,
+          tags,
+          knowledgeStatus,
+          knowledgeTier,
+          existing.id,
+        ],
       );
-      if (content !== null) storeChunks(db, existing.id, chunkText(stripEvidence(content)));
+      if (isColdTier(knowledgeTier) && frontmatter !== null) {
+        storeChunks(db, existing.id, [...coldDiscoveryChunk({ relativePath: relative, title, metadata: frontmatter, sourceContent: sourceContent ?? "" })]);
+      } else if (content !== null) {
+        storeChunks(db, existing.id, chunkText(stripEvidence(content)));
+      }
       // content became null (e.g. the file grew past SOURCE_CONTENT_CAP): drop the stale
       // chunks so the FTS no longer serves the old body (delete trigger cleans chunks_fts).
       else db.run("DELETE FROM document_chunks WHERE document_id = ?", [existing.id]);
@@ -307,13 +403,69 @@ export class WikiIndex {
     const docId = crypto.randomUUID();
     const n = (db.query("SELECT COALESCE(MAX(document_number), 0) + 1 AS n FROM documents").get() as { n: number }).n;
     db.run(
-      "INSERT INTO documents (id, filename, title, path, relative_path, source_kind, file_type, " +
-        "file_size, status, content, tags, version, content_hash, mtime_ns, last_indexed_at, document_number) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, '[]', 1, ?, ?, datetime('now'), ?)",
-      [docId, name, title, dirPath, relative, sourceKind(relative), ext || "bin", size, content, contentHash, mtimeNs, n],
+      "INSERT INTO documents (id, filename, title, description, path, relative_path, source_kind, file_type, " +
+        "file_size, status, content, tags, date, knowledge_status, knowledge_tier, version, content_hash, mtime_ns, last_indexed_at, document_number) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?, ?, 1, ?, ?, datetime('now'), ?)",
+      [
+        docId,
+        name,
+        title,
+        description,
+        dirPath,
+        relative,
+        sourceKind(relative),
+        ext || "bin",
+        size,
+        content,
+        tags,
+        date,
+        knowledgeStatus,
+        knowledgeTier,
+        contentHash,
+        mtimeNs,
+        n,
+      ],
     );
-    if (content !== null) storeChunks(db, docId, chunkText(stripEvidence(content)));
+    if (isColdTier(knowledgeTier) && frontmatter !== null) {
+      storeChunks(db, docId, [...coldDiscoveryChunk({ relativePath: relative, title, metadata: frontmatter, sourceContent: sourceContent ?? "" })]);
+    } else if (content !== null) {
+      storeChunks(db, docId, chunkText(stripEvidence(content)));
+    }
     return "new";
+  }
+
+  private writeColdIndex(db: Database): void {
+    const rows = db
+      .query<
+        {
+          readonly relative_path: string;
+          readonly title: string | null;
+          readonly description: string | null;
+          readonly tags: string;
+          readonly date: string | null;
+          readonly knowledge_status: string | null;
+        },
+        []
+      >(
+        "SELECT relative_path, title, description, tags, date, knowledge_status FROM documents " +
+          "WHERE source_kind='wiki' AND knowledge_tier='cold' AND status != 'failed'",
+      )
+      .all();
+    writeColdIndex(
+      this.root,
+      rows.map((row) => {
+        const parsed = WikiIndex.row({ tags: row.tags }).tags;
+        const tags = Array.isArray(parsed) ? parsed.filter((tag): tag is string => typeof tag === "string") : [];
+        return {
+          relativePath: row.relative_path,
+          title: row.title ?? this.basename(row.relative_path),
+          description: row.description,
+          tags,
+          date: row.date,
+          status: row.knowledge_status,
+        };
+      }),
+    );
   }
 
   registerTranscript(transcriptPath: string, sessionId: string | null = null): void {
@@ -351,6 +503,8 @@ export class WikiIndex {
     db.run("DELETE FROM document_references");
     db.run("DELETE FROM documents WHERE source_kind != 'transcript'");
     const r = this.indexAll(db);
+    this.optimizeFts(db);
+    db.run("VACUUM");
     db.close();
     return r;
   }
@@ -364,7 +518,7 @@ export class WikiIndex {
   listDocuments(db: Database): DocRow[] {
     const rows = db
       .query(
-        "SELECT id, filename, title, path, relative_path, file_type, tags, source_kind, date, updated_at " +
+        "SELECT id, filename, title, description, path, relative_path, file_type, tags, source_kind, date, updated_at " +
           "FROM documents WHERE status != 'failed' ORDER BY path, filename",
       )
       .all() as DocRow[];
@@ -376,11 +530,16 @@ export class WikiIndex {
       .query(
         // `metadata` carries a registered transcript's real path — lint needs it to verify v3
         // evidence excerpts against their source (and to stay silent when that source is gone).
-        "SELECT id, filename, title, path, relative_path, content, tags, file_type, source_kind, date, stale_since, metadata " +
+        "SELECT id, filename, title, description, path, relative_path, content, tags, file_type, source_kind, date, stale_since, metadata, knowledge_tier " +
           "FROM documents WHERE status != 'failed' ORDER BY path, filename",
       )
       .all() as DocRow[];
-    return rows.map(WikiIndex.row);
+    return rows.map(WikiIndex.row).map((row) => {
+      if (row.source_kind === "wiki" && row.knowledge_tier === "cold" && row.content === null) {
+        return { ...row, content: readColdPageBody(this.root, String(row.relative_path)) };
+      }
+      return row;
+    });
   }
 
   // ---- reference graph (cites / links_to) -------------------------------
