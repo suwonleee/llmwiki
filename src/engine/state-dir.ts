@@ -46,7 +46,7 @@ export const EXPORT_TTL_DAYS = 30;
 
 export const EXPORT_DIR_NAME = "opencode-export";
 /** Everything an llmwiki-owned state root may contain — the purge allowlist, and nothing else. */
-export const OWNED_FILES = ["capture.db", "capture.db-wal", "capture.db-shm", "daemon.log"] as const;
+export const OWNED_FILES = ["capture.db", "capture.db-wal", "capture.db-shm", "daemon.log", "update-check.json"] as const;
 /**
  * Logs earlier versions of THIS engine wrote into its own clone-local `.state` (autodistill runs,
  * dry-run scans, and whatever a future pass names its log). Adoption of the canonical default has

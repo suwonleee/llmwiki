@@ -36,6 +36,7 @@ const ALLOWED_MUTATORS: Record<string, string> = {
   "engine/capture.ts": "removes expired transcript exports from the machine-local state root",
   "engine/sources/opencode.ts": "materializes OpenCode exports into the machine-local state root",
   "engine/turncontext.ts": "per-session scratch state in the OS temp dir, not in any repository",
+  "engine/update-check.ts": "records the daily origin check in the machine-local state root; reads the engine clone's own package.json — never repository content",
   "engine/claude.ts": "creates and removes the throwaway cwd for a generative subprocess",
   "engine/doctor.ts": "repairs HARNESS configuration (~/.claude, ~/.codex), never a repository",
   "engine/bench.ts": "engine-development benchmark writing its own report next to the corpus",

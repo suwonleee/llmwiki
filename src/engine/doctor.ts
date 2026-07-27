@@ -14,6 +14,7 @@ import { claudeConfigDirs, claudeRetentionDays } from "./sources/claude.ts";
 import { EXPIRY_WARN_DAYS, healthReadOnly, pendingPastRetentionReadOnly } from "./capture.ts";
 import { effectiveStateRoot, probeStateRoot } from "./state-dir.ts";
 import { inspectEnrollment } from "./enrollment.ts";
+import { liveEngineVersion, readUpdateCheck, updateAvailable } from "./update-check.ts";
 
 const HOME = process.env.HOME?.trim() || homedir();
 const CORE = [
@@ -368,6 +369,29 @@ function humanAge(days: number): string {
  * and a state root the engine refused to adopt. Neither moved a single ✅ to ⚠️. These three lines
  * are the ones that would have.
  */
+// Engine freshness — automatic CHECK, manual APPLY (see engine/update-check.ts). Print-only,
+// contributes ZERO to the failure count: setup.sh propagates doctor failures, and "a newer
+// version exists" is information, not a defect — it must never make an install read as broken.
+export function reportEngineUpdate(): void {
+  try {
+    const rec = readUpdateCheck();
+    if (rec === null) {
+      console.log("  [update] • no check recorded yet — the daemon asks origin once a day");
+      return;
+    }
+    const avail = updateAvailable();
+    if (avail) {
+      console.log(`  [update] ⚠️ v${avail.localVersion} → v${avail.remoteVersion} available — cd ${CLONE_ROOT} && git pull && ./setup.sh`);
+      console.log("  [update]    (the engine never updates itself — applying is your act)");
+    } else {
+      const live = liveEngineVersion() ?? rec.localVersion;
+      console.log(`  [update] ✅ engine v${live} — no newer version recorded (checked ${rec.checkedAt.slice(0, 10) || "?"})`);
+    }
+  } catch {
+    /* freshness is informational — doctor must not fail over it */
+  }
+}
+
 export function reportCaptureHealth(): number {
   let issues = 0;
   const root = effectiveStateRoot();
@@ -527,6 +551,7 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
     }
   }
 
+  reportEngineUpdate();
   issues += reportCaptureHealth();
 
   // SessionStart read-injection hooks across profiles. A Codex-only setup must not fail

@@ -25,8 +25,10 @@ cd ~/llmwiki
 
 These commands install the current public version. If you need a reproducible deployment, choose
 a tagged version on the [Releases page](https://github.com/suwonleee/llmwiki/releases) before
-setup. Updates are always manual. Uninstall before moving or deleting this directory (see below):
-the installed hooks point at it.
+setup. Updates are always manual — but you never have to track releases: the daemon checks origin
+once a day, and when a newer version exists your next session starts with a one-line notice and the
+exact command. Running it stays your act; the engine never updates itself. Uninstall before moving
+or deleting this directory (see below): the installed hooks point at it.
 
 Start **one** agent from this folder:
 

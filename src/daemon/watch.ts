@@ -9,6 +9,7 @@
 import { existsSync } from "node:fs";
 import * as capture from "../engine/capture.ts";
 import { reassertClaudeReadHooks } from "../engine/doctor.ts";
+import { checkEngineUpdate } from "../engine/update-check.ts";
 import { isEnrolled, isEnrolledFresh, resetEnrollmentCache } from "../engine/enrollment.ts";
 import {
   sources,
@@ -151,6 +152,7 @@ async function pollLoop(): Promise<void> {
       log(`sweep FAILED (retrying next poll): ${e}`);
     }
     reassertWiringIfDue();
+    checkEngineUpdateIfDue();
     await Bun.sleep(POLL_SECONDS * 1000);
   }
 }
@@ -170,6 +172,25 @@ function reassertWiringIfDue(): void {
     for (const note of reassertClaudeReadHooks()) log(`wiring self-heal: ${note}`);
   } catch (e) {
     log(`wiring self-heal FAILED (will retry tomorrow): ${e}`);
+  }
+}
+
+// Engine update check — automatic CHECK, manual APPLY (engine/update-check.ts explains why the
+// apply half must stay a human act). Daily, from the loop ONLY: `--once` runs inside tests and
+// one-shot sweeps, and a test sweep must never touch the network.
+const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+let lastUpdateCheckAt = 0;
+
+function checkEngineUpdateIfDue(): void {
+  const now = Date.now();
+  if (now - lastUpdateCheckAt < UPDATE_CHECK_INTERVAL_MS) return;
+  lastUpdateCheckAt = now;
+  try {
+    const rec = checkEngineUpdate();
+    if (rec) log(`update check: local v${rec.localVersion} · origin/main v${rec.remoteVersion} (${rec.behind} behind)`);
+    else log("update check: no answer (offline, no origin, or unparsable) — retrying tomorrow");
+  } catch (e) {
+    log(`update check FAILED (will retry tomorrow): ${e}`);
   }
 }
 
