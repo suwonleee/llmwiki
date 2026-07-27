@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as capture from "../src/engine/capture.ts";
 import { probeStateRoot, setEffectiveStateRoot } from "../src/engine/state-dir.ts";
+import { reportCaptureHealth } from "../src/engine/doctor.ts";
 import { claudeRetentionDays, CLAUDE_DEFAULT_RETENTION_DAYS } from "../src/engine/sources/claude.ts";
 
 const dirs: string[] = [];
@@ -185,5 +186,57 @@ describe("Claude retention is read, not assumed", () => {
     setEnv("CLAUDE_CONFIG_DIR", join(home, ".claude"));
 
     expect(claudeRetentionDays().configured).toBe(false);
+  });
+});
+
+// The doctor line an adopter reads five seconds after `init`.
+//
+// The enrollment inventory is drawn from repositories the QUEUE has seen — deliberately, so
+// doctor never scans the machine. But the queue file exists from the first sweep onward,
+// including sweeps that captured nothing, and the report then said "✅ enrolled repositories: 0"
+// while `init` had just printed "automatic integration enabled for this worktree". Measured in a
+// clean-room install of the published clone: init succeeded, cold start injected 2,833 bytes, and
+// doctor still answered 0. A count that is really about capture history must not be phrased as an
+// answer about enrollment.
+describe("doctor — the enrollment inventory says what it actually knows", () => {
+  test("a queue that has seen no live repository does not claim zero enrolled", () => {
+    const root = join(scratch(), "state");
+    capture.setStateDir(root);
+    setEffectiveStateRoot(root);
+    // a queue row whose repository is not on disk — the same empty inventory a first sweep leaves
+    capture.enqueue(join(scratch(), "s.jsonl"), "s-gone", join(scratch(), "deleted-repo"), 60);
+
+    const lines: string[] = [];
+    const real = console.log;
+    console.log = (...args: unknown[]) => void lines.push(args.join(" "));
+    try {
+      reportCaptureHealth();
+    } finally {
+      console.log = real;
+    }
+    const out = lines.join("\n");
+
+    expect(out).not.toContain("enrolled repositories: 0");
+    expect(out).toContain("no repository captured yet");
+    expect(out).toContain("llmwiki status <repo>"); // the command that CAN answer right now
+  });
+
+  test("a live enrolled repository is still reported as a count", () => {
+    const root = join(scratch(), "state");
+    const repo = scratch("llmwiki-live-repo-");
+    capture.setStateDir(root);
+    setEffectiveStateRoot(root);
+    capture.enqueue(join(scratch(), "s.jsonl"), "s-live", repo, 60);
+
+    const lines: string[] = [];
+    const real = console.log;
+    console.log = (...args: unknown[]) => void lines.push(args.join(" "));
+    try {
+      reportCaptureHealth();
+    } finally {
+      console.log = real;
+    }
+
+    expect(lines.join("\n")).toContain("enrolled repositories:");
   });
 });

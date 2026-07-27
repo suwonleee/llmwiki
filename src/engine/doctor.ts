@@ -368,7 +368,7 @@ function humanAge(days: number): string {
  * and a state root the engine refused to adopt. Neither moved a single ✅ to ⚠️. These three lines
  * are the ones that would have.
  */
-function reportCaptureHealth(): number {
+export function reportCaptureHealth(): number {
   let issues = 0;
   const root = effectiveStateRoot();
   const state = probeStateRoot(root);
@@ -396,7 +396,20 @@ function reportCaptureHealth(): number {
   }
   const preview = (list: string[]): string =>
     `${list.slice(0, 5).join(" · ")}${list.length > 5 ? ` … (+${list.length - 5})` : ""}`;
-  console.log(`  [capture] ✅ enrolled repositories: ${enrolled.length}${enrolled.length ? ` — ${preview(enrolled)}` : ""}`);
+  if (!known.length) {
+    // The queue file exists from the first sweep onward, including sweeps that captured nothing —
+    // so a fresh install answered "enrolled repositories: 0" while the adopter's `init` had just
+    // printed "automatic integration enabled". Two lines of output, flatly contradicting each
+    // other, at the exact moment the adopter is deciding whether this thing works. The inventory
+    // is drawn from repositories the QUEUE has seen; when it has seen none, say that instead of
+    // reporting a count that is not about enrollment at all.
+    console.log(
+      "  [capture] • no repository captured yet — enrolled repos are listed here after their first captured session",
+    );
+    console.log("  [capture]    (`llmwiki status <repo>` answers for one repository right now)");
+  } else {
+    console.log(`  [capture] ✅ enrolled repositories: ${enrolled.length}${enrolled.length ? ` — ${preview(enrolled)}` : ""}`);
+  }
   if (dormant.length) {
     // The upgrade trap: a repository whose wiki you still use, silently inert because enrollment
     // arrived after it. Cold start prints nothing there BY DESIGN, so this is the only surface

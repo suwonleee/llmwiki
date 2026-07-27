@@ -62,6 +62,8 @@ clone 한 것은 거기서 llmwiki를 돌리겠다는 결정이 아니기 때문
 - `llmwiki disable <repo>` — 다시 끄기(위키 파일은 그대로 유지)
 - 자동 연동은 **git 전용·워크트리 단위** — 연결된 워크트리 두 개는 각각 등록, 저장소를 옮기면
   `init` 재실행 필요(표식이 정규 경로를 기록함)
+- `llmwiki` 런처는 Codex·OpenCode 배선이 설치함 — **Claude 단독 설치에는 이 명령이 없으므로**
+  클론에서 직접 실행: `bun ~/llmwiki/src/cli.ts init /내/프로젝트/절대경로`(`status`·`disable`도 동일)
 
 설치가 정상으로 끝나면 같은 설치 세션에서 에이전트에게 요청합니다.
 

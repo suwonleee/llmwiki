@@ -65,6 +65,9 @@ there are no further prompts or confirmations, ever.
 - `llmwiki disable <repo>` — turn it back off (your wiki files are untouched)
 - automatic integration is **git-only** and per-worktree; two linked worktrees enroll separately,
   and moving a repository requires re-running `init` (the marker records its canonical path)
+- the `llmwiki` launcher is installed by the Codex and OpenCode wiring. On a **Claude-only**
+  install there is no such command — run the CLI from the clone instead:
+  `bun ~/llmwiki/src/cli.ts init /absolute/path/to/my-project` (same for `status` and `disable`)
 
 After setup reports healthy, stay in the same setup session and tell the agent:
 
