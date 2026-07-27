@@ -52,11 +52,20 @@ the current source of truth.
     - Run the harness-scoped doctor command below
     - Treat a nonzero doctor result as incomplete installation
     - Treat Codex hook trust as a separate UI-owned action, not a doctor failure
-- Phase 6 — handoff
+- Phase 6 — enroll the named project
+    - Installation is machine-level and INERT until a repository is enrolled
+    - Enrollment action: `llmwiki init <absolute-project-path>` (one time, per worktree)
+    - The target must be a git worktree; automatic integration is git-only
+    - Enrollment is granted only after the bounded skeleton/index work succeeds
+    - Confirm with `llmwiki status <absolute-project-path>`
+    - Never enroll a repository the human did not name; `docs/wiki/` presence is not consent
+- Phase 7 — handoff
     - Report absolute engine path and selected harness
     - Report installed daemon and harness surfaces
     - Report doctor result and remaining manual action
-    - Report the exact project initialization command for this installation
+    - Report which repositories are enrolled, and that no others are active
+    - Report the uninstall path: `./setup.sh --uninstall [--purge-data]`, run from this clone
+      before the clone is moved or deleted
     - Do not initialize an unspecified project
 
 ## Claude Code
@@ -132,9 +141,11 @@ the current source of truth.
     - Native Windows requires Git Bash plus separate service registration
 - Generative maintenance
     - Warm `/wiki-*` or `$wiki-*` workflows run on the active coding agent
-    - Unattended `autoupdate` and semantic `review` require an available LLM CLI
-    - Missing default Claude CLI is not a warm-workflow installation failure
-    - Report `LLMWIKI_LLM_CMD` as the provider-neutral configuration point when unattended generation is requested
+    - Unattended `autoupdate` and semantic `review` launch a subprocess ONLY when
+      `LLMWIKI_LLM_CMD` is set in the machine environment; unset is the default and sends nothing
+    - An unset value is never an installation failure — those passes report unavailable and skip
+    - Report `LLMWIKI_LLM_CMD` as an explicit, human-made shell-environment opt-in; never set it
+      from a repository file, a `.env`, or a config on the human's behalf
 
 ## Recovery rules
 

@@ -51,6 +51,7 @@ describe("fresh Codex setup", () => {
       HOME: home,
       CODEX_HOME: codexHome,
       CLAUDE_CONFIG_DIR: join(dir, "claude"),
+      LLMWIKI_STATE_DIR: join(dir, "state"),
       PATH: path,
       USER: "fresh-codex-user",
     };

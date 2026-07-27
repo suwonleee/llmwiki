@@ -16,6 +16,11 @@ import { sourceForPath } from "./engine/source.ts";
 import * as autoupdate from "./engine/autoupdate.ts";
 import { review } from "./engine/review.ts";
 import { buildContext } from "./engine/context.ts";
+import { wikiRootFor } from "./engine/wiki-root.ts";
+import * as enrollment from "./engine/enrollment.ts";
+import { StateRootError, describeStateRoot, purgeOwnedState } from "./engine/state-dir.ts";
+import { RepoBoundaryError } from "./engine/repo-write.ts";
+import { isEnrolled } from "./engine/enrollment.ts";
 import { buildTurnContext } from "./engine/turncontext.ts";
 import { buildDigest, buildTopicView } from "./engine/synthesis.ts";
 import { auditContext, formatAudit } from "./engine/context-audit.ts";
@@ -28,7 +33,7 @@ import { runBench, writeResults } from "./engine/bench.ts";
 import { verifyDistillFiles } from "./engine/distill.ts";
 import { runArm, loadArm, judgeArms } from "./engine/compare.ts";
 import { CLONE_ROOT } from "./engine/paths.ts";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, type Stats } from "node:fs";
 import { join, resolve } from "node:path";
 
 // User-facing CLI output adapts to LLMWIKI_LANG (default English, Korean when set) — same
@@ -70,12 +75,28 @@ function cmdInit(p: Parsed) {
   // first `lint` right after setup.sh's `init` reports a spurious citation-graph-mismatch on
   // any page that has footnotes (e.g. the EXAMPLE page) — a bad first impression for adopters.
   const r = rebuildReferenceGraph(w);
+  // ENROLL LAST. Everything above is bounded, repository-local work that can fail (a symlinked
+  // docs/wiki, an unwritable root, a broken index) — and a half-initialized repository must not
+  // end up trusted by the installed hooks. This is also the ONLY place enrollment is granted.
+  const enrolled = enrollment.enroll(w.root);
+  if (!enrolled.ok) {
+    die(
+      ko
+        ? `초기 파일은 만들었지만 자동 연동을 활성화하지 못했다: ${enrolled.error}\nGit 저장소에서 다시 \`llmwiki init ${w.root}\`을 실행하면 기존 파일을 보존한 채 완료된다.`
+        : `Initial files were created, but automatic integration could not be enabled: ${enrolled.error}\nRun \`llmwiki init ${w.root}\` again from a Git repository; existing files will be preserved.`,
+    );
+  }
   console.log(`✓ Initialized ${w.root}`);
   console.log(`  docs/wiki/ + .llmwiki/index.db created; indexed ${neu} file(s)`);
   console.log(`  categories scaffolded: ${scaffold.join(" · ")}`);
   if (cfg.privateDirs.length) console.log(`  private (local-only, auto-gitignored): ${cfg.privateDirs.join(" · ")}`);
   console.log(`  skeleton: L0 · overview · log templates + .gitignore(.llmwiki/) · .gitattributes · .mailmap (idempotent)`);
   console.log(`  refs: ${r.citations} citation, ${r.links} link edge(s) across ${r.pages} page(s)`);
+  console.log(
+    ko
+      ? `  자동 연동 활성화(이 워크트리 한정, 1회): cold-start·turn-context·캡처가 이제 이 저장소에서 동작한다`
+      : `  automatic integration enabled for this worktree (one time): cold-start, turn-context and capture now run here`,
+  );
 }
 
 function cmdIndex(p: Parsed) {
@@ -145,8 +166,26 @@ function cmdSearch(p: Parsed) {
 // Candidate evidence excerpts for a transcript (page format v3). Exists so a warm session REQUESTS
 // an excerpt instead of composing one from memory: everything here is screened for secrets and
 // capped by the engine, and quotes come out verbatim rather than paraphrased.
+/** stat without throwing — an unreadable path is "not there" for the purposes of an error message. */
+function statSafe(path: string): Stats | null {
+  try {
+    return statSync(path);
+  } catch {
+    return null;
+  }
+}
+
 function cmdExcerpt(p: Parsed) {
   const transcript = p.positionals[0] ?? die("excerpt <transcript.jsonl> [--offset N] [--kind fact|judgment]");
+  // "There is no evidence here" and "you pointed me at the wrong thing" are different answers, and
+  // only one of them means write the page uncited. Returning the first for a directory or a typo
+  // (this command takes a TRANSCRIPT, not a repo — an easy argument to swap) told the caller the
+  // session had nothing to quote, which is how a grounded page quietly becomes an ungrounded one.
+  const st = statSafe(transcript);
+  if (!st) die(`excerpt: no such transcript: ${transcript}`);
+  if (!st.isFile()) {
+    die(`excerpt: not a transcript file: ${transcript}\n  (this command takes the transcript path, not the repository)`);
+  }
   const offset = parseInt(String(p.flags["--offset"] ?? "0"), 10) || 0;
   const want = (p.flags["--kind"] as string) ?? null;
   const limit = p.flags["--limit"] ? parseInt(String(p.flags["--limit"]), 10) || 20 : undefined;
@@ -209,7 +248,7 @@ function cmdUpdateNext(p: Parsed) {
 function cmdUpdateDone(p: Parsed) {
   const ws = p.positionals[0] ?? die("update-done <workspace> <transcript> <offset> required");
   const transcript = p.positionals[1] ?? die("update-done <workspace> <transcript> <offset> required");
-  const offset = parseInt(p.positionals[2] ?? die("offset required"), 10);
+  const offset = parseInt(p.positionals[2] ?? die("update-done <workspace> <transcript> <offset> required"), 10);
   const skipped = !!p.flags["--skipped"];
   update.markUpdated(ws, transcript, offset, skipped);
   console.log(`✓ watermark advanced to ${offset} (${skipped ? "skipped" : "distilled"})`);
@@ -370,9 +409,105 @@ function cmdRegisterTranscript(p: Parsed) {
 
 // Cold-start read-injection blob for <repo> (default: cwd). Harness-neutral: the Claude
 // SessionStart hook calls this; other harnesses run it from AGENTS.md or a startup prompt.
-function cmdContext(p: Parsed) {
+/**
+ * Wrap injected text in the hook-output envelope BOTH harnesses accept.
+ *
+ * Codex parses a hook's stdout as JSON and, when it is not JSON, drops it — no injection, no error,
+ * no warning (codex-rs/hooks/src/events/session_start.rs: the plain-text branch does nothing). So
+ * printing bare text reached the model on Claude Code, which falls back to treating stdout as text,
+ * and nowhere else: a Codex install looked complete, doctor reported every surface ✅, and the wiki
+ * was never in the context.
+ *
+ * Both harnesses declare exactly this shape — Claude Code as a zod variant per event
+ * (src/types/hooks.ts) and Codex as a JSON schema with additionalProperties:false — so it is
+ * written verbatim, with no extra keys:
+ *
+ *   {"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"…"}}
+ *
+ * Silence stays silence: an empty body prints nothing at all, never an empty envelope.
+ */
+const HOOK_OUTPUT_EVENTS = new Set(["SessionStart", "UserPromptSubmit"]);
+
+function writeHookOutput(text: string, p: Parsed): void {
+  if (!text) return; // zero bytes means zero bytes
+  const event = p.flags["--hook-event"];
+  if (event === undefined) {
+    process.stdout.write(text + "\n");
+    return;
+  }
+  if (typeof event !== "string" || !HOOK_OUTPUT_EVENTS.has(event)) {
+    die(`--hook-event must be one of: ${[...HOOK_OUTPUT_EVENTS].join(", ")}`);
+  }
+  process.stdout.write(
+    JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: text } }) + "\n",
+  );
+}
+
+/**
+ * Take the harness at its word about the session that is starting.
+ *
+ * Claude and Codex both put `transcript_path` (plus session_id and cwd) in every hook payload —
+ * Codex's schema even marks it required. Recording that mapping means the capture loop does not
+ * have to INFER, from someone else's file format, which repository the session you are sitting in
+ * belongs to. Stage-1 routing still does its job for every other session on the machine; this only
+ * removes the guess for the one session a harness just told us about.
+ *
+ * Silent and best-effort by construction: a hook must never fail a session, and an unenrolled
+ * repository records nothing at all.
+ *
+ * Returns the cwd the harness reported, so the READ side can bind to the same repository this
+ * WRITE side just filed the session under (see cmdContext).
+ */
+async function noteHarnessSession(repo: string): Promise<string | null> {
+  try {
+    if (process.stdin.isTTY) return null;
+    const raw = await Bun.stdin.text();
+    if (!raw.trim()) return null;
+    const payload = JSON.parse(raw) as Record<string, unknown>;
+    const harnessCwd = typeof payload.cwd === "string" && payload.cwd.trim() ? payload.cwd.trim() : null;
+    const transcript = typeof payload.transcript_path === "string" ? payload.transcript_path.trim() : "";
+    if (!transcript) return harnessCwd;
+    // Enrollment first: the hint table must never learn about a repository the human did not enroll.
+    const target = harnessCwd ?? repo;
+    const status = enrollment.inspectEnrollment(target);
+    if (!status.enabled || !status.worktree) return harnessCwd;
+    const session = typeof payload.session_id === "string" ? payload.session_id : null;
+    // The hint records the session's cwd, not the worktree: recordRouteHint resolves it to the
+    // wiki root the session reads, and a nested project with its own wiki must keep its own bucket.
+    capture.recordRouteHint(resolve(transcript), target, session, sourceKindForTranscript(transcript));
+    return harnessCwd;
+  } catch {
+    /* a malformed or absent payload simply teaches us nothing */
+    return null;
+  }
+}
+
+/** Which adapter owns this path, for reporting only — the daemon matches hints by path. */
+function sourceKindForTranscript(path: string): string | null {
+  if (path.includes("/.codex/")) return "codex";
+  if (path.endsWith(".jsonl")) return "claude-jsonl";
+  return null;
+}
+
+async function cmdContext(p: Parsed) {
   const repo = p.positionals[0] || process.cwd();
-  process.stdout.write(buildContext(repo) + "\n");
+  // A hook payload is read ONLY when --hook-event says this process is a harness hook. That flag
+  // is the reason stdin is safe to touch: a hook's stdin is the payload pipe and the harness closes
+  // it, whereas a plugin or a human at a terminal may leave it open forever.
+  let target = repo;
+  if (typeof p.flags["--hook-event"] === "string") {
+    // In hook mode the harness's own cwd OUTRANKS the positional. The adapters pass
+    // `${CLAUDE_PROJECT_DIR:-$PWD}`, which is the directory the session STARTED in — so a session
+    // launched from ~ that works in ~/some-repo would read ~'s wiki for its entire life, while
+    // capture (right above, already taking the payload's word) files it under ~/some-repo. Read and
+    // write must bind to the same repository or the loop silently compounds into the wrong wiki.
+    target = (await noteHarnessSession(repo)) ?? repo;
+  }
+  const out = buildContext(target);
+  // Zero bytes means ZERO BYTES — not even the newline. An unenrolled repository must be
+  // indistinguishable from "llmwiki is not installed" to every harness that runs this on
+  // session start, so nothing is written when there is nothing to say.
+  writeHookOutput(out, p);
 }
 
 // Per-turn read-injection pointers for <repo>. Harness-neutral: Claude Code /
@@ -388,14 +523,85 @@ async function cmdTurnContext(p: Parsed) {
       const payload = JSON.parse(await Bun.stdin.text());
       prompt = String(payload.prompt ?? "");
       sessionId ||= String(payload.session_id ?? "");
-      repo ||= String(payload.cwd ?? "");
+      // Same precedence as the cold start: in hook mode the harness's cwd beats the positional,
+      // which the adapter filled from the session's STARTUP directory. Outside hook mode an
+      // explicit positional is a human's instruction and still wins.
+      const payloadCwd = String(payload.cwd ?? "").trim();
+      if (payloadCwd && (typeof p.flags["--hook-event"] === "string" || !repo)) repo = payloadCwd;
     } catch {
       /* not JSON / empty stdin → stay silent below */
     }
   }
   repo ||= process.cwd();
-  const out = prompt ? buildTurnContext(repo, prompt, sessionId) : "";
-  if (out) process.stdout.write(out + "\n");
+  // Enrollment is checked BEFORE the prompt is used for anything: an unenrolled repository gets
+  // no retrieval, no session state file, and no output.
+  if (!isEnrolled(repo)) return;
+  // …and retrieval runs against the wiki inside what the gate approved, not a subdirectory of it.
+  const root = wikiRootFor(repo, enrollment.inspectEnrollment(repo).worktree);
+  const out = prompt ? buildTurnContext(root, prompt, sessionId) : "";
+  writeHookOutput(out, p);
+}
+
+// Enrollment lifecycle. `init` enrolls; these three are the rest of the contract — a way to turn
+// a repository off, a way to see why it is off, and the silent predicate adapters call.
+function cmdDisable(p: Parsed) {
+  const ws = p.positionals[0] ?? die("disable <workspace> required");
+  const r = enrollment.disable(ws);
+  if (!r.ok) die(`disable: ${r.error}`);
+  console.log(
+    ko
+      ? `✓ 자동 연동 해제: ${r.worktree}\n  (위키 내용은 그대로 — 다시 켜려면 \`llmwiki init\`)`
+      : `✓ automatic integration disabled for ${r.worktree}\n  (wiki content is untouched — re-enable with \`llmwiki init\`)`,
+  );
+}
+
+function cmdStatus(p: Parsed) {
+  const ws = p.positionals[0] || process.cwd();
+  const st = enrollment.inspectEnrollment(ws);
+  // Deliberately prints enrollment state and the canonical root ONLY — never page or
+  // transcript content, so it stays safe to paste into a bug report.
+  console.log(`${st.enabled ? "enabled" : "disabled"}  ${st.worktree ?? resolve(ws)}`);
+  console.log(`  ${enrollment.explain(st, ko)}`);
+  if (st.markerPath) console.log(`  marker: ${st.markerPath}`);
+}
+
+// Local runtime state: report it, or delete exactly the artifacts llmwiki created. Reached
+// through `setup.sh --uninstall [--purge-data]`; exposed here so the installed CLI can do it too.
+function cmdPurgeState(p: Parsed) {
+  const dir = capture.stateDir();
+  if (!p.flags["--confirm"]) {
+    console.log(
+      ko
+        ? `llmwiki 로컬 상태: ${describeStateRoot(dir)}\n  (보존됨 — 삭제하려면 \`--confirm\`, 또는 \`./setup.sh --uninstall --purge-data\`)`
+        : `llmwiki local state: ${describeStateRoot(dir)}\n  (retained — delete it with \`--confirm\`, or \`./setup.sh --uninstall --purge-data\`)`,
+    );
+    console.log(
+      ko
+        ? "  포함: 캡처 큐(어느 저장소에서 언제 작업했는지)·데몬 로그·OpenCode 트랜스크립트 내보내기"
+        : "  contents: the capture queue (which repositories you worked in, and when), the daemon log, and OpenCode transcript exports",
+    );
+    return;
+  }
+  const result = purgeOwnedState(dir);
+  if (result.error) {
+    console.error(`⚠ ${result.error}`);
+    console.error(
+      ko ? "  (llmwiki가 만들지 않은 디렉터리는 건드리지 않는다 — 직접 확인 후 삭제할 것)" : "  (a directory llmwiki did not create is never deleted — inspect and remove it yourself)",
+    );
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`✓ removed ${result.removed.length} owned artifact(s): ${result.removed.join(", ") || "(none)"}`);
+  console.log(
+    result.rootRemoved
+      ? `✓ state directory removed: ${dir}`
+      : `• state directory kept (it still holds entries llmwiki does not own): ${dir}`,
+  );
+}
+
+function cmdEnabled(p: Parsed) {
+  // The adapter-facing predicate: no stdout at all, exit code is the whole answer.
+  if (!isEnrolled(p.positionals[0] || process.cwd())) process.exit(1);
 }
 
 // Deterministic relational synthesis: a regenerable digest assembled
@@ -752,8 +958,17 @@ function cmdQuizRecord(p: Parsed) {
   }
 }
 
+// Commands the HARNESS runs automatically on every session/turn. They resolve the repository
+// themselves and check enrollment before touching per-repo config, so an unenrolled repository
+// never reaches config resolution (which reads repository files) at all.
+const AUTOMATIC_COMMANDS = new Set(["context", "turn-context", "enabled"]);
+
 const HANDLERS: Record<string, (p: Parsed) => void | Promise<void>> = {
   init: cmdInit,
+  disable: cmdDisable,
+  status: cmdStatus,
+  enabled: cmdEnabled,
+  "purge-state": cmdPurgeState,
   config: cmdConfig,
   conventions: cmdConventions,
   migrate: MAINTENANCE_HANDLERS.migrate,
@@ -815,7 +1030,7 @@ if (parsed.cmd === "--help" || parsed.cmd === "-h") {
 }
 // Per-repo language: if the first positional is an existing path, resolve that workspace's
 // config (a named config may set lang); otherwise cwd. LLMWIKI_LANG env still wins.
-{
+if (!AUTOMATIC_COMMANDS.has(parsed.cmd)) {
   const wsGuess =
     parsed.positionals[0] && existsSync(parsed.positionals[0]) ? parsed.positionals[0] : process.cwd();
   LANG = isRepoKorean(wsGuess) ? "ko" : "en";
@@ -825,4 +1040,19 @@ const handler = HANDLERS[parsed.cmd];
 if (!handler) {
   die(usage().trimEnd());
 }
-await handler(parsed);
+try {
+  await handler(parsed);
+} catch (e) {
+  // A refusal is a RESULT, not a crash. Both boundaries below are things a user can act on
+  // (a symlinked wiki path, a state directory llmwiki did not create), so they get one clear
+  // line and exit 2 instead of a stack trace.
+  if (e instanceof RepoBoundaryError) {
+    die(
+      ko
+        ? `거부됨: ${e.message}\n  (llmwiki는 저장소 밖으로 나가는 심볼릭 링크를 따라가지 않는다 — 경로를 고친 뒤 다시 실행)`
+        : `refused: ${e.message}\n  (llmwiki never follows a symlink out of a repository — fix that path and re-run)`,
+    );
+  }
+  if (e instanceof StateRootError) die(e.message);
+  throw e;
+}

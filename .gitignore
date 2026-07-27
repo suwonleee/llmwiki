@@ -8,12 +8,21 @@ auth.json
 # raw agent transcripts are immutable local evidence, not release artifacts
 *.jsonl
 *.jsonl.zst
+# ONE exception: routing fixtures derived by tests/support/derive-fixture.ts, which keeps key
+# order/nesting/types and replaces every value. They carry shape, not content — and
+# tests/routing-real-shape.test.ts fails if a real value ever survives into one.
+!tests/fixtures/real-shape/*.jsonl
 # derived index (rebuildable from markdown)
 .llmwiki/
 __pycache__/
 *.pyc
 .DS_Store
+# working directories other agents and IDEs create inside a clone — never tracked, but noisy in
+# `git status`, and one careless `git add -A` would commit their local paths and session state
 .omc/
+.omo/
+.omx/
+.idea/
 # per-repo team configs are user-local (the tracked configs/default.toml.example is the template)
 configs/*.toml
 # Node/Bun (TS rewrite)

@@ -95,12 +95,22 @@ export function defaults(): WikiConfig {
 
 export const CONFIG_BASENAME = "llmwiki.config.toml";
 
+// Every directory and file name in the config is joined onto `docs/wiki`, and the config file
+// itself can arrive with a clone (`configs/*.toml` is tracked). So a name is only ever ONE path
+// segment: no separator, no `.`/`..`, no NUL. Without this, `files.l0 = "../../../.ssh/config"`
+// makes the cold start read — and the skeleton writer create — a path outside the wiki entirely.
+// The repository boundary refuses such a path too; this check exists so the config is rejected
+// with an explanation instead of failing later at the write.
+function _unsafeSegment(value: unknown): boolean {
+  return typeof value !== "string" || value === "" || value === "." || value === ".." || /[\\/\0]/.test(value);
+}
+
 function _validate(c: WikiConfig): string | null {
   if (!Array.isArray(c.categories) || c.categories.length === 0) return "at least one [[category]] required";
   const dirs = new Set<string>();
   const domains = new Set<string>();
   for (const cat of c.categories) {
-    if (!cat.dir || /[\\/]/.test(cat.dir)) return `category dir invalid: ${JSON.stringify(cat.dir)}`;
+    if (_unsafeSegment(cat.dir)) return `category dir invalid: ${JSON.stringify(cat.dir)}`;
     if (!cat.domain || !/^[a-z][a-z0-9_-]*$/.test(cat.domain)) return `category domain invalid: ${JSON.stringify(cat.domain)} (lowercase slug)`;
     if (cat.review !== "human" && cat.review !== "model") return `category review must be "human"|"model": ${cat.dir}`;
     if (dirs.has(cat.dir)) return `duplicate category dir: ${cat.dir}`;
@@ -110,7 +120,13 @@ function _validate(c: WikiConfig): string | null {
   }
   if (!c.categories.some((cat) => cat.review === "model")) return 'at least one category needs review = "model" (the routing fallback)';
   for (const k of ["topicDir", "queueDir", "quizDir"] as const) {
-    if (!c[k] || /[\\/]/.test(c[k])) return `${k} invalid`;
+    if (_unsafeSegment(c[k])) return `${k} invalid`;
+  }
+  for (const k of ["l0", "overview", "log"] as const) {
+    if (_unsafeSegment(c.files[k])) return `files.${k} invalid: ${JSON.stringify(c.files[k])} (one file name, no path)`;
+  }
+  for (const d of c.legacyDirs) {
+    if (_unsafeSegment(d)) return `legacy dir invalid: ${JSON.stringify(d)}`;
   }
   // quizDir's subtree is hard-excluded from indexing (db.ts) — colliding with a content dir
   // would silently unindex that whole category (0 pages in search/lint/review/cold-start).
@@ -122,7 +138,7 @@ function _validate(c: WikiConfig): string | null {
   // gitignore a whole team category — a surprise no config comment can repair; forbid it.
   const seen = new Set<string>();
   for (const d of c.privateDirs) {
-    if (!d || /[\\/]/.test(d)) return `private dir invalid: ${JSON.stringify(d)}`;
+    if (_unsafeSegment(d)) return `private dir invalid: ${JSON.stringify(d)}`;
     if (seen.has(d)) return `duplicate private dir: ${d}`;
     seen.add(d);
     if (d === c.topicDir || d === c.queueDir || d === c.quizDir || c.categories.some((cat) => cat.dir === d))
@@ -342,7 +358,7 @@ export function isHumanReviewDir(dir: string, cfg: WikiConfig = getConfig()): bo
 // seeds, the pointer `overview.md` collapses to, the ledger headers — plus its own UI where a
 // catalog exists. Any BCP-47-ish code is accepted; a code with no catalog resolves to English, so a
 // typo or an unsupported language degrades to consistent English instead of failing.
-export const WIKI_LANGS = ["en", "ko", "ja", "zh"] as const;
+const WIKI_LANGS = ["en", "ko", "ja", "zh"] as const;
 export type WikiLang = (typeof WIKI_LANGS)[number];
 
 /** One catalog per language, English required — the fallback for every unsupported code. */
@@ -402,10 +418,6 @@ export function resolveWikiLang(root: string, cfg: { readonly lang?: string } = 
 
 const _langCache = new Map<string, WikiLang>();
 
-/** Pick this wiki's entry from a catalog, falling back to English. */
-export function pickLang<T>(catalog: LangCatalog<T>, cfg: { readonly lang?: string } = getConfig()): T {
-  return catalog[resolveLang(cfg)] ?? catalog.en;
-}
 
 /** Pick from a catalog for an already-resolved language. */
 export function pickLangValue<T>(catalog: LangCatalog<T>, lang: WikiLang): T {

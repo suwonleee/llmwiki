@@ -183,7 +183,10 @@ function capturePriorInstall(): InstallBackup | null {
   let launcher: InstallBackup["launcher"] = null;
   try {
     const content = readFileSync(LAUNCHER, "utf8");
-    if (isManagedLauncher(content)) launcher = { content, mode: statSync(LAUNCHER).mode & 0o777 };
+    if (isManagedLauncher(content)) {
+      launcher = { content, mode: statSync(LAUNCHER).mode & 0o777 };
+      if (content.includes(CLONE_ROOT)) currentOwned = true; // shared launcher from this clone's Codex wiring
+    }
   } catch {
     /* absent */
   }

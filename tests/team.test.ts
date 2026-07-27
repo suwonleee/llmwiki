@@ -18,6 +18,7 @@ import { autoRegisterCitedTranscripts } from "../src/engine/refs.ts";
 import { ensureSkeleton } from "../src/engine/update.ts";
 import { contributors } from "../src/engine/synthesis.ts";
 import { buildContext } from "../src/engine/context.ts";
+import { enrollRepo, makeGitRepo } from "./support/git-repo.ts";
 
 function git(cwd: string, ...args: string[]): void {
   const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf-8" });
@@ -120,7 +121,7 @@ test("contributors degrades to empty outside a git repo instead of throwing", ()
 // ---- cold-start: owner tag + behind-upstream ---------------------------------------------
 
 test("0_review owner renders as [→ name] in cold-start", () => {
-  const repo = mkdtempSync(join(tmpdir(), "llmwiki-team-owner-"));
+  const repo = enrollRepo(makeGitRepo(join(mkdtempSync(join(tmpdir(), "llmwiki-team-owner-")), "repo")));
   const review = join(repo, "docs", "wiki", "0_review");
   mkdirSync(review, { recursive: true });
   writeFileSync(join(repo, "docs", "wiki", "overview.md"), "---\ntitle: OV\n---\nhub", "utf-8");
@@ -150,6 +151,7 @@ test("behind-upstream repo gets one team line; up-to-date repo stays silent", ()
   writeFileSync(join(b, "docs", "wiki", "overview.md"), "---\ntitle: OV\n---\nhub", "utf-8");
   git(b, "add", "."); git(b, "commit", "-m", "docs: wiki scaffold"); git(b, "push", "origin", "HEAD:main");
   git(b, "branch", "--set-upstream-to=origin/main");
+  enrollRepo(b); // a clone is not consent — B enrolls its own worktree, exactly like `llmwiki init`
   expect(buildContext(b)).not.toMatch(/behind origin|origin보다/); // up to date → silent
 
   // A merges new wiki context; B fetches but hasn't pulled

@@ -7,14 +7,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import * as capture from "../src/engine/capture.ts";
+import { ensureOwnedStateRoot } from "../src/engine/state-dir.ts";
 
 describe("capture source_kind migration", () => {
   let dir: string;
+  let state: string;
   let transcript: string;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "llmwiki-mig-"));
-    capture.setStateDir(dir);
+    // An llmwiki-owned state root (marker + private modes) holding a PRE-migration database —
+    // the ownership contract is about who created the directory, the schema migration is about
+    // what is inside the database, and this test is about the latter.
+    state = join(dir, "state");
+    ensureOwnedStateRoot(state);
+    capture.setStateDir(state);
     transcript = join(dir, "old.jsonl");
     writeFileSync(transcript, "line one\nline two\n");
   });
@@ -22,7 +29,7 @@ describe("capture source_kind migration", () => {
 
   test("old-schema DB gains column; existing rows backfill to claude-jsonl", () => {
     // hand-build a pre-migration capture_queue WITHOUT source_kind, with one row.
-    const db = new Database(join(dir, "capture.db"));
+    const db = new Database(join(state, "capture.db"));
     db.exec(
       "CREATE TABLE capture_queue (transcript_path TEXT PRIMARY KEY, session_id TEXT, repo TEXT, " +
         "byte_offset INTEGER DEFAULT 0, lines INTEGER DEFAULT 0, " +
@@ -47,6 +54,34 @@ describe("capture source_kind migration", () => {
     expect(capture.getSourceKind(plainFile)).toBe("plain");
     const row = capture.pending("/repo/y")[0]!;
     expect(row.source_kind).toBe("plain");
+  });
+
+  test("pre-owner append journals are preserved as atomically claimable recovery evidence", () => {
+    const db = new Database(join(state, "capture.db"));
+    db.exec(
+      "CREATE TABLE opencode_append (" +
+        "source_path TEXT NOT NULL, session_id TEXT NOT NULL, export_path TEXT NOT NULL, " +
+        "base_size INTEGER NOT NULL, from_seq INTEGER NOT NULL, through_seq INTEGER NOT NULL, " +
+        "expected_bytes INTEGER NOT NULL, expected_sha256 TEXT NOT NULL, " +
+        "PRIMARY KEY (source_path, session_id))",
+    );
+    db.run("INSERT INTO opencode_append VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [
+      "/source.db",
+      "session",
+      "/export.jsonl",
+      10,
+      4,
+      5,
+      7,
+      "abc",
+    ]);
+    db.close();
+
+    const migrated = capture.getOpenCodeAppend("/source.db", "session");
+
+    expect(migrated?.baseSize).toBe(10);
+    expect(migrated?.ownerPid).toBe(-1);
+    expect(migrated?.ownerToken).toBe("");
   });
 
   test("getSourceKind defaults to claude-jsonl for unknown path", () => {

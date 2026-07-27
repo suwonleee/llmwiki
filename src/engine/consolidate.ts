@@ -17,9 +17,11 @@
 // Consolidation keeps its OWN watermark (<repo>/.llmwiki/consolidated.json) so it runs
 // independently of the log's capture-queue watermark — the same session can be both logged
 // and consolidated without the two passes fighting over one offset.
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { basename, join, relative as relpath, resolve } from "node:path";
-import { llm } from "./claude.ts";
+import { UNAVAILABLE, llm, screenOutbound } from "./claude.ts";
+
+const SCREENED_REASON = "outbound data screened to nothing (secrets); no generative call was made";
 import * as capture from "./capture.ts";
 import { WikiIndex } from "./db.ts";
 import { render, type Increment } from "./extract.ts";
@@ -30,7 +32,7 @@ import { appendLog, ensureSkeleton } from "./update.ts";
 import { effectiveKo, getConfig, isRepoKorean, renderBodyStyleRule, type WikiConfig } from "./config.ts";
 import { Linter, type LintIssue, type WikiIndexLike } from "./lint.ts";
 import { MODEL_HEAVY, MODEL_LIGHT } from "./models.ts";
-import { writeRepoFile } from "./repo-write.ts";
+import { ensureRepoDir, readRepoFile, removeRepoFile, repoPathAllowed, writeRepoFile } from "./repo-write.ts";
 
 // WRITE drafts the merged page (cheap tier); VERIFY adjudicates the added claims (heavy tier,
 // independent — same independence guarantee as the log gate). Both env-overridable via models.ts.
@@ -48,21 +50,23 @@ interface ConsolidatedState {
   [transcriptPath: string]: number; // byte offset consolidated up to
 }
 
+const CONSOLIDATED_STATE_REL = join(".llmwiki", "consolidated.json");
 function statePath(root: string): string {
-  return join(root, ".llmwiki", "consolidated.json");
+  return join(root, CONSOLIDATED_STATE_REL);
 }
 
 function loadState(root: string): ConsolidatedState {
   try {
-    return JSON.parse(readFileSync(statePath(root), "utf-8")) as ConsolidatedState;
+    const raw = readRepoFile(root, CONSOLIDATED_STATE_REL);
+    return raw === null ? {} : (JSON.parse(raw) as ConsolidatedState);
   } catch {
     return {};
   }
 }
 
 function saveState(root: string, st: ConsolidatedState): void {
-  mkdirSync(join(root, ".llmwiki"), { recursive: true });
-  writeFileSync(statePath(root), JSON.stringify(st, null, 2), "utf-8");
+  ensureRepoDir(root, ".llmwiki");
+  writeRepoFile(root, CONSOLIDATED_STATE_REL, JSON.stringify(st, null, 2));
 }
 
 // Sessions this repo has seen whose new bytes have not yet been folded into the topic layer.
@@ -279,10 +283,23 @@ export async function consolidateOne(
     : "(none yet)";
 
   // 1) WRITE (draft the merged/new page, or SKIP)
+  // Both blocks are repository/transcript derived (existing topic pages and the session extract),
+  // so both are screened before they become a prompt.
+  const writeBlocks = screenOutbound({ existing: existingBlock, extract: extractTxt });
+  if (!writeBlocks) {
+    return { transcript: fn, verdict: "skipped-screened", reason: SCREENED_REASON };
+  }
   const raw = await llm(
-    fill(WRITE_TOPIC_PROMPT, { existing: existingBlock, extract: extractTxt, transcript_filename: fn }),
+    fill(WRITE_TOPIC_PROMPT, {
+      existing: writeBlocks.existing!,
+      extract: writeBlocks.extract!,
+      transcript_filename: fn,
+    }),
     writeModel,
   );
+  if (raw.startsWith(UNAVAILABLE)) {
+    return { transcript: fn, verdict: "skipped-no-provider", reason: raw.slice(UNAVAILABLE.length + 1, 240) };
+  }
   if (raw.startsWith("__ERROR__")) {
     return { transcript: fn, verdict: "fail-write", reason: raw.slice(0, 200) };
   }
@@ -308,10 +325,16 @@ export async function consolidateOne(
 
   // Resolve destination: merge into an existing topic page, else a fresh slug.
   const merging = mergeTarget !== "NONE" && topics.some((t) => t.rel === mergeTarget);
-  const dest = merging
-    ? join(root, mergeTarget)
-    : join(topicDir(root, cfg), `${topicSlug(topicName) || fn.slice(0, 8)}.md`);
-  const oldContent = merging && existsSync(dest) ? readFileSync(dest, "utf-8") : "";
+  // mergeTarget comes from the model, which read repository content to produce it — so it is
+  // untrusted input and must pass the boundary before it names a write destination.
+  const destRel = merging
+    ? mergeTarget
+    : join("docs", "wiki", cfg.topicDir, `${topicSlug(topicName) || fn.slice(0, 8)}.md`);
+  if (!repoPathAllowed(root, destRel)) {
+    return { transcript: fn, verdict: "rejected", reason: `destination outside the wiki: ${destRel}` };
+  }
+  const dest = join(root, destRel);
+  const oldContent = merging ? (readRepoFile(root, destRel) ?? "") : "";
 
   // Only the ADDED lines face the gate (old lines were grounded by their own sessions).
   const added = addedClaims(oldContent, page);
@@ -324,7 +347,17 @@ export async function consolidateOne(
   }
 
   // 2) VERIFY (independent, adversarial — only the added claims)
-  const verdict = await llm(fill(VERIFY_TOPIC_PROMPT, { extract: extractTxt, added }), verifyModel);
+  const verifyBlocks = screenOutbound({ extract: extractTxt, added });
+  if (!verifyBlocks) {
+    return { transcript: fn, verdict: "skipped-screened", reason: SCREENED_REASON };
+  }
+  const verdict = await llm(
+    fill(VERIFY_TOPIC_PROMPT, { extract: verifyBlocks.extract!, added: verifyBlocks.added! }),
+    verifyModel,
+  );
+  if (verdict.startsWith(UNAVAILABLE)) {
+    return { transcript: fn, verdict: "skipped-no-provider", reason: verdict.slice(UNAVAILABLE.length + 1, 240) };
+  }
   const verified = /^VERIFIED[\s.!]*$/.test(verdict.trim().toUpperCase());
 
   // 3) deterministic grounding on the added claims (fabricated file paths → strict-gate signal)
@@ -364,10 +397,10 @@ export async function consolidateOne(
   }
 
   // accepted → write, register provenance, rebuild this page's edges, lint just this page.
-  mkdirSync(join(dest, ".."), { recursive: true });
+  ensureRepoDir(root, join(destRel, ".."));
   // Authorship is read from git, not cached into frontmatter (decision 2026-07-10) — a stamped
   // author goes stale the moment a teammate edits the page, and git is already the truth.
-  writeRepoFile(dest, page.endsWith("\n") ? page : page + "\n");
+  writeRepoFile(root, destRel, page.endsWith("\n") ? page : page + "\n");
   idx.registerTranscript(transcriptPath, inc.sessionId);
   idx.indexAll();
   const conn = idx.connect();
@@ -380,7 +413,7 @@ export async function consolidateOne(
 
   if (pageErrors.length) {
     // lint error → roll back the write, omit, advance watermark.
-    if (!merging && existsSync(dest)) rmSync(dest);
+    if (!merging) removeRepoFile(root, destRel); // roll back through the boundary
     idx.indexAll();
     st[transcriptPath] = inc.newOffset;
     saveState(root, st);

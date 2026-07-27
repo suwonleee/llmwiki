@@ -51,6 +51,7 @@ describe("fresh Claude Code setup", () => {
       ...process.env,
       HOME: home,
       CLAUDE_CONFIG_DIR: profile,
+      LLMWIKI_STATE_DIR: join(dir, "state"),
       PATH: path,
       USER: "fresh-claude-user",
     };
@@ -85,11 +86,11 @@ describe("fresh Claude Code setup", () => {
     expect(settings.permissions).toEqual({ allow: ["Read"] });
     expect(settings.hooks.Stop[0].hooks[0].command).toBe("keep-stop-hook");
     expect(settings.hooks.SessionStart.flatMap((group: any) => group.hooks.map((hook: any) => hook.command))).toEqual(
-      expect.arrayContaining(["keep-session-hook", `bash ${ROOT}/hooks/sessionstart-inject.sh`]),
+      expect.arrayContaining(["keep-session-hook", `bash '${ROOT}/hooks/sessionstart-inject.sh'`]),
     );
     expect(
       settings.hooks.UserPromptSubmit.flatMap((group: any) => group.hooks.map((hook: any) => hook.command)),
-    ).toContain(`bash ${ROOT}/hooks/userpromptsubmit-inject.sh`);
+    ).toContain(`bash '${ROOT}/hooks/userpromptsubmit-inject.sh'`); // shell-quoted: a clone path may contain spaces
 
     const installed: Record<string, string> = {};
     for (const name of ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"]) {

@@ -7,7 +7,7 @@ import type { Database } from "bun:sqlite";
 // chunks on mismatch so a wiki never carries two chunkings at once.
 export const CHUNKER_VERSION = "3-three-rate-tokens";
 export const CHUNK_SIZE = 512;
-export const CHUNK_OVERLAP = 128;
+const CHUNK_OVERLAP = 128;
 export const MIN_CHUNK_TOKENS = 32;
 export const MAX_CHUNK_CHARS = 10_000;
 

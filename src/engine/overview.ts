@@ -3,11 +3,10 @@
 // not accumulate a per-session changelog: that belongs in log.md. This collapses any grown
 // "Recent Updates" section body down to a single pointer line, deterministically and idempotently
 // (LLM-0). Curated sections (Direction / Key Findings / Related notes — in the wiki's own language) are preserved verbatim.
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { OVERVIEW_BUDGET } from "./budgets.ts";
 import { resolveWikiLang, getConfig, resolveLang, type LangCatalog, type WikiLang } from "./config.ts";
-import { writeRepoFile } from "./repo-write.ts";
+import { readRepoFile, writeRepoFile } from "./repo-write.ts";
 
 // The canonical one-line body the "Recent Updates" section is collapsed to. This is PAGE CONTENT
 // committed into the user's repository, so it follows the wiki's language — and both variants
@@ -69,15 +68,16 @@ export function normalizeOverviewText(content: string, lang: WikiLang = resolveL
 
 export function normalizeOverview(ws: string, opts: { check?: boolean } = {}): OverviewResult {
   const root = resolve(ws);
-  const path = join(root, "docs", "wiki", "overview.md");
+  const rel = join("docs", "wiki", "overview.md");
+  const path = join(root, rel);
   const lang = resolveWikiLang(root);
-  if (!existsSync(path)) return { verdict: "skip", reason: lang === "ko" ? "overview.md 없음" : "no overview.md" };
-  const before = readFileSync(path, "utf-8");
+  const before = readRepoFile(root, rel);
+  if (before === null) return { verdict: "skip", reason: lang === "ko" ? "overview.md 없음" : "no overview.md" };
   const { text, collapsed } = normalizeOverviewText(before, lang);
   const oversized = text.length > OVERVIEW_BUDGET;
   if (!collapsed) {
     return { verdict: "unchanged", path, before: before.length, after: before.length, oversized };
   }
-  if (!opts.check) writeRepoFile(path, text);
+  if (!opts.check) writeRepoFile(root, rel, text);
   return { verdict: "normalized", path, before: before.length, after: text.length, collapsed, oversized };
 }

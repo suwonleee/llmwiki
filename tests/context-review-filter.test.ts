@@ -6,9 +6,12 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildContext } from "../src/engine/context.ts";
+import { enrollRepo, makeGitRepo } from "./support/git-repo.ts";
 
+// Cold start is fail-closed, so the fixture is an ENROLLED git worktree — the only kind of
+// repository that produces cold-start output at all.
 function mkRepo(prefix: string): { repo: string; review: string } {
-  const repo = mkdtempSync(join(tmpdir(), prefix));
+  const repo = enrollRepo(makeGitRepo(join(mkdtempSync(join(tmpdir(), prefix)), "repo")));
   const review = join(repo, "docs", "wiki", "0_review");
   mkdirSync(review, { recursive: true });
   writeFileSync(join(repo, "docs", "wiki", "overview.md"), "---\ntitle: OV\n---\n\nhub", "utf-8");

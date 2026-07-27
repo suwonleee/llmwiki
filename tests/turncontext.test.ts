@@ -83,6 +83,20 @@ describe("buildTurnContext", () => {
     expect(out).toContain("fts-port.md");
   });
 
+  test("a prompt made only of two-character Hangul words still retrieves", () => {
+    // The trigram index cannot represent a 2-character term, so these never reach MATCH — and in
+    // Korean they are the ordinary technical words (캡처·큐), not the exotic ones. Before the
+    // sub-floor pass this prompt was silent, which is the compounding loop failing on exactly the
+    // question it exists to answer. Measured on this engine's own wiki: 1/7 → 5/7 relevant prompts.
+    const out = buildTurnContext(root, "캡처 큐 상주");
+    expect(out).toContain("capture-daemon.md");
+  });
+
+  test("…and a prompt of only grammatical filler stays silent", () => {
+    // The recall above must not become "any Korean sentence matches something".
+    expect(buildTurnContext(root, "이거 그거 저거")).toBe("");
+  });
+
   test("cold discovery metadata points at the original page without surfacing its body", () => {
     // Given: a cold page with distinct metadata and body terms.
     writeFileSync(

@@ -7,14 +7,22 @@
 // byte-offset watermark, so re-ingesting an unchanged file is a no-op (use --force to
 // re-read an edited drop from the top).
 import { existsSync, readFileSync, statSync } from "node:fs";
-import type { DiscoveredSession, TranscriptSource } from "../source.ts";
+import type { DiscoveredRoute, DiscoveredSession, TranscriptSource } from "../source.ts";
 import { readTail, type Increment } from "../extract.ts";
 
 export const plainSource: TranscriptSource = {
   kind: "plain",
 
-  discover(): DiscoveredSession[] {
+  discoverRoutes(): DiscoveredRoute[] {
     return []; // ingest-only; the daemon never auto-captures arbitrary files
+  },
+
+  materialize(): DiscoveredSession | null {
+    return null; // nothing is ever routed here, so nothing is ever materialized
+  },
+
+  discover(): DiscoveredSession[] {
+    return [];
   },
 
   // Greedy: claims any readable, non-empty regular file. MUST be probed last (see

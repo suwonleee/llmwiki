@@ -3,6 +3,8 @@ import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, statSync, symlin
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { inertSupervisorBin } from "./support/inert-supervisor.ts";
+
 const ROOT = join(import.meta.dir, "..");
 
 describe("setup command contract", () => {
@@ -21,6 +23,7 @@ describe("setup command contract", () => {
     mkdirSync(stubBin, { recursive: true });
     // stub harness CLIs: the contract must hold no matter what is installed on the developer machine
     for (const [name, body] of [
+      ["claude", "#!/bin/sh\nexit 0\n"],
       [
         "codex",
         "#!/bin/sh\nif [ \"${1:-}\" = --help ]; then printf '%s\\n' --dangerously-bypass-hook-trust; fi\nif [ \"${1:-}\" = features ] && [ \"${2:-}\" = list ]; then printf 'hooks stable true\\n'; fi\nexit 0\n",
@@ -125,11 +128,11 @@ describe("setup command contract", () => {
   });
 
   test("Bun older than 1.1 fails before any mutation", () => {
-    const bin = join(dir, "old-bun-bin");
-    mkdirSync(bin, { recursive: true });
-    const oldBun = join(bin, "bun");
-    writeFileSync(oldBun, "#!/bin/sh\nif [ \"${1:-}\" = --version ]; then printf '1.0.35\\n'; fi\nexit 0\n");
-    chmodSync(oldBun, 0o755);
+    // These tests are meant to fail BEFORE the daemon step; the inert supervisors make that a
+    // property of the sandbox rather than of where the script happens to stop today.
+    const bin = inertSupervisorBin(join(dir, "old-bun-bin"), {
+      bun: "#!/bin/sh\nif [ \"${1:-}\" = --version ]; then printf '1.0.35\\n'; fi\nexit 0\n",
+    });
 
     const result = Bun.spawnSync(["/bin/bash", join(ROOT, "setup.sh"), "--harness", "codex"], {
       cwd: ROOT,
@@ -150,8 +153,7 @@ describe("setup command contract", () => {
   });
 
   test("Codex setup fails before mutation when the Codex CLI is missing", () => {
-    const bin = join(dir, "bun-only-bin");
-    mkdirSync(bin, { recursive: true });
+    const bin = inertSupervisorBin(join(dir, "bun-only-bin"));
     symlinkSync(process.execPath, join(bin, "bun"));
     const result = Bun.spawnSync(["/bin/bash", join(ROOT, "setup.sh"), "--harness", "codex"], {
       cwd: ROOT,
@@ -173,8 +175,7 @@ describe("setup command contract", () => {
   });
 
   test("OpenCode setup fails before mutation when the OpenCode CLI is missing", () => {
-    const bin = join(dir, "bun-only-opencode-bin");
-    mkdirSync(bin, { recursive: true });
+    const bin = inertSupervisorBin(join(dir, "bun-only-opencode-bin"));
     symlinkSync(process.execPath, join(bin, "bun"));
     const result = Bun.spawnSync(["/bin/bash", join(ROOT, "setup.sh"), "--harness", "opencode"], {
       cwd: ROOT,
@@ -203,6 +204,38 @@ describe("setup command contract", () => {
 
     expect(result.exitCode).toBe(1);
     expect(new TextDecoder().decode(result.stderr)).toContain("refusing to overwrite unrelated command");
+    expect(existsSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"))).toBe(false);
+  });
+
+  test("Claude command conflicts fail in preflight before daemon mutation", () => {
+    const profile = join(dir, "claude");
+    const commandDir = join(profile, "commands");
+    mkdirSync(commandDir, { recursive: true });
+    writeFileSync(join(commandDir, "wiki-save.md"), "# user-owned command\n");
+
+    const result = run(["--harness", "claude"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(new TextDecoder().decode(result.stderr)).toContain("Claude command conflict");
+    expect(existsSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"))).toBe(false);
+    expect(existsSync(join(profile, "settings.json"))).toBe(false);
+    expect(existsSync(join(commandDir, "wiki-save.md"))).toBe(true);
+  });
+
+  test("Claude preflight never treats an unrelated /skill/ symlink as llmwiki-owned", () => {
+    const profile = join(dir, "claude");
+    const commandDir = join(profile, "commands");
+    const target = join(dir, "my-tools", "skill", "wiki-save.md");
+    mkdirSync(commandDir, { recursive: true });
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, "# user tool\n");
+    symlinkSync(target, join(commandDir, "wiki-save.md"));
+
+    const result = run(["--harness", "claude"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(new TextDecoder().decode(result.stderr)).toContain("Claude command conflict");
+    expect(existsSync(target)).toBe(true);
     expect(existsSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"))).toBe(false);
   });
 

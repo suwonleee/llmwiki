@@ -4,12 +4,23 @@
 // connection the caller opens/closes.
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative as relpath, resolve } from "node:path";
 import { storeChunks, chunkText, CHUNKER_VERSION } from "./chunker.ts";
 import { stripEvidence } from "./refs.ts";
 import { getConfig } from "./config.ts";
+import {
+  RepoBoundaryError,
+  ensureRepoDir,
+  readRepoDir,
+  readRepoFile,
+  readRepoFileBytes,
+  readRepoRoot,
+  repoFileMetadata,
+  repoPath,
+  repoRelative,
+} from "./repo-write.ts";
 import { parseFrontmatter, resolveDocumentTitle } from "./frontmatter.ts";
 import {
   COLD_INDEX_RELATIVE_PATH,
@@ -34,21 +45,25 @@ const TEXT_EXTENSIONS = new Set([
   "toml", "ini", "cfg", "rst", "tex",
 ]);
 const WIKI_DIR = "docs/wiki";
+const INDEX_DB_REL = join(".llmwiki", "index.db");
+
+function lstatSafe(path: string): Stats | null {
+  try {
+    return lstatSync(path);
+  } catch {
+    return null;
+  }
+}
 
 export interface DocRow {
   [k: string]: any;
   tags?: string[] | string;
 }
 
-function sha256(path: string): string | null {
-  try {
-    if (statSync(path).size < 100_000_000) {
-      return createHash("sha256").update(readFileSync(path)).digest("hex");
-    }
-  } catch {
-    return null;
-  }
-  return null;
+function sha256(root: string, relative: string, size: number): string | null {
+  if (size >= 100_000_000) return null;
+  const bytes = readRepoFileBytes(root, relative);
+  return bytes === null ? null : createHash("sha256").update(bytes).digest("hex");
 }
 
 function sourceKind(relative: string): string {
@@ -115,28 +130,23 @@ export function ftsRelax(query: string): string | null {
 }
 
 // Recursive top-down walk with in-place dir pruning (replaces Python os.walk + dirs[:]).
-function* walkFiles(walkRoot: string, workspaceRoot: string): Generator<string> {
-  let entries;
-  try {
-    entries = readdirSync(walkRoot, { withFileTypes: true });
-  } catch {
-    return;
-  }
+function* walkFiles(workspaceRoot: string, relativeDir: string | null): Generator<string> {
+  const entries = relativeDir === null ? readRepoRoot(workspaceRoot) : readRepoDir(workspaceRoot, relativeDir);
   const subdirs: string[] = [];
   const files: string[] = [];
-  const relativeDir = relpath(workspaceRoot, walkRoot).replace(/\\/g, "/");
-  const isWikiDir = relativeDir === WIKI_DIR || relativeDir.startsWith(WIKI_DIR + "/");
+  const normalizedDir = relativeDir?.replace(/\\/g, "/") ?? "";
+  const isWikiDir = normalizedDir === WIKI_DIR || normalizedDir.startsWith(WIKI_DIR + "/");
   for (const e of entries) {
-    if (e.isDirectory()) {
+    if (e.isDirectory) {
       if (!IGNORE_DIRS.has(e.name) && (isWikiDir || !GENERATED_DIRS.has(e.name)) && !e.name.startsWith(".")) {
         subdirs.push(e.name);
       }
-    } else if (e.isFile()) {
+    } else if (e.isFile) {
       if (!e.name.startsWith(".")) files.push(e.name);
     }
   }
-  for (const fn of files) yield join(walkRoot, fn);
-  for (const d of subdirs) yield* walkFiles(join(walkRoot, d), workspaceRoot);
+  for (const fn of files) yield relativeDir === null ? fn : join(relativeDir, fn);
+  for (const d of subdirs) yield* walkFiles(workspaceRoot, relativeDir === null ? d : join(relativeDir, d));
 }
 
 export class WikiIndex {
@@ -165,15 +175,22 @@ export class WikiIndex {
   // ---- lifecycle --------------------------------------------------------
 
   init(): void {
-    mkdirSync(join(this.root, WIKI_DIR), { recursive: true });
-    mkdirSync(join(this.root, ".llmwiki", "cache"), { recursive: true });
+    ensureRepoDir(this.root, WIKI_DIR);
+    ensureRepoDir(this.root, join(".llmwiki", "cache"));
     const db = this.connect();
     db.close();
   }
 
   connect(): Database {
-    mkdirSync(join(this.root, ".llmwiki"), { recursive: true });
-    const db = new Database(this.dbPath);
+    // The index lives inside the user's repository, so its directory and its file are validated
+    // like any other repository path BEFORE SQLite opens them: a `.llmwiki` (or `.llmwiki/index.db`)
+    // symlink planted by someone else's commit would otherwise have SQLite write through it.
+    ensureRepoDir(this.root, ".llmwiki");
+    const dbPath = repoPath(this.root, INDEX_DB_REL);
+    if (lstatSafe(dbPath)?.isSymbolicLink()) {
+      throw new RepoBoundaryError(`refusing to open a symlinked index database: ${INDEX_DB_REL}`);
+    }
+    const db = new Database(dbPath);
     db.exec("PRAGMA journal_mode=WAL");
     db.exec("PRAGMA foreign_keys=ON");
     db.exec("PRAGMA busy_timeout=5000"); // migration DDL vs a concurrent daemon write → wait, not SQLITE_BUSY
@@ -321,7 +338,7 @@ export class WikiIndex {
           `${WIKI_DIR}/ only — skipping a whole-home source scan to avoid a runaway index.\n`,
       );
     }
-    const walkRoot = wikiOnly ? join(this.root, WIKI_DIR) : this.root;
+    const walkRoot = wikiOnly ? WIKI_DIR : null;
     let sourceCount = 0;
     let sourceCapped = false;
 
@@ -331,10 +348,10 @@ export class WikiIndex {
     // self-heals rows indexed before this guard existed.
     const quizPrefix = WIKI_DIR + "/" + getConfig(this.root).quizDir + "/";
 
-    for (const full of walkFiles(walkRoot, this.root)) {
+    for (const relativeNative of walkFiles(this.root, walkRoot)) {
       // posix-normalize the stored relative_path so downstream `docs/wiki/` matching
       // (sourceKind, lint, cold-start) holds on Windows, where relpath yields backslashes.
-      const relative = relpath(this.root, full).replace(/\\/g, "/");
+      const relative = relativeNative.replace(/\\/g, "/");
       if (relative === COLD_INDEX_RELATIVE_PATH) continue;
       if (relative.startsWith(quizPrefix)) continue;
       if (!relative.startsWith(WIKI_DIR + "/")) {
@@ -345,7 +362,7 @@ export class WikiIndex {
         sourceCount += 1;
       }
       seen.add(relative);
-      const r = this.indexFile(db, full, relative);
+      const r = this.indexFile(db, join(this.root, relativeNative), relative);
       if (r === "new") neu += 1;
       else if (r === "updated") updated += 1;
     }
@@ -381,10 +398,17 @@ export class WikiIndex {
   indexFile(db: Database, full: string, relative: string): "new" | "updated" | null {
     const name = this.basename(full);
     const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
-    const stb = statSync(full, { bigint: true });
-    const size = Number(stb.size);
-    const mtimeNs = stb.mtimeNs;
-    const contentHash = sha256(full);
+    let safeRelative: string;
+    try {
+      safeRelative = repoRelative(this.root, full);
+    } catch {
+      return null;
+    }
+    const metadata = repoFileMetadata(this.root, safeRelative);
+    if (metadata === null) return null;
+    const size = metadata.size;
+    const mtimeNs = metadata.mtimeNs;
+    const contentHash = sha256(this.root, safeRelative, size);
 
     const existing = db
       .query("SELECT id, content_hash, title FROM documents WHERE relative_path = ?")
@@ -394,7 +418,7 @@ export class WikiIndex {
     const capExempt = sourceKind(relative) === "wiki"; // wiki pages are never capped
     if (TEXT_EXTENSIONS.has(ext) && (capExempt || size <= WikiIndex.SOURCE_CONTENT_CAP)) {
       try {
-        sourceContent = readFileSync(full, "utf-8");
+        sourceContent = readRepoFile(this.root, safeRelative);
       } catch {
         /* ignore */
       }
@@ -713,6 +737,17 @@ export class WikiIndex {
       rows = this._substringRows(db, tokens, limit, kind);
     }
     return rows.map(WikiIndex.row);
+  }
+
+  /**
+   * The same below-the-floor answer `search()` falls back to, for callers that build their own
+   * MATCH query and therefore opt out of it (turn-context). Without this, the one retrieval path a
+   * reader hits EVERY turn is the only one that cannot see a term the trigram index can't represent
+   * — and in Hangul those are the ordinary words (토큰·만료·검사), not the exotic ones.
+   */
+  searchBelowFloor(db: Database, tokens: string[], limit = 10, kind: string | null = null): DocRow[] {
+    if (!tokens.length) return [];
+    return this._substringRows(db, tokens, limit, kind).map(WikiIndex.row);
   }
 
   // Live pages before retired ones, then the caller's ranking. Superseded down-rank (P0-4):

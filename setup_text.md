@@ -50,6 +50,20 @@ human explicitly requests multiple harnesses.
     - Codex: `llmwiki doctor --harness codex`
     - OpenCode: `llmwiki doctor --harness opencode`
     - Claude-only: `bun <absolute-clone-path>/src/cli.ts doctor --harness claude`
+- Enroll the project (the one project-level trust decision)
+    - Machine-level installation is INERT until a repository is enrolled: no cold-start context,
+      no per-turn injection, no captured sessions
+    - Run `llmwiki init <absolute-project-path>` once per repository (Claude-only installs:
+      `bun <absolute-clone-path>/src/cli.ts init <absolute-project-path>`)
+    - The target must be a git worktree; automatic integration is git-only and per-worktree
+    - Confirm with `llmwiki status <absolute-project-path>` — it prints enabled/disabled and why
+    - Never enroll a repository the human did not name, and never enroll one just because it
+      already contains `docs/wiki/` (that arrives with any clone)
+- Generative passes stay off unless the human asks
+    - `autoupdate`/`review` launch a subprocess only when `LLMWIKI_LLM_CMD` is set in the machine
+      environment; unset means nothing is sent anywhere
+    - Do not set it in a repository file, a `.env`, or a config — it is a shell-environment
+      decision the human makes explicitly, and llmwiki ignores repository-supplied values
 - Handle Codex trust
     - Start Codex in an initialized project
     - Open `/hooks`
@@ -57,7 +71,10 @@ human explicitly requests multiple harnesses.
     - Never claim active hooks before the Codex UI verdict
 - Report
     - Installed surfaces and health-check result
+    - Which repositories were enrolled, and that no others are active
     - Remaining manual action
+    - The uninstall path, verbatim: `./setup.sh --uninstall` (add `--purge-data` to delete local
+      runtime state), run from this clone BEFORE the clone is moved or deleted
     - Exact wired clone path
     - Exact project initialization command
     - No initialization of an unspecified project

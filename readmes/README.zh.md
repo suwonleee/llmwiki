@@ -23,6 +23,10 @@ git clone https://github.com/suwonleee/llmwiki.git
 cd ~/llmwiki
 ```
 
+以上命令会安装当前公开版本。如果需要可复现的部署，请在setup之前到
+[Releases页面](https://github.com/suwonleee/llmwiki/releases)选择一个发布标签。更新始终由你手动执行。
+移动或删除此目录前，请先卸载（见下文），因为已安装的钩子会指向这个路径。
+
 在这个目录中只启动**一个**智能体。
 
 ```bash
@@ -38,6 +42,22 @@ claude
 ```
 
 这是推荐的安装路径。README只保留面向人的入口；harness分支、健康检查、`PATH`、钩子信任、OS和恢复规则位于智能体契约 [`setup_text.md`](../setup_text.md) 及其[安装流程参考](../reference/INSTALLATION_FLOW.md)。
+
+### 接着，每个项目只启用一次
+
+安装发生在整台机器上，但在登记仓库之前，**它在任何地方都不会自动运行**。
+
+```bash
+llmwiki init /absolute/path/to/my-project
+```
+
+`init` 会建立wiki骨架，并在该worktree自己的 `.git/` 目录下写入登记标记。在这之前，即使仓库已经
+含有完整的 `docs/wiki/`，也不会注入冷启动上下文、逐轮提示或捕获会话；clone本身不等于信任。
+登记后不再要求额外确认。
+
+- `llmwiki status <repo>` — 查看是否启用，以及未启用的原因
+- `llmwiki disable <repo>` — 关闭自动集成但保留wiki
+- 自动集成仅用于Git，且按worktree隔离；移动仓库后需重新运行 `init`
 
 setup正常完成后，在同一个安装会话中告诉智能体：
 
@@ -228,13 +248,36 @@ package.json·tsconfig.json   Bun 元数据（供 typecheck; 运行时直接执�
 - 内容 — 各仓库自己的 `docs/wiki/`（同址存放; markdown = 事实源）
 - 索引 — `<repo>/.llmwiki/index.db`（随时可再生）
 
+## 卸载
+
+```bash
+cd ~/llmwiki
+./setup.sh --uninstall
+./setup.sh --uninstall --purge-data    # 同时删除本地运行状态
+```
+
+卸载依据所有权标记，只移除llmwiki安装的钩子、插件、命令和服务；其他配置及各项目的
+`docs/wiki/` 保持不变。移动或删除安装用clone之前，应先从该clone运行卸载。不加
+`--purge-data` 时会保留本地状态并报告其位置。
+
+## 本机保留的数据
+
+| 内容 | 位置 | 保留期 |
+|---|---|---|
+| 捕获队列（仓库与时间的元数据） | `<clone>/.state/capture.db` | 直到 `--purge-data` |
+| 守护进程日志（仅汇总） | `<clone>/.state/daemon.log` | 直到 `--purge-data` |
+| OpenCode transcript导出（对话正文） | `<clone>/.state/opencode-export/` | **30天后自动删除** |
+
+状态目录使用 `0700`，其中的文件使用 `0600`。Claude和Codex的transcript只从各自harness的
+原始存储中读取，llmwiki不会另存副本。
+
 ## 前置条件
 
 | | 必需 | 备注 |
 |---|---|---|
 | **Bun ≥ 1.1** | ✔ 必需 | 单一二进制（`curl -fsSL https://bun.sh/install \| bash`）。直接运行 `.ts`，`bun:sqlite` 连 FTS5 一并打包 — 零构建·`node_modules`。运行引擎和 `bun test` 无需安装; 仅 `bun run typecheck`（tsc）需要一次 `bun install`（仅开发用）。 |
 | **Codex · OpenCode CLI** | 仅各自的快速开始 | `codex` / `opencode` 需在 `PATH` 上。Codex 另需支持 lifecycle hook 且启用 stable `hooks` 功能。setup 在改动钩子·技能·服务之前，会先确认支持情况与既有功能设置。 |
-| **LLM CLI** | 仅生成通道 | 捕获·读取注入·`/wiki-*`·`ingest`（capture-only，只排队待更新）没有它也能工作。`autoupdate·review` 和 `ingest` 的整合会调用 LLM CLI — 默认 `claude -p`（[安装](https://docs.claude.com/en/docs/claude-code/setup)），或用 `LLMWIKI_LLM_CMD` 指向别的 CLI/供应商。 |
+| **LLM CLI** | 可选，需显式开启 | 捕获·读取注入·`/wiki-*`·`ingest`（capture-only，只排队待更新）没有它也能工作，且**默认不向任何地方发送任何内容**。只有在 shell 环境中设置 `LLMWIKI_LLM_CMD` 后，`autoupdate·review` 和 `ingest` 的整合才会启动生成子进程（例如 `export LLMWIKI_LLM_CMD='claude -p {prompt} --model {model} --disallowedTools Write Edit NotebookEdit Bash'`）。未设置时这些通道报告“不可用”并跳过，确定性功能照常工作。 |
 | **OS** | macOS / Linux | macOS=launchd，Linux=systemd（`--user`），无 systemd 则回退 cron+nohup。守护进程细节见 [`daemon/README.md`](../daemon/README.md) |
 
 ### Harness · OS 备注（Claude Code / Codex / OpenCode / Windows）
@@ -245,7 +288,7 @@ package.json·tsconfig.json   Bun 元数据（供 typecheck; 运行时直接执�
     - 安装用户 CLI + 5 个 `$wiki-*` 技能，并把原生 `SessionStart`/`UserPromptSubmit` 钩子合并进 `$CODEX_HOME/hooks.json`
     - 仅一次: 启动 Codex，在 `/hooks` 里审查确切命令 — 新钩子·改动过的钩子在被信任前不会执行
     - 捕获监视 `$CODEX_HOME/sessions/**/*.jsonl[.zst]`
-    - 温热技能靠 Codex 本身即可运行 · 无人值守的 `autoupdate`/`review` 在缺少 Claude CLI 时需要 `LLMWIKI_LLM_CMD`
+    - 温热技能靠 Codex 本身即可运行 · 无人值守的 `autoupdate`/`review` 仅在设置了 `LLMWIKI_LLM_CMD` 时运行
 - **OpenCode** — `./setup.sh --harness opencode`
     - 安装全局 `/wiki-*` 自定义命令、内嵌克隆路径的读取注入插件、用户 CLI
     - 捕获读取 SQLite 会话存储 · `XDG_DATA_HOME`/`OPENCODE_DB` 也会保留在守护进程环境里
@@ -286,14 +329,17 @@ cd llmwiki
 
 ## 配置（环境变量）— 供应商 · 模型 · CLI 无关
 
-生成通道（autoupdate/review）默认使用 `claude -p` + 下表所列的内置固定模型ID；完全不配置时行为与出厂默认一致。
+生成通道（autoupdate/review）在**明确启用之前保持关闭**。不配置时不会启动子进程，也不会向
+任何provider发送内容。只有机器环境中设置了 `LLMWIKI_LLM_CMD` 才会启用；仓库配置、Markdown、
+跟踪文件和自动载入的 `.env` 都不能启用它。所有外发内容都先经过secret screening。
 
 | env | 默认值 | 用途 |
 |---|---|---|
 | `LLMWIKI_MODEL_HEAVY` | `claude-opus-4-8` | 推理档 tier — VERIFY（对抗性门）·review（语义检查） |
 | `LLMWIKI_MODEL_LIGHT` | `claude-sonnet-5` | 草稿档 tier — WRITE（页面生成） |
 | `CLAUDE_CONFIG_DIR` | （Claude Code 标准） | 设置后该目录也被识别为 Claude 配置 — 钩子接线（wire）·捕获（claude source）·doctor 一并尊重。 |
-| `LLMWIKI_LLM_CMD` | `claude -p {prompt} --model {model} --disallowedTools …` | LLM 调用的 argv 模板。`{prompt}`·`{model}` 按 token 替换（不做 shell 解析）。没有 `{prompt}` 时提示词走 stdin。需要引号的多词值用 JSON 数组（`["my-llm","--q","{prompt}"]`）。任何 CLI 皆可 — Codex·`llm`·ollama 等。 |
+| `LLMWIKI_LLM_CMD` | **未设置 — 不启动子进程、不联网** | LLM 调用的 argv 模板。`{prompt}`·`{model}` 按 token 替换（不做 shell 解析）。没有 `{prompt}` 时提示词走 stdin。需要引号的多词值用 JSON 数组（`["my-llm","--q","{prompt}"]`）。任何 CLI 皆可 — Codex·`llm`·ollama 等。 |
+| `LLMWIKI_STATE_DIR` | `<clone>/.state` | 可选的机器本地状态路径。仓库 `.env` 无法改写。只接受新目录、空目录或已由llmwiki拥有的路径；遇到非空外部目录会拒绝。 |
 | `LLMWIKI_LANG` | `en` | 冷启动运行规则/标题的语言。`ko` 为韩语。（wiki 正文保持原样 — 只切换 UI 文案。） |
 | `LLMWIKI_SEARCH_RELAX` | （开） | 设为 `off` 关闭宽松召回回退 — 自然语言查询在 strict AND 命中 0 行时，用同一批词 OR 连接只重试一次（trigram 安全·Unicode/CJK 感知·无停用词表）。A/B 测量用的开关。 |
 | `LLMWIKI_MAX_SOURCE_BYTES` | `262144`（256KB） | 每个来源文件的内容上限。超限文件（数 MB 的 yaml/json fixture 等）只登记元数据 — 按名字·路径可查，但不做全文索引。wiki 页面不受限。让 fixture 多的仓库索引依旧紧凑、搜索依旧快 — 搜索/turn-context 质量不变。 |

@@ -23,6 +23,11 @@ git clone https://github.com/suwonleee/llmwiki.git
 cd ~/llmwiki
 ```
 
+위 명령은 현재 공개 버전을 설치합니다. 재현 가능한 설치가 필요하면 setup 전에
+[Releases 페이지](https://github.com/suwonleee/llmwiki/releases)에서 태그를 선택하세요. 업데이트는
+항상 수동입니다. 이 디렉터리를 옮기거나 지우기 전에는 반드시 먼저 제거(아래 참조)를 실행합니다 —
+설치된 훅이 이 경로를 가리킵니다.
+
 이 폴더에서 에이전트 **하나만** 실행합니다.
 
 ```bash
@@ -38,6 +43,25 @@ setup_text.md를 읽고, 지금 사용 중인 코딩 에이전트와 이 머신�
 ```
 
 이 방식이 권장 설치 경로입니다. README는 사람용 시작점만 담고, 하네스별 분기·상태 점검·`PATH`·훅 신뢰·OS·복구 규칙은 에이전트 계약 [`setup_text.md`](../setup_text.md)와 [설치 플로우 참조](../reference/INSTALLATION_FLOW.md)에 둡니다.
+
+### 그다음, 프로젝트마다 한 번만 켭니다
+
+설치는 머신 단위지만, **저장소를 등록하기 전까지는 어디에서도 아무 동작도 하지 않습니다.**
+
+```bash
+llmwiki init /내/프로젝트/절대경로     # 프로젝트별 1회 활성화
+```
+
+`init`은 위키 뼈대를 만들고, 그 워크트리의 `.git/` 아래에 등록 표식을 기록합니다. 실행 전까지 그
+프로젝트는 콜드스타트 컨텍스트도, 턴별 주입도, 세션 캡처도 만들지 않습니다 — 이미 완전한
+`docs/wiki/`가 들어 있어도 마찬가지입니다. 위키는 `git clone` 한 번이면 따라오고, 남의 저장소를
+clone 한 것은 거기서 llmwiki를 돌리겠다는 결정이 아니기 때문입니다. `init` 이후에는 확인 프롬프트가
+다시 뜨지 않습니다.
+
+- `llmwiki status <repo>` — 켜져 있는지, 아니면 왜 꺼져 있는지 확인
+- `llmwiki disable <repo>` — 다시 끄기(위키 파일은 그대로 유지)
+- 자동 연동은 **git 전용·워크트리 단위** — 연결된 워크트리 두 개는 각각 등록, 저장소를 옮기면
+  `init` 재실행 필요(표식이 정규 경로를 기록함)
 
 설치가 정상으로 끝나면 같은 설치 세션에서 에이전트에게 요청합니다.
 
@@ -228,13 +252,42 @@ package.json·tsconfig.json   Bun 메타(typecheck용; 런타임은 .ts 직접 �
 - 콘텐츠 — 각 레포의 `docs/wiki/` (co-location; markdown = 진실원)
 - 인덱스 — `<repo>/.llmwiki/index.db` (언제든 재생성 가능)
 
+## 제거
+
+```bash
+cd ~/llmwiki
+./setup.sh --uninstall                 # llmwiki가 설치한 훅·플러그인·커맨드·런처·서비스 전부 제거
+./setup.sh --uninstall --purge-data    # 로컬 런타임 상태까지 삭제
+```
+
+제거는 백업 복원이 아니라 **소유권 기준**입니다. llmwiki가 설치한 항목만 제거하고, 하네스 설정의
+나머지는 그대로 둡니다(설치 사이에 사용자가 추가한 훅 포함). 클론을 옮기거나 지우기 **전에** 설치된
+클론에서 실행합니다.
+
+- 위키는 건드리지 않음 — `docs/wiki/`는 사용자 저장소의 일반 마크다운
+- `--purge-data` 없으면 로컬 상태(캡처 큐·데몬 로그·트랜스크립트 내보내기)는 보존하고 위치만 보고;
+  `--purge-data`는 llmwiki가 만든 산출물만 삭제하며, 만들지 않은 파일·디렉터리는 절대 건드리지 않음
+- 프로젝트별 등록 표식은 각 저장소의 `.git/llmwiki/`에 있고 엔진 없이는 무의미 — 개별 해제는
+  `llmwiki disable <repo>`
+
+## 이 머신에 남는 데이터
+
+| 무엇 | 위치 | 보존 |
+|---|---|---|
+| 캡처 큐(어느 저장소에서 언제 작업했는지 — 메타데이터만) | `<clone>/.state/capture.db` | `--purge-data` 까지 유지 |
+| 데몬 로그(집계 수치만; 미등록 저장소 경로는 기록 안 함) | `<clone>/.state/daemon.log` | `--purge-data` 까지 유지 |
+| OpenCode 트랜스크립트 내보내기(대화 본문 — llmwiki가 보관하는 유일한 본문) | `<clone>/.state/opencode-export/` | **30일 후 자동 삭제** |
+
+상태 디렉터리와 그 안의 파일은 비공개 권한(`0700`/`0600`)으로 생성됩니다. Claude·Codex 트랜스크립트는
+하네스 저장소에서 그 자리로 읽을 뿐, llmwiki가 사본을 만들지 않습니다.
+
 ## 사전 요구사항
 
 | | 필요 | 비고 |
 |---|---|---|
 | **Bun ≥ 1.1** | ✔ 필수 | 단일 바이너리 (`curl -fsSL https://bun.sh/install \| bash`). `.ts` 를 그대로 실행, `bun:sqlite` 가 FTS5 까지 번들 — 빌드·`node_modules` 0. 엔진 실행·`bun test` 는 무설치로 동작; `bun run typecheck`(tsc) 만 `bun install` 1회 필요 (dev 전용). |
 | **Codex · OpenCode CLI** | 각 빠른 시작에만 | `codex` / `opencode` 가 `PATH`에 있어야 함. Codex는 추가로 lifecycle hook 지원 + stable `hooks` 기능 활성 필요. setup은 훅·스킬·서비스 변경 전에 지원 여부와 기존 기능 설정을 확인. |
-| **LLM CLI** | 생성 패스에만 | 캡처·읽기 주입·`/wiki-*`·`ingest`(capture-only, 대기 목록만 기록)는 없어도 동작. `autoupdate·review` 와 `ingest` 의 통합은 LLM CLI 를 호출 — 기본 `claude -p`([설치](https://docs.claude.com/en/docs/claude-code/setup)), 또는 `LLMWIKI_LLM_CMD` 로 다른 CLI/provider. |
+| **LLM CLI** | 선택형·명시적 활성화 | 캡처·읽기 주입·`/wiki-*`·`ingest`(capture-only, 대기 목록만 기록)는 없어도 동작하고, 기본 상태에서는 아무것도 전송하지 않음. `LLMWIKI_LLM_CMD`를 셸 환경에 설정한 경우에만 `autoupdate·review`와 `ingest` 통합이 생성 서브프로세스를 실행 (Claude Code 권장값: `export LLMWIKI_LLM_CMD='claude -p {prompt} --model {model} --disallowedTools Write Edit NotebookEdit Bash'` — 프롬프트가 트랜스크립트 텍스트로 만들어지므로 툴 제한을 유지할 것). |
 | **OS** | macOS / Linux | macOS=launchd, Linux=systemd(`--user`), systemd 없으면 cron+nohup 폴백. 데몬 세부는 [`daemon/README.md`](../daemon/README.md) |
 
 ### 하네스 · OS 노트 (Claude Code / Codex / OpenCode / Windows)
@@ -245,7 +298,7 @@ package.json·tsconfig.json   Bun 메타(typecheck용; 런타임은 .ts 직접 �
     - 사용자 CLI + `$wiki-*` 스킬 5개 설치, `$CODEX_HOME/hooks.json`에 native `SessionStart`/`UserPromptSubmit` 훅 병합
     - 최초 1회: Codex를 시작해 `/hooks`에서 정확한 명령을 검토 — 새 훅·변경된 훅은 신뢰 전까지 실행되지 않음
     - 캡처는 `$CODEX_HOME/sessions/**/*.jsonl[.zst]` 감시
-    - 웜 스킬은 Codex 자체로 동작 · 무인 `autoupdate`/`review`는 Claude CLI가 없으면 `LLMWIKI_LLM_CMD` 필요
+    - 웜 스킬은 Codex 자체로 동작 · 무인 `autoupdate`/`review`는 `LLMWIKI_LLM_CMD`를 설정한 경우에만 동작
 - **OpenCode** — `./setup.sh --harness opencode`
     - 전역 `/wiki-*` custom command, clone 경로가 내장된 읽기 주입 플러그인, 사용자 CLI 설치
     - 캡처는 SQLite 세션 저장소를 읽음 · `XDG_DATA_HOME`/`OPENCODE_DB`도 데몬 환경에 보존
@@ -286,14 +339,19 @@ cd llmwiki
 
 ## 설정 (환경 변수) — provider · 모델 · CLI 무관
 
-생성 패스(autoupdate/review)는 기본값으로 `claude -p` + 아래에 표시된 고정 내장 모델 ID를 쓰며, 무설정이면 기본 동작과 완전히 동일합니다.
+생성 패스(autoupdate/review)는 **켜기 전까지 동작하지 않습니다.** 아무 설정도 없으면 llmwiki는
+서브프로세스를 띄우지 않고 어떤 provider에도 아무것도 보내지 않습니다. 머신 환경변수
+`LLMWIKI_LLM_CMD` 설정이 1회성 opt-in이며, 저장소의 설정 파일·마크다운·추적 파일·자동 로드되는
+`.env`로는 켤 수 없습니다. 켠 뒤에도 트랜스크립트·페이지에서 나온 모든 블록은 프롬프트가 되기 전에
+시크릿 스크리닝을 거치고, 스크리닝 후 남는 게 없으면 호출 자체를 취소합니다.
 
 | env | 기본값 | 용도 |
 |---|---|---|
 | `LLMWIKI_MODEL_HEAVY` | `claude-opus-4-8` | 추론급 tier — VERIFY(적대적 게이트)·review(의미 검토) |
 | `LLMWIKI_MODEL_LIGHT` | `claude-sonnet-5` | 초안급 tier — WRITE(페이지 생성) |
 | `CLAUDE_CONFIG_DIR` | (Claude Code 표준) | 설정 시 해당 디렉토리도 Claude 프로필로 인식 — 훅 배선(wire)·캡처(claude source)·doctor 가 함께 존중. |
-| `LLMWIKI_LLM_CMD` | `claude -p {prompt} --model {model} --disallowedTools …` | LLM 호출 argv 템플릿. `{prompt}`·`{model}` 을 토큰 단위로 치환(셸 파싱 안 함). `{prompt}` 가 없으면 prompt 를 stdin 으로 보냄. 따옴표 multi-word 가 필요하면 JSON 배열(`["my-llm","--q","{prompt}"]`)로. Codex·`llm`·ollama 등 아무 CLI 나. |
+| `LLMWIKI_LLM_CMD` | **미설정 — 서브프로세스·네트워크 없음** | LLM 호출 argv 템플릿. `{prompt}`·`{model}` 을 토큰 단위로 치환(셸 파싱 안 함). `{prompt}` 가 없으면 prompt 를 stdin 으로 보냄. 따옴표 multi-word 가 필요하면 JSON 배열(`["my-llm","--q","{prompt}"]`)로. Codex·`llm`·ollama 등 아무 CLI 나. |
+| `LLMWIKI_STATE_DIR` | `<clone>/.state` | 선택형 머신 로컬 상태 경로. 저장소 `.env`는 이 값을 바꿀 수 없음. 사용자 지정 경로는 새 디렉터리·빈 디렉터리·이미 llmwiki 소유인 경로만 허용하며, 비어 있지 않은 외부 디렉터리는 거부. |
 | `LLMWIKI_LANG` | `en` | 콜드스타트 운영 규칙/헤더 언어. `ko` 면 한국어. (위키 본문 자체는 작성된 그대로 — UI 문구만 스위치.) |
 | `LLMWIKI_SEARCH_RELAX` | (on) | `off`면 완화 폴백 비활성 — 자연어 질의가 strict AND 0건일 때 같은 단어들을 OR로 1회 재시도(trigram 안전·유니코드/CJK 인식·stopword 목록 없음). A/B 측정용 킬스위치. |
 | `LLMWIKI_MAX_SOURCE_BYTES` | `262144` (256KB) | 소스 파일당 콘텐츠 캡. 초과 파일(수 MB yaml/json 픽스처 등)은 메타데이터만 등록 — 이름·경로로는 검색되지만 전문 색인은 제외. 위키 페이지는 캡 무관. 픽스처 많은 레포에서도 인덱스를 작게, 검색을 빠르게 유지 — 검색·turn-context 품질 무변. |

@@ -5,7 +5,10 @@
 #
 #   macOS              → launchd agent          (com.llmwiki.daemon)
 #   Linux + systemd    → systemd --user service (llmwiki-daemon.service)
-#   Linux, no systemd  → cron @reboot + nohup    (WSL / minimal containers)
+#   no supervisor      → cron @reboot + nohup    (WSL · minimal containers · macOS without launchd)
+#
+# Every branch ends with a VERIFIED state, never an assumed one: the daemon is either confirmed
+# running under a supervisor, or started in the foreground-less fallback and reported as such.
 #
 # Usage:  bash <clone>/daemon/install.sh [--uninstall]
 # See daemon/README.md for status checks, logs, and headless persistence notes.
@@ -13,10 +16,10 @@ set -e
 
 LABEL="com.llmwiki.daemon"
 UNIT="llmwiki-daemon.service"
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd -P)"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 SYSTEMD_UNIT="$HOME/.config/systemd/user/$UNIT"
-STATE="$ROOT/.state"
+STATE_REQUESTED="${LLMWIKI_STATE_DIR:-$ROOT/.state}"
 CODEX_STATE_HOME="${CODEX_HOME:-$HOME/.codex}"
 CLAUDE_PROFILE="${CLAUDE_CONFIG_DIR:-}"
 OPENCODE_DATA_HOME="${XDG_DATA_HOME:-}"
@@ -27,33 +30,127 @@ WATCH="$ROOT/src/daemon/watch.ts"
 CRON_TAG="# llmwiki-daemon ($ROOT)"
 
 have() { command -v "$1" >/dev/null 2>&1; }
+watch_pids() {
+    have ps || return 2
+    WATCH_PS="$(ps -axo pid=,command= 2>/dev/null)" || return 2
+    WATCH_BIN="$(basename "$PY")"
+    while read -r WATCH_PID WATCH_COMMAND; do
+        case "$WATCH_COMMAND" in
+            "$WATCH_BIN $WATCH"|"$PY $WATCH"|*/"$WATCH_BIN $WATCH")
+                [ "$WATCH_PID" != "$$" ] && printf '%s\n' "$WATCH_PID"
+                ;;
+        esac
+    done <<EOF
+$WATCH_PS
+EOF
+}
+stop_watch_processes() {
+    STOP_PIDS_STATUS=0
+    STOP_PIDS="$(watch_pids)" || STOP_PIDS_STATUS=$?
+    [ "$STOP_PIDS_STATUS" -eq 0 ] || return 2
+    for STOP_PID in $STOP_PIDS; do
+        kill "$STOP_PID" 2>/dev/null || return 1
+    done
+    [ -z "$STOP_PIDS" ] || sleep 1
+    STOP_REMAINING_STATUS=0
+    STOP_REMAINING="$(watch_pids)" || STOP_REMAINING_STATUS=$?
+    [ "$STOP_REMAINING_STATUS" -eq 0 ] || return 2
+    [ -z "$STOP_REMAINING" ] || return 1
+    [ -z "$STOP_PIDS" ] || printf '%s\n' "$STOP_PIDS"
+}
 xml_escape() {
     printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&apos;/g'
 }
 
 # --- uninstall (all platforms / mechanisms) ---------------------------------
 if [ "$1" = "--uninstall" ]; then
+    UNINSTALL_FAILURES=0
+    uninstall_failure() {
+        UNINSTALL_FAILURES=$((UNINSTALL_FAILURES + 1))
+        echo "🔴 $1" >&2
+    }
     # macOS launchd
-    [ -f "$PLIST" ] && { launchctl unload "$PLIST" 2>/dev/null || true; rm -f "$PLIST"; echo "✓ removed launchd $LABEL"; }
+    if have launchctl; then
+        LAUNCHD_LIST_OK=1
+        LAUNCHD_LIST="$(launchctl list 2>/dev/null)" || LAUNCHD_LIST_OK=0
+        if [ "$LAUNCHD_LIST_OK" -ne 1 ]; then
+            uninstall_failure "launchd status could not be verified; shutdown is unconfirmed."
+        elif [ -f "$PLIST" ]; then
+            if launchctl unload "$PLIST" 2>/dev/null; then
+                rm -f "$PLIST"
+                echo "✓ removed launchd $LABEL"
+            elif ! printf '%s\n' "$LAUNCHD_LIST" | grep -qF "$LABEL"; then
+                rm -f "$PLIST"
+                echo "✓ removed inactive launchd $LABEL"
+            elif launchctl remove "$LABEL" 2>/dev/null; then
+                rm -f "$PLIST"
+                echo "✓ removed launchd $LABEL"
+            else
+                uninstall_failure "launchd $LABEL could not be stopped; its plist was preserved."
+            fi
+        elif printf '%s\n' "$LAUNCHD_LIST" | grep -qF "$LABEL"; then
+            if launchctl remove "$LABEL" 2>/dev/null; then
+                echo "✓ removed definitionless launchd $LABEL"
+            else
+                uninstall_failure "definitionless launchd $LABEL could not be stopped."
+            fi
+        fi
+    elif [ -f "$PLIST" ]; then
+        uninstall_failure "launchctl is unavailable; $LABEL plist was preserved."
+    fi
     # Linux systemd --user
-    if have systemctl && [ -f "$SYSTEMD_UNIT" ]; then
-        systemctl --user disable --now "$UNIT" 2>/dev/null || true
-        rm -f "$SYSTEMD_UNIT"
-        systemctl --user daemon-reload 2>/dev/null || true
-        echo "✓ removed systemd --user $UNIT"
+    if have systemctl && systemctl --user show-environment >/dev/null 2>&1; then
+        SYSTEMD_STATUS=0
+        systemctl --user is-active --quiet "$UNIT" 2>/dev/null || SYSTEMD_STATUS=$?
+        if [ "$SYSTEMD_STATUS" -eq 0 ]; then
+            systemctl --user stop "$UNIT" 2>/dev/null || true
+            SYSTEMD_STATUS=0
+            systemctl --user is-active --quiet "$UNIT" 2>/dev/null || SYSTEMD_STATUS=$?
+        fi
+        if [ "$SYSTEMD_STATUS" -eq 0 ] || [ "$SYSTEMD_STATUS" -eq 1 ] || [ "$SYSTEMD_STATUS" -eq 2 ]; then
+            uninstall_failure "systemd could not verify that $UNIT is inactive."
+        elif [ -f "$SYSTEMD_UNIT" ]; then
+            systemctl --user disable "$UNIT" 2>/dev/null || true
+            rm -f "$SYSTEMD_UNIT"
+            if systemctl --user daemon-reload 2>/dev/null; then
+                echo "✓ removed systemd --user $UNIT"
+            else
+                uninstall_failure "systemd daemon-reload failed after stopping $UNIT."
+            fi
+        fi
+    elif [ -f "$SYSTEMD_UNIT" ]; then
+        uninstall_failure "systemd user manager is unavailable; $UNIT file was preserved."
     fi
     # cron fallback
     if have crontab && crontab -l 2>/dev/null | grep -qF "$CRON_TAG"; then
-        crontab -l 2>/dev/null | grep -vF "$CRON_TAG" | crontab -
-        echo "✓ removed cron @reboot line"
+        if crontab -l 2>/dev/null | grep -vF "$CRON_TAG" | crontab -; then
+            echo "✓ removed cron @reboot line"
+        else
+            uninstall_failure "cron @reboot line could not be removed."
+        fi
     fi
-    # stray nohup process
-    pkill -f "$WATCH" 2>/dev/null && echo "✓ stopped running watch.ts" || true
+    # stray nohup process — enumerate with `ps` and match the path literally. `pgrep -f` treats
+    # clone paths as regular expressions, so a perfectly valid path containing `[` can evade it.
+    WATCH_STOP_STATUS=0
+    WATCH_STOPPED="$(stop_watch_processes)" || WATCH_STOP_STATUS=$?
+    if [ "$WATCH_STOP_STATUS" -eq 2 ]; then
+        uninstall_failure "watch.ts process status could not be verified."
+    elif [ "$WATCH_STOP_STATUS" -ne 0 ]; then
+        uninstall_failure "running watch.ts process could not be stopped."
+    elif [ -n "$WATCH_STOPPED" ]; then
+        echo "✓ stopped running watch.ts"
+    fi
+    if [ "$UNINSTALL_FAILURES" -gt 0 ]; then
+        echo "uninstall incomplete: $UNINSTALL_FAILURES daemon stop step(s) failed." >&2
+        exit 1
+    fi
     echo "uninstall complete."
     exit 0
 fi
 
-mkdir -p "$STATE"
+# Establish the exact same ownership boundary capture/OpenCode use before launchd/systemd/nohup
+# can create daemon.log through redirection. A foreign non-empty override fails closed.
+STATE="$("$PY" "$ROOT/src/engine/state-bootstrap.ts" "$STATE_REQUESTED")"
 
 # --- macOS: launchd ----------------------------------------------------------
 if [ "$(uname)" = "Darwin" ]; then
@@ -94,14 +191,29 @@ if [ "$(uname)" = "Darwin" ]; then
 </dict>
 </plist>
 EOF
-    launchctl unload "$PLIST" 2>/dev/null || true
-    launchctl load "$PLIST"
-    echo "✓ installed + loaded launchd $LABEL"
-    echo "  runtime: $PY"
-    echo "  plist  : $PLIST"
-    echo "  log    : $STATE/daemon.log"
-    printf '  check  : launchctl list | grep llmwiki   ·   bun %q doctor\n' "$ROOT/src/cli.ts"
-    exit 0
+    # Ask launchd whether it took; do not assert it. A plist on disk is not a running daemon, and
+    # this branch used to print "installed + loaded" unconditionally — including when `launchctl`
+    # was missing entirely, where the shell's own "command not found" was the only clue and the
+    # script still exited 0. A green line over a dead capture loop is the failure mode this engine
+    # keeps finding in the field, so the check is now the thing that prints the line.
+    if have launchctl; then
+        launchctl unload "$PLIST" 2>/dev/null || true
+        launchctl load "$PLIST" 2>/dev/null || true
+        if launchctl list 2>/dev/null | grep -qF "$LABEL"; then
+            echo "✓ installed + loaded launchd $LABEL"
+            echo "  runtime: $PY"
+            echo "  plist  : $PLIST"
+            echo "  log    : $STATE/daemon.log"
+            printf '  check  : launchctl list | grep llmwiki   ·   bun %q doctor\n' "$ROOT/src/cli.ts"
+            exit 0
+        fi
+        echo "⚠️ launchd did not accept $LABEL (plist written: $PLIST)."
+    else
+        echo "⚠️ launchctl not found on PATH."
+    fi
+    # Fall through to the supervisor-less fallback below — the same one Linux uses when it has no
+    # systemd. Capture starting now matters more than which supervisor keeps it alive.
+    echo "   Falling back to a plain background process; see the note at the end."
 fi
 
 # --- Linux with systemd: systemd --user service ------------------------------
@@ -160,7 +272,12 @@ if have crontab; then
     echo "✓ registered cron @reboot line ($CRON_TAG)"
 fi
 # start it now regardless (so capture begins this boot too)
-pkill -f "$WATCH" 2>/dev/null || true
+WATCH_STOP_STATUS=0
+stop_watch_processes >/dev/null || WATCH_STOP_STATUS=$?
+if [ "$WATCH_STOP_STATUS" -ne 0 ]; then
+    echo "🔴 existing watch.ts process could not be safely identified/stopped; refusing to start a duplicate." >&2
+    exit 1
+fi
 nohup "$PY" "$WATCH" >> "$STATE/daemon.log" 2>&1 &
 echo "✓ started watch.ts in background (pid $!)"
 echo "  runtime: $PY"

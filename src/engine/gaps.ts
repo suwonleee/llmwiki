@@ -12,7 +12,6 @@
 // Close safety: review is a (bounded, non-deterministic) LLM pass, so a single absence is not proof a
 // gap is resolved. A gap is closed only after it is ABSENT from RESOLVE_AFTER consecutive reviews
 // (loop-until-dry); any reappearance resets it to open.
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { resolveWikiLang, getConfig, resolveLang, type LangCatalog, type WikiLang } from "./config.ts";
@@ -45,7 +44,7 @@ const QUEUE_CLOSE_RULE: LangCatalog<(n: number) => string> = {
   zh: (n) => `连续 ${n} 次 review 都未出现 → 自动关闭。`,
 };
 import { gapStatePath, loadResolvedGapState, writeResolvedGapState } from "./gap-state.ts";
-import { readRepoFile, writeRepoFile } from "./repo-write.ts";
+import { ensureRepoDir, readRepoDir, readRepoFile, repoRelative, writeRepoFile } from "./repo-write.ts";
 
 export const RESOLVE_AFTER = 2; // consecutive absent reviews before a gap is closed
 export const RECENT_RESOLVED_LIMIT = 20;
@@ -189,13 +188,13 @@ export function renderQueue(gaps: Gap[], date: string, lang: WikiLang = resolveL
 }
 
 function _latestReview(root: string): string | null {
-  const dir = join(root, "docs", "wiki", getConfig(root).queueDir);
-  if (!existsSync(dir)) return null;
-  const files = readdirSync(dir)
-    .filter((f) => /^semantic-review-.*\.md$/.test(f))
+  const rel = join("docs", "wiki", getConfig(root).queueDir);
+  const files = readRepoDir(root, rel)
+    .filter((entry) => entry.isFile && /^semantic-review-.*\.md$/.test(entry.name))
+    .map((entry) => entry.name)
     .sort();
   const latest = files.at(-1);
-  return latest === undefined ? null : join(dir, latest);
+  return latest === undefined ? null : join(root, rel, latest);
 }
 
 export interface GapResult {
@@ -216,18 +215,22 @@ export function refreshGapQueue(ws: string, date: string, opts: { check?: boolea
     const ko = resolveWikiLang(root) === "ko";
     return { verdict: "skip", reason: ko ? "review 리포트 없음(먼저 review 실행)" : "no review report yet (run review first)" };
   }
-  const current = extractGapsFromReview(readFileSync(reviewPath, "utf-8"));
-  const queuePath = join(root, "docs", "wiki", getConfig(root).queueDir, "gap-queue.md");
-  // readRepoFile, not readFileSync: a symlinked queue reads as absent, so a link planted by
-  // someone else's commit is neither parsed (its content would enter our queue) nor followed.
-  const queue = readRepoFile(queuePath);
+  const review = readRepoFile(root, repoRelative(root, reviewPath));
+  if (review === null) return { verdict: "skip", reason: "review report is not a safe repository file" };
+  const current = extractGapsFromReview(review);
+  const queueRel = join("docs", "wiki", getConfig(root).queueDir, "gap-queue.md");
+  const queuePath = join(root, queueRel);
+  // readRepoFile, not readFileSync: a symlinked queue (or a symlinked ancestor of it) reads as
+  // absent, so a link planted by someone else's commit is neither parsed (its content would
+  // enter our queue) nor followed.
+  const queue = readRepoFile(root, queueRel);
   if (queue !== null && !isQueueWellFormed(queue)) {
     return { verdict: "skip", reason: "gap queue malformed; preserve it and recover before refresh" };
   }
   const prior = queue === null ? [] : parseQueue(queue);
 
   const byHash = new Map<string, Gap>(prior.map((g) => [g.hash, g]));
-  const resolvedState = loadResolvedGapState(gapStatePath(root));
+  const resolvedState = loadResolvedGapState(root);
   if (resolvedState !== null) {
     for (const gap of resolvedState) if (!byHash.has(gap.hash)) byHash.set(gap.hash, { ...gap });
   }
@@ -264,12 +267,9 @@ export function refreshGapQueue(ws: string, date: string, opts: { check?: boolea
   const open = gaps.filter((g) => g.status === "open").length;
   const resolved = gaps.filter((g) => g.status === "resolved").length;
   if (!opts.check) {
-    const dir = join(root, "docs", "wiki", getConfig(root).queueDir);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeRepoFile(queuePath, renderQueue(gaps, date, resolveWikiLang(root)));
-    const stateDir = join(root, ".llmwiki");
-    if (!existsSync(stateDir)) mkdirSync(stateDir, { recursive: true });
-    writeResolvedGapState(gapStatePath(root), gaps);
+    ensureRepoDir(root, join("docs", "wiki", getConfig(root).queueDir));
+    writeRepoFile(root, queueRel, renderQueue(gaps, date, resolveWikiLang(root)));
+    writeResolvedGapState(root, gaps);
   }
   return { verdict: "refreshed", open, resolved, added, path: queuePath };
 }

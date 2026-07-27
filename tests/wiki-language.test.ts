@@ -18,6 +18,7 @@ import { ensureSkeleton } from "../src/engine/update.ts";
 import { recentPointer } from "../src/engine/overview.ts";
 import { renderQueue } from "../src/engine/gaps.ts";
 import { buildContext } from "../src/engine/context.ts";
+import { enrollRepo, makeGitRepo } from "./support/git-repo.ts";
 
 const roots: string[] = [];
 let langBefore: string | undefined;
@@ -108,8 +109,9 @@ describe("wiki language resolution", () => {
   });
 
   test("cold-start falls back to English for a language with no rules catalog", () => {
-    const root = mkdtempSync(join(tmpdir(), "llmwiki-lang-cold-"));
-    roots.push(root);
+    const base = mkdtempSync(join(tmpdir(), "llmwiki-lang-cold-"));
+    roots.push(base);
+    const root = enrollRepo(makeGitRepo(join(base, "repo"))); // cold start needs enrollment
     mkdirSync(join(root, "docs", "wiki"), { recursive: true });
     writeFileSync(join(root, "docs", "wiki", "overview.md"), "---\ntitle: OV\n---\n\nhub\n", "utf8");
 

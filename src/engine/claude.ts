@@ -9,28 +9,49 @@
 //   to the command's stdin instead. For commands needing quoted multi-word args, pass an
 //   explicit argv as a JSON array (value starting with '['), e.g. ["my-llm","--q","{prompt}"].
 //
-//   Default reproduces Claude Code behavior exactly:
-//     claude -p {prompt} --model {model} --disallowedTools Write Edit MultiEdit NotebookEdit Bash
+//   There is NO default. Unset or empty → no subprocess is launched at all, and callers get a
+//   deterministic "unavailable" marker. Generative passes are strictly opt-in because they are
+//   the only thing in this engine that sends your session content to another program.
+//
+//   The value we RECOMMEND for Claude Code keeps the tool restrictions the old built-in default
+//   carried:
+//
+//     claude -p {prompt} --model {model} --disallowedTools Write Edit NotebookEdit Bash
+//
+//   Two reasons, and both still apply now that the command is opt-in. Correctness: `claude -p` is
+//   agentic, so asked to "write a page" it may reach for the Write tool instead of printing the
+//   markdown the caller is waiting for. Safety: the prompt is built from transcript and page text,
+//   which is exactly the material a prompt injection rides in on — a child that cannot write files
+//   or run commands cannot act on one. Only real tool names: an unknown one is rejected at startup
+//   ("matches no known tool"), which is how `MultiEdit` — carried over from the old built-in default —
+//   was caught in a live run.
 //
 // Errors are surfaced as a distinct `__ERROR__`-prefixed string (callers check the prefix),
 // never thrown. The generative passes are OPTIONAL: capture/read/manual condense work without
 // any LLM CLI.
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { screenSecrets } from "./screen.ts";
+import { envValueOutsideRepoFiles } from "./env-policy.ts";
 
-export const TIMEOUT_MS = 300_000; // 300s
+const TIMEOUT_MS = 300_000; // 300s
 
-// claude -p is agentic: asked to "write a page" it may use the Write tool instead of
-// printing markdown. The default disallows mutating/exec tools AND runs in a throwaway cwd.
-// Keep to real tool names — bogus names make claude -p hang.
-const DEFAULT_CMD =
-  "claude -p {prompt} --model {model} --disallowedTools Write Edit MultiEdit NotebookEdit Bash";
+/** Returned instead of launching anything when no provider command is configured. */
+export const UNAVAILABLE = "__UNAVAILABLE__";
+export const LLM_CMD_ENV = "LLMWIKI_LLM_CMD";
 
-/** Resolve the configured argv template into tokens (no shell parsing). */
-export function llmTemplate(): string[] {
-  const raw = process.env.LLMWIKI_LLM_CMD?.trim();
-  if (!raw) return DEFAULT_CMD.split(" ");
+/**
+ * The configured argv template, or null when generative passes are OFF.
+ *
+ * There is deliberately NO default command. Shipping `claude -p …` as the fallback meant that
+ * installing llmwiki silently enabled sending transcript extracts to a provider — a network
+ * transfer nobody chose, discoverable only by reading the source. Setting this variable in the
+ * machine's environment IS the opt-in, made once, out of band from any repository.
+ */
+export function llmTemplate(): string[] | null {
+  const raw = envValueOutsideRepoFiles(LLM_CMD_ENV)?.trim();
+  if (!raw) return null;
   if (raw.startsWith("[")) {
     try {
       const arr = JSON.parse(raw);
@@ -42,14 +63,59 @@ export function llmTemplate(): string[] {
   return raw.split(/\s+/).filter(Boolean);
 }
 
+/**
+ * Screen every transcript- or page-derived block before it becomes part of a prompt.
+ *
+ * Returns null when a required block screened down to nothing (`gutted`): the caller must then
+ * launch NO subprocess. Sending a mostly-«redacted» block proves nothing to the model and still
+ * ships whatever survived redaction to a third party. Only screened text is ever returned — the
+ * raw block never leaves this function.
+ */
+export function screenOutbound(blocks: Record<string, string>): Record<string, string> | null {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(blocks)) {
+    const screened = screenSecrets(value);
+    if (screened.gutted) return null;
+    out[key] = screened.text;
+  }
+  return out;
+}
+
+// A configured command may be a bare name to look up on PATH, or an absolute/relative path to a
+// wrapper script (the common way to pin flags). Bun.which only answers the first question.
+function resolveBin(bin: string): string | null {
+  if (bin.includes("/")) {
+    try {
+      return statSync(bin).isFile() ? bin : null;
+    } catch {
+      return null;
+    }
+  }
+  return Bun.which(bin);
+}
+
+/** True when a generative pass can run at all on this machine. */
+export function llmAvailable(): boolean {
+  const tmpl = llmTemplate();
+  return tmpl !== null && !!tmpl[0] && !!resolveBin(tmpl[0]!);
+}
+
 export async function llm(prompt: string, model: string): Promise<string> {
   const tmpl = llmTemplate();
-  const bin = tmpl[0];
-  if (!bin || !Bun.which(bin)) {
+  if (tmpl === null) {
+    // No command configured → no subprocess, no network, no error. The deterministic half of the
+    // engine (capture, index, search, lint, manual close-out) is fully usable in this state.
     return (
-      `__ERROR__ LLM CLI '${bin ?? ""}' not found on PATH. autoupdate·review need it ` +
-      `(or set LLMWIKI_LLM_CMD). Default needs Claude Code: https://docs.claude.com/en/docs/claude-code/setup`
+      `${UNAVAILABLE} no generative command configured. Deterministic capture/index/search/lint ` +
+      `are unaffected; to enable optional generative passes, set ${LLM_CMD_ENV} in your shell ` +
+      `environment. For Claude Code: export ${LLM_CMD_ENV}='claude -p {prompt} --model {model} ` +
+      `--disallowedTools Write Edit NotebookEdit Bash' — keep the tool restrictions; ` +
+      `the prompt is built from transcript text.`
     );
+  }
+  const bin = tmpl[0];
+  if (!bin || !resolveBin(bin)) {
+    return `__ERROR__ ${LLM_CMD_ENV} names '${bin ?? ""}', which is not executable or not on PATH.`;
   }
   const usesPromptArg = tmpl.some((t) => t.includes("{prompt}"));
   const argv = tmpl.map((t) =>

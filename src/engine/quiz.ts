@@ -27,12 +27,11 @@
 //   • Dates are day-granular YYYY-MM-DD on the READER's calendar (the engine-wide convention —
 //     see today.ts), so "due today" means today where the person actually is. An item asked
 //     today is never re-selected today — the minimum interval really is 1 day.
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { resolveWikiLang, getConfig, isHumanReviewDir, logDirs, resolveLang, type LangCatalog, type WikiConfig, type WikiLang } from "./config.ts";
 import { parseFrontmatter } from "./lint.ts";
-import { writeRepoFile } from "./repo-write.ts";
+import { ensureRepoDir, readRepoDir, readRepoFile, renameRepoPath, repoFileExists, repoRelative, writeRepoFile } from "./repo-write.ts";
 import { addDays, today } from "./today.ts";
 
 // Box intervals in days. Ebbinghaus reviews are minutes/hours/days, but a chat-ritual quiz
@@ -140,9 +139,9 @@ function ledgerPath(root: string, cfg: WikiConfig): string {
   // transition (the history was theirs); later identities start fresh, and a repo converges to
   // one ledger per person. Adoption failure (read-only fs) degrades to a fresh ledger.
   const legacy = join(dir, LEDGER_BASENAME);
-  if (!existsSync(mine) && existsSync(legacy)) {
+  if (!repoFileExists(root, repoRelative(root, mine)) && repoFileExists(root, repoRelative(root, legacy))) {
     try {
-      renameSync(legacy, mine);
+      renameRepoPath(root, repoRelative(root, legacy), repoRelative(root, mine));
     } catch {
       /* fresh ledger */
     }
@@ -234,19 +233,19 @@ export function renderLedger(entries: QuizEntry[], date: string, lang: WikiLang)
 export function loadLedger(ws: string): { entries: QuizEntry[]; path: string } {
   const root = resolve(ws);
   const path = ledgerPath(root, getConfig(root));
-  if (!existsSync(path)) return { entries: [], path };
+  const content = readRepoFile(root, repoRelative(root, path));
+  if (content === null) return { entries: [], path };
   try {
-    return { entries: parseLedger(readFileSync(path, "utf-8")), path };
+    return { entries: parseLedger(content), path };
   } catch {
     return { entries: [], path };
   }
 }
 
 function saveLedger(root: string, cfg: WikiConfig, entries: QuizEntry[], date: string): string {
-  const dir = join(root, "docs", "wiki", cfg.quizDir);
-  mkdirSync(dir, { recursive: true });
+  ensureRepoDir(root, join("docs", "wiki", cfg.quizDir));
   const path = ledgerPath(root, cfg);
-  writeRepoFile(path, renderLedger(entries, date, resolveWikiLang(root)));
+  writeRepoFile(root, repoRelative(root, path), renderLedger(entries, date, resolveWikiLang(root)));
   return path;
 }
 
@@ -274,21 +273,17 @@ export function weightFor(dir: string, domain: string, cfg: WikiConfig): number 
 export function scanCandidates(ws: string): QuizCandidate[] {
   const root = resolve(ws);
   const cfg = getConfig(root);
-  const wiki = join(root, "docs", "wiki");
   const out: QuizCandidate[] = [];
   for (const dir of [...logDirs(cfg), cfg.topicDir]) {
-    const abs = join(wiki, dir);
-    if (!existsSync(abs)) continue;
-    let files: string[];
-    try {
-      files = readdirSync(abs).filter((n) => n.endsWith(".md"));
-    } catch {
-      continue;
-    }
-    for (const f of files) {
+    const relDir = join("docs", "wiki", dir);
+    const files = readRepoDir(root, relDir).filter((entry) => entry.isFile && entry.name.endsWith(".md"));
+    for (const entry of files) {
+      const f = entry.name;
       let meta: Record<string, string | string[]>;
       try {
-        meta = parseFrontmatter(readFileSync(join(abs, f), "utf-8"));
+        const content = readRepoFile(root, join(relDir, f));
+        if (content === null) continue;
+        meta = parseFrontmatter(content);
       } catch {
         continue;
       }
@@ -310,9 +305,11 @@ export function scanCandidates(ws: string): QuizCandidate[] {
 
 // A ledger entry stays selectable only while its page is still live knowledge (an existing
 // file that is neither superseded history nor an unconfirmed draft).
-function statusLive(abs: string): boolean {
+function statusLive(root: string, page: string): boolean {
   try {
-    const status = String(parseFrontmatter(readFileSync(abs, "utf-8")).status ?? "ready");
+    const content = readRepoFile(root, join("docs", "wiki", page));
+    if (content === null) return false;
+    const status = String(parseFrontmatter(content).status ?? "ready");
     return status !== "superseded" && status !== "draft";
   } catch {
     return false;
@@ -349,9 +346,9 @@ export function selectNext(ws: string, opts: { limit?: number; date?: string } =
   const missing: string[] = [];
   const live: QuizEntry[] = [];
   for (const e of entries) {
-    const abs = join(root, "docs", "wiki", e.page);
-    if (!existsSync(abs)) missing.push(e.page);
-    else if (statusLive(abs)) live.push(e);
+    const rel = join("docs", "wiki", e.page);
+    if (!repoFileExists(root, rel)) missing.push(e.page);
+    else if (statusLive(root, e.page)) live.push(e);
   }
 
   const askedToday = live.filter((e) => e.last === date).length;
@@ -395,7 +392,7 @@ export function recordResult(
   if (!RESULTS.has(opts.result)) throw new Error(`result must be correct|wrong|skip: ${JSON.stringify(opts.result)}`);
   if (!DATE_RE.test(date)) throw new Error(`--date must be YYYY-MM-DD: ${JSON.stringify(date)}`);
   const page = normalizePage(opts.page);
-  if (!existsSync(join(root, "docs", "wiki", page))) throw new Error(`page not found under docs/wiki/: ${page}`);
+  if (!repoFileExists(root, join("docs", "wiki", page))) throw new Error(`page not found under docs/wiki/: ${page}`);
   // Only quizzable content is recordable — the same dirs scanCandidates feeds from. Blocks the
   // queue, the quiz layer itself (yes, the ledger was recordable), L0/overview/log root files.
   const top = page.split("/")[0] ?? "";
@@ -408,7 +405,7 @@ export function recordResult(
   const pruned: string[] = [];
   for (const e of entries) {
     if (e.page === page) continue; // re-inserted below
-    if (!existsSync(join(root, "docs", "wiki", e.page))) pruned.push(e.page);
+    if (!repoFileExists(root, join("docs", "wiki", e.page))) pruned.push(e.page);
     else kept.push(e);
   }
   const prior = entries.find((e) => e.page === page);
@@ -481,8 +478,7 @@ export function dueCount(ws: string, date?: string): number {
     const { entries } = loadLedger(root);
     return entries.filter((e) => {
       if (e.due > d || e.last === d) return false;
-      const abs = join(root, "docs", "wiki", e.page);
-      return existsSync(abs) && statusLive(abs);
+      return repoFileExists(root, join("docs", "wiki", e.page)) && statusLive(root, e.page);
     }).length;
   } catch {
     return 0;

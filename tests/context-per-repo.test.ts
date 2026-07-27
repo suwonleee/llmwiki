@@ -9,6 +9,8 @@ import { tmpdir } from "node:os";
 import { buildContext } from "../src/engine/context.ts";
 import { ensureSkeleton } from "../src/engine/update.ts";
 import { _resetForTests, CONFIGS_DIR } from "../src/engine/config.ts";
+import { resetEnrollmentCache } from "../src/engine/enrollment.ts";
+import { enrollRepo, makeGitRepo } from "./support/git-repo.ts";
 
 const tmps: string[] = [];
 function mk(prefix: string): string {
@@ -16,14 +18,20 @@ function mk(prefix: string): string {
   tmps.push(d);
   return d;
 }
+// Cold start is fail-closed: only an ENROLLED git worktree produces output at all, so every
+// repo fixture here goes through git init + enrollment.
+function mkRepo(prefix: string): string {
+  return enrollRepo(makeGitRepo(join(mk(prefix), "repo")));
+}
 afterEach(() => {
   _resetForTests();
+  resetEnrollmentCache();
   for (const d of tmps.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
 test("cold-start operating rules reflect a per-repo configs/ config", () => {
   const clone = mk("llmwiki-ctx-clone-");
-  const repo = mk("llmwiki-ctx-repo-");
+  const repo = mkRepo("llmwiki-ctx-repo-");
   const cfgDir = join(clone, CONFIGS_DIR);
   mkdirSync(cfgDir, { recursive: true });
   writeFileSync(
@@ -53,8 +61,8 @@ guide = "lesson"
 
 test("a stock repo in the same process still shows the historical dirs (no cross-repo leak)", () => {
   const clone = mk("llmwiki-ctx-clone2-");
-  const custom = mk("llmwiki-ctx-custom-");
-  const stock = mk("llmwiki-ctx-stock-");
+  const custom = mkRepo("llmwiki-ctx-custom-");
+  const stock = mkRepo("llmwiki-ctx-stock-");
   const cfgDir = join(clone, CONFIGS_DIR);
   mkdirSync(cfgDir, { recursive: true });
   writeFileSync(

@@ -1,14 +1,5 @@
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  renameSync,
-  statSync,
-} from "node:fs";
 import { basename, join, relative, resolve, sep } from "node:path";
 import * as capture from "./capture.ts";
 import { COLD_INDEX_RELATIVE_PATH } from "./cold-index.ts";
@@ -16,6 +7,17 @@ import { getConfig, type WikiConfig } from "./config.ts";
 import { inspectDatabaseHealth, compactDatabase, type DatabaseHealthReport } from "./db-maintenance.ts";
 import { WikiIndex } from "./db.ts";
 import { parseQueue } from "./gaps.ts";
+import {
+  canonicalRoot,
+  ensureRepoDir,
+  readRepoDir,
+  readRepoFileBytes,
+  readRepoFile,
+  renameRepoPath,
+  repoDirExists,
+  repoFileExists,
+  repoPath,
+} from "./repo-write.ts";
 import { Linter, type LintIssue } from "./lint.ts";
 import { today as todayLocal } from "./today.ts";
 import { normalizeOverview } from "./overview.ts";
@@ -91,48 +93,38 @@ interface IndexInspection {
 const WIKI_RELATIVE = join("docs", "wiki");
 const THIRTY_MIB = 30 * 1024 * 1024;
 
-function hashFile(path: string): string | null {
-  try {
-    return createHash("sha256").update(readFileSync(path)).digest("hex");
-  } catch {
-    return null;
-  }
+function hashFile(root: string, path: string): string | null {
+  const bytes = readRepoFileBytes(root, path);
+  return bytes === null ? null : createHash("sha256").update(bytes).digest("hex");
 }
 
 function walkKnowledgeFiles(root: string, cfg: WikiConfig): Map<string, string | null> {
-  const wikiRoot = join(root, WIKI_RELATIVE);
-  const quizRoot = join(wikiRoot, cfg.quizDir) + sep;
+  const quizRoot = join(WIKI_RELATIVE, cfg.quizDir) + sep;
   const files = new Map<string, string | null>();
 
   function walk(dir: string): void {
-    let entries;
-    try {
-      entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
+    const entries = readRepoDir(root, dir);
     for (const entry of entries) {
       if (entry.name.startsWith(".")) continue;
       const full = join(dir, entry.name);
-      if (entry.isSymbolicLink()) continue;
-      if (entry.isDirectory()) {
+      if (entry.isDirectory) {
         if (full + sep === quizRoot || full.startsWith(quizRoot)) continue;
         walk(full);
-      } else if (entry.isFile()) {
-        const relativePath = relative(root, full).replaceAll("\\", "/");
+      } else if (entry.isFile) {
+        const relativePath = full.replaceAll("\\", "/");
         if (relativePath === COLD_INDEX_RELATIVE_PATH) continue;
-        files.set(relativePath, hashFile(full));
+        files.set(relativePath, hashFile(root, relativePath));
       }
     }
   }
 
-  walk(wikiRoot);
+  walk(WIKI_RELATIVE);
   return files;
 }
 
 function inspectIndex(root: string, cfg: WikiConfig): IndexInspection {
   const index = new WikiIndex(root);
-  if (!existsSync(index.dbPath)) {
+  if (!repoFileExists(root, join(".llmwiki", "index.db"))) {
     return {
       health: { status: "missing", missingFromIndex: [], changedOnDisk: [], deletedFromDisk: [] },
       database: null,
@@ -143,7 +135,7 @@ function inspectIndex(root: string, cfg: WikiConfig): IndexInspection {
 
   let db: Database | null = null;
   try {
-    db = new Database(index.dbPath, { readonly: true });
+    db = new Database(repoPath(root, join(".llmwiki", "index.db")), { readonly: true });
     const rows = db
       .query<{ readonly relative_path: string; readonly content_hash: string | null }, []>(
         "SELECT relative_path, content_hash FROM documents WHERE source_kind='wiki'",
@@ -199,12 +191,7 @@ function requiredStructure(root: string, cfg: WikiConfig): string[] {
     join(WIKI_RELATIVE, cfg.files.log),
   ];
   const valid = (path: string, kind: "directory" | "file"): boolean => {
-    try {
-      const status = lstatSync(join(root, path));
-      return !status.isSymbolicLink() && (kind === "directory" ? status.isDirectory() : status.isFile());
-    } catch {
-      return false;
-    }
+    return kind === "directory" ? repoDirExists(root, path) : repoFileExists(root, path);
   };
   return [
     ...directories.filter((path) => !valid(path, "directory")),
@@ -213,10 +200,10 @@ function requiredStructure(root: string, cfg: WikiConfig): string[] {
 }
 
 function inspectGapHealth(root: string, cfg: WikiConfig): WikiDoctorGapHealth {
-  const path = join(root, WIKI_RELATIVE, cfg.queueDir, "gap-queue.md");
-  if (!existsSync(path)) return { exists: false, wellFormed: true, open: 0, resolved: 0 };
+  const path = join(WIKI_RELATIVE, cfg.queueDir, "gap-queue.md");
+  const body = readRepoFile(root, path);
+  if (body === null) return { exists: false, wellFormed: true, open: 0, resolved: 0 };
   try {
-    const body = readFileSync(path, "utf8");
     const gaps = parseQueue(body);
     const itemLines = body.split("\n").filter((line) => /^\s*-\s*\[/.test(line)).length;
     const headings =
@@ -256,25 +243,24 @@ function inspectContinuity(root: string): WikiDoctorContinuityHealth {
 
 function quarantineDerivedIndex(root: string): string[] {
   const indexDir = join(root, ".llmwiki");
-  const recovery = join(indexDir, "recovery");
-  mkdirSync(recovery, { recursive: true });
+  const recovery = ensureRepoDir(root, join(".llmwiki", "recovery"));
   const stamp = new Date().toISOString().replaceAll(/[:.]/g, "-");
   const moved: string[] = [];
   for (const name of ["index.db", "index.db-wal", "index.db-shm"]) {
-    const source = join(indexDir, name);
-    if (!existsSync(source)) continue;
+    if (!repoFileExists(root, join(".llmwiki", name))) continue;
     const target = join(recovery, `${name}.${stamp}.bak`);
-    renameSync(source, target);
+    renameRepoPath(root, join(".llmwiki", name), join(".llmwiki", "recovery", `${name}.${stamp}.bak`));
     moved.push(target);
   }
   return moved;
 }
 
-function derivedIndexNeedsRebuild(path: string): boolean {
-  if (!existsSync(path)) return false;
+function derivedIndexNeedsRebuild(root: string): boolean {
+  const relativePath = join(".llmwiki", "index.db");
+  if (!repoFileExists(root, relativePath)) return false;
   let db: Database | null = null;
   try {
-    db = new Database(path, { readonly: true });
+    db = new Database(repoPath(root, relativePath), { readonly: true });
     return !inspectDatabaseHealth(db).integrity.ok;
   } catch {
     return true;
@@ -317,7 +303,7 @@ function repairDerivedState(root: string, cfg: WikiConfig, actions: WikiDoctorAc
   // deliberately not refreshed here: repeated application of one semantic report must not count
   // as multiple absence observations. The agent workflow refreshes gaps only after a real review.
   const index = new WikiIndex(root);
-  if (derivedIndexNeedsRebuild(index.dbPath)) {
+  if (derivedIndexNeedsRebuild(root)) {
     rebuildQuarantinedIndex(root, index, actions);
   } else {
     try {
@@ -332,7 +318,7 @@ function repairDerivedState(root: string, cfg: WikiConfig, actions: WikiDoctorAc
     } catch (error) {
       // A healthy index plus an unreadable source file is not database corruption. Preserve the
       // existing index and surface the real repair failure instead of quarantining good state.
-      if (!derivedIndexNeedsRebuild(index.dbPath)) throw error;
+      if (!derivedIndexNeedsRebuild(root)) throw error;
       rebuildQuarantinedIndex(root, index, actions);
     }
   }
@@ -381,13 +367,13 @@ export function runWikiDoctor(
   const today = options.today ?? todayLocal();
   let workspaceDirectory = false;
   try {
-    workspaceDirectory = statSync(root).isDirectory();
+    workspaceDirectory = canonicalRoot(root) === root || canonicalRoot(root).length > 0;
   } catch {
     workspaceDirectory = false;
   }
   let repairFailure: string | null = null;
 
-  if (fix && workspaceDirectory && (existsSync(join(root, WIKI_RELATIVE)) || !cfg.error)) {
+  if (fix && workspaceDirectory && (repoDirExists(root, WIKI_RELATIVE) || !cfg.error)) {
     try {
       repairDerivedState(root, cfg, actions);
     } catch (error) {

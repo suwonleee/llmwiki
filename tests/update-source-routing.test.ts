@@ -12,6 +12,9 @@ describe("update-next source routing", () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "llmwiki-update-source-"));
     workspace = join(dir, "repo");
+    // The repository root must EXIST before the engine touches it: the boundary resolves the
+    // canonical root instead of creating whatever path it was handed.
+    mkdirSync(workspace, { recursive: true });
     capture.setStateDir(join(dir, "state"));
   });
 

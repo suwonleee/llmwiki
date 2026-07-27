@@ -23,6 +23,11 @@ git clone https://github.com/suwonleee/llmwiki.git
 cd ~/llmwiki
 ```
 
+上のコマンドは現在の公開版をインストールします。再現可能な導入が必要なら、setup の前に
+[Releases ページ](https://github.com/suwonleee/llmwiki/releases)でリリースタグを選んでください。
+更新は常に手動です。このディレクトリを移動または削除する前に、まずアンインストールしてください
+（下記参照）。インストール済みのフックはこのパスを参照します。
+
 このフォルダからエージェントを**一つだけ**起動します。
 
 ```bash
@@ -38,6 +43,23 @@ setup_text.mdを読み、現在使っているコーディングエージェン�
 ```
 
 これが推奨インストール経路です。READMEは人向けの入口に留め、ハーネス分岐・ヘルスチェック・`PATH`・フック信頼・OS・復旧規則は、エージェント契約 [`setup_text.md`](../setup_text.md) と [インストールフロー参照](../reference/INSTALLATION_FLOW.md) に置きます。
+
+### 次に、プロジェクトごとに一度だけ有効化
+
+インストールはマシン単位ですが、**リポジトリを登録するまではどこでも何もしません**。
+
+```bash
+llmwiki init /absolute/path/to/my-project
+```
+
+`init` はwikiの雛形を作り、そのワークツリー固有の `.git/` 配下に登録マーカーを置きます。
+実行前は、完成済みの `docs/wiki/` があっても、コールドスタート注入・ターンごとの注入・
+セッションキャプチャはすべて無効です。cloneは信頼の決定ではないためです。以後、追加の確認は
+不要です。
+
+- `llmwiki status <repo>` — 有効か、無効なら理由を表示
+- `llmwiki disable <repo>` — wikiを残したまま無効化
+- 自動連携はGit専用・ワークツリー単位。リポジトリを移動した場合は `init` を再実行
 
 セットアップが正常終了したら、同じセットアップセッションでエージェントに依頼します。
 
@@ -228,13 +250,37 @@ package.json·tsconfig.json   Bunメタデータ（typecheck用; ランタイム
 - コンテンツ — 各リポジトリの `docs/wiki/`（コロケーション; markdown = 真実源）
 - インデックス — `<repo>/.llmwiki/index.db`（いつでも再生成可能）
 
+## アンインストール
+
+```bash
+cd ~/llmwiki
+./setup.sh --uninstall
+./setup.sh --uninstall --purge-data    # ローカル実行状態も削除
+```
+
+削除は所有権マーカーに基づき、llmwikiが設置したフック・プラグイン・コマンド・サービスだけを
+取り除きます。他の設定と各プロジェクトの `docs/wiki/` は変更しません。インストール元のcloneを
+移動・削除する前に、そのcloneから実行してください。`--purge-data` を付けない場合、ローカル状態は
+保持され、場所だけが表示されます。
+
+## このマシンに保持されるデータ
+
+| 内容 | 場所 | 保持期間 |
+|---|---|---|
+| キャプチャキュー（リポジトリと時刻のメタデータ） | `<clone>/.state/capture.db` | `--purge-data` まで |
+| デーモンログ（集計のみ） | `<clone>/.state/daemon.log` | `--purge-data` まで |
+| OpenCode transcript export（会話本文） | `<clone>/.state/opencode-export/` | **30日後に自動削除** |
+
+状態ディレクトリは `0700`、ファイルは `0600` で作成されます。ClaudeとCodexのtranscriptは
+各ハーネスの保存場所から読み、llmwiki側には複製しません。
+
 ## 前提条件
 
 | | 必要 | 備考 |
 |---|---|---|
 | **Bun ≥ 1.1** | ✔ 必須 | 単一バイナリ（`curl -fsSL https://bun.sh/install \| bash`）。`.ts` を直接実行、`bun:sqlite` がFTS5まで同梱 — ビルド·`node_modules` 0。エンジン実行·`bun test` はインストール不要; `bun run typecheck`（tsc）のみ一度 `bun install` が必要（dev専用）。 |
 | **Codex · OpenCode CLI** | 各クイックスタートのみ | `codex` / `opencode` が `PATH` にあること。Codexは加えてlifecycle hook対応 + stable `hooks` 機能の有効化が必要。setupはフック·スキル·サービスを変更する前に、対応状況と既存の機能設定を確認。 |
-| **LLM CLI** | 生成パスのみ | キャプチャ·読み込み注入·`/wiki-*`·`ingest`（capture-only、保留updateをキュー）は無くても動作。`autoupdate·review` と `ingest` の統合はLLM CLIを呼ぶ — 既定 `claude -p`（[インストール](https://docs.claude.com/en/docs/claude-code/setup)）、または `LLMWIKI_LLM_CMD` で別のCLI/プロバイダへ。 |
+| **LLM CLI** | 任意・オプトイン | キャプチャ·読み込み注入·`/wiki-*`·`ingest`（capture-only、保留updateをキュー）は無くても動作し、**既定では何もどこにも送りません**。`autoupdate·review` と `ingest` の統合は、シェル環境で `LLMWIKI_LLM_CMD` を設定したときだけ生成サブプロセスを起動します（例: `export LLMWIKI_LLM_CMD='claude -p {prompt} --model {model} --disallowedTools Write Edit NotebookEdit Bash'`）。未設定ならそれらのパスは「利用不可」として skip し、決定的な処理はすべて動き続けます。 |
 | **OS** | macOS / Linux | macOS=launchd、Linux=systemd（`--user`）、systemdが無ければcron+nohupへフォールバック。デーモン詳細は [`daemon/README.md`](../daemon/README.md) |
 
 ### ハーネス · OSノート（Claude Code / Codex / OpenCode / Windows）
@@ -245,7 +291,7 @@ package.json·tsconfig.json   Bunメタデータ（typecheck用; ランタイム
     - ユーザーCLI + `$wiki-*` スキル5つを導入し、`$CODEX_HOME/hooks.json` にnative `SessionStart`/`UserPromptSubmit` フックをマージ
     - 初回のみ: Codexを起動し `/hooks` で正確なコマンドをレビュー — 新規·変更フックは信頼されるまで実行されない
     - キャプチャは `$CODEX_HOME/sessions/**/*.jsonl[.zst]` を監視
-    - ウォームスキルはCodex自体で動作 · 無人の `autoupdate`/`review` はClaude CLIが無い場合 `LLMWIKI_LLM_CMD` が必要
+    - ウォームスキルはCodex自体で動作 · 無人の `autoupdate`/`review` は `LLMWIKI_LLM_CMD` を設定したときのみ動作
 - **OpenCode** — `./setup.sh --harness opencode`
     - グローバル `/wiki-*` カスタムコマンド、クローン固定の読み込み注入プラグイン、ユーザーCLIを導入
     - キャプチャはSQLiteセッションストアを読む · `XDG_DATA_HOME`/`OPENCODE_DB` もデーモン環境に保存
@@ -286,14 +332,18 @@ cd llmwiki
 
 ## 設定（環境変数）— プロバイダ · モデル · CLI 非依存
 
-生成パス（autoupdate/review）は既定で `claude -p` + 下記の固定された組み込みモデルIDを使い、無設定なら標準の挙動と完全に同一です。
+生成パス（autoupdate/review）は**明示的に有効化するまで停止**しています。無設定では
+サブプロセスを起動せず、どのproviderにも何も送りません。マシン環境で `LLMWIKI_LLM_CMD` を
+設定した場合だけ有効になり、リポジトリ設定・Markdown・追跡ファイル・自動読込される `.env`
+からは有効化できません。送信前には必ずsecret screeningを行います。
 
 | env | 既定値 | 用途 |
 |---|---|---|
 | `LLMWIKI_MODEL_HEAVY` | `claude-opus-4-8` | 推論級tier — VERIFY（敵対的ゲート）·review（意味検査） |
 | `LLMWIKI_MODEL_LIGHT` | `claude-sonnet-5` | 下書き級tier — WRITE（ページ生成） |
 | `CLAUDE_CONFIG_DIR` | （Claude Code標準） | 設定するとそのディレクトリもClaudeプロファイルとして認識 — フック配線（wire）·キャプチャ（claude source）·doctorが揃って尊重。 |
-| `LLMWIKI_LLM_CMD` | `claude -p {prompt} --model {model} --disallowedTools …` | LLM呼び出しのargvテンプレート。`{prompt}`·`{model}` をトークン単位で置換（シェルパース無し）。`{prompt}` が無ければpromptはstdinへ。引用符が要るmulti-word値はJSON配列（`["my-llm","--q","{prompt}"]`）で。Codex·`llm`·ollamaなど任意のCLIが可。 |
+| `LLMWIKI_LLM_CMD` | **未設定 — サブプロセスもネットワークも無し** | LLM呼び出しのargvテンプレート。`{prompt}`·`{model}` をトークン単位で置換（シェルパース無し）。`{prompt}` が無ければpromptはstdinへ。引用符が要るmulti-word値はJSON配列（`["my-llm","--q","{prompt}"]`）で。Codex·`llm`·ollamaなど任意のCLIが可。 |
+| `LLMWIKI_STATE_DIR` | `<clone>/.state` | 任意のマシンローカル状態パス。リポジトリの `.env` では変更不可。新規・空・既にllmwiki所有のパスだけを許可し、他者の非空ディレクトリは拒否。 |
 | `LLMWIKI_LANG` | `en` | コールドスタートの運用規則/ヘッダの言語。`ko` で韓国語。（wiki本文は書かれたまま — UI文言のみ切替。） |
 | `LLMWIKI_SEARCH_RELAX` | （on） | `off` で緩和フォールバック無効 — 自然文クエリがstrict ANDで0件のとき、同じ語をORで1回だけ再試行（trigram安全·Unicode/CJK対応·stopwordリスト無し）。A/B測定用キルスイッチ。 |
 | `LLMWIKI_MAX_SOURCE_BYTES` | `262144`（256KB） | ソースファイル毎のコンテンツ上限。超過ファイル（数MBのyaml/jsonフィクスチャ等）はメタデータのみ登録 — 名前·パスでは見つかるが全文インデックスは除外。wikiページは対象外。フィクスチャの多いリポジトリでもインデックスを小さく、検索を速く — 検索/turn-context品質は不変。 |

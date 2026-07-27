@@ -13,17 +13,30 @@
 // modern Codex keeps a SQLite thread index (~/.codex/state_*.sqlite) whose `rollout_path`
 // still points at the jsonl rollouts this adapter reads; sessions/ is created lazily on the
 // first user message, so a freshly-installed (unused) Codex has no sessions/ dir yet.
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import type { DiscoveredSession, ParseOpts, TranscriptSource } from "../source.ts";
+import { join, relative } from "node:path";
+import type { DiscoveredRoute, DiscoveredSession, ParseOpts, TranscriptSource } from "../source.ts";
+import { countLines, discoverViaRoutes, scanIdentity, type IdentitySpec } from "./routing.ts";
 import { readTail, type Increment, type Turn } from "../extract.ts";
+import { canonicalWorktree } from "../enrollment.ts";
 
-const HOME = process.env.HOME?.trim() || homedir();
 // Codex honors $CODEX_HOME (falling back to ~/.codex) for its state dir — mirror that so a
 // user who relocates CODEX_HOME is still captured. (openai/codex utils/home-dir.)
-const CODEX_HOME = process.env.CODEX_HOME?.trim() || join(HOME, ".codex");
-const SESSIONS_ROOT = join(CODEX_HOME, "sessions");
+//
+// Read LAZILY, like summaryFor already did: a module-level snapshot silently ignores an
+// environment set after import, which in practice meant a test pointed at a fixture still
+// scanned the real ~/.codex.
+function home(): string {
+  return process.env.HOME?.trim() || homedir();
+}
+function codexHome(): string {
+  return process.env.CODEX_HOME?.trim() || join(home(), ".codex");
+}
+function sessionsRoot(): string {
+  return join(codexHome(), "sessions");
+}
 
 function walkJsonl(dir: string, out: string[]): void {
   let entries;
@@ -40,6 +53,80 @@ function walkJsonl(dir: string, out: string[]): void {
     else if (e.isFile() && (e.name.endsWith(".jsonl") || e.name.endsWith(".jsonl.zst")))
       out.push(full);
   }
+}
+
+// Modern Codex records thread identity separately from the rollout body. That index is the only
+// privacy-preserving way to route a rollout that Codex compressed before llmwiki's first sweep:
+// reading a .zst header requires decompressing the whole conversation. Query exactly the three
+// identity columns needed for routing, and accept only real compressed files below sessions/.
+function stateDbPaths(): string[] {
+  let names: string[];
+  try {
+    names = readdirSync(codexHome());
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const name of names) {
+    if (!/^state_[A-Za-z0-9_.-]+\.sqlite$/.test(name)) continue;
+    const path = join(codexHome(), name);
+    try {
+      const st = lstatSync(path);
+      if (st.isFile() && !st.isSymbolicLink()) out.push(realpathSync(path));
+    } catch {
+      /* raced with Codex cleanup */
+    }
+  }
+  return out;
+}
+
+function indexedCompressedRoutes(): DiscoveredRoute[] {
+  const byPath = new Map<string, DiscoveredRoute>();
+  for (const dbPath of stateDbPaths()) {
+    let db: Database | null = null;
+    try {
+      db = new Database(dbPath, { readonly: true });
+      const rows = db.query("SELECT id, rollout_path, cwd FROM threads").all() as {
+        id: unknown;
+        rollout_path: unknown;
+        cwd: unknown;
+      }[];
+      for (const row of rows) {
+        if (typeof row.rollout_path !== "string") continue;
+        const candidate = resolveRolloutPath(row.rollout_path);
+        if (!candidate.endsWith(".jsonl.zst")) continue;
+        let path: string;
+        try {
+          const st = lstatSync(candidate);
+          if (!st.isFile() || st.isSymbolicLink()) continue;
+          path = realpathSync(candidate);
+        } catch {
+          continue;
+        }
+        if (!isCodexTranscript(path)) continue;
+        const sessionId = typeof row.id === "string" && row.id ? row.id : null;
+        const repo = typeof row.cwd === "string" && row.cwd ? row.cwd : null;
+        if (!sessionId || !repo) continue;
+        let logicalPath: string;
+        try {
+          const rel = relative(realpathSync(sessionsRoot()), path);
+          if (!rel || rel === ".." || rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) continue;
+          logicalPath = join(sessionsRoot(), rel).slice(0, -".zst".length);
+        } catch {
+          continue;
+        }
+        // Queue identity must survive Codex's in-place `foo.jsonl` → `foo.jsonl.zst` rotation.
+        // Existing rows use the lexical path beneath the configured CODEX_HOME, even when that
+        // root is a symlink. Rebuild that same logical path from the validated real file.
+        byPath.set(path, { path: logicalPath, sessionId, repo, sourcePath: path, changePath: path });
+      }
+    } catch {
+      /* schema drift or a transient lock: the next sweep retries */
+    } finally {
+      db?.close();
+    }
+  }
+  return [...byPath.values()];
 }
 
 // ---- zstd-transparent reading -------------------------------------------------------
@@ -112,6 +199,26 @@ function fields(o: any): { cwd: string | null; session: string | null; role: str
   return { cwd, session, role, text };
 }
 
+// Routing has a stricter data boundary than parsing. Do not reuse `fields()` here: that helper
+// intentionally walks message content and assembles text for an enrolled/explicit parse, while
+// stage 1 is allowed to inspect identity fields only.
+// Stage-1 routing under the same hard budget as the Claude adapter: at most ROUTE_MAX_BYTES from
+// the head, at most ROUTE_MAX_RECORDS complete records, cwd/session only, stop as soon as both
+// are known. Codex puts identity in a `session_meta` record at the very top of a rollout, so this
+// almost always resolves within the first record.
+// Codex identity, declared for the shared scanner so that stage-1 never
+// decodes a rollout's body. The previous implementation JSON.parsed each bounded record, which
+// materialized message text for repositories the user had not enrolled — the Claude adapter
+// already refused to. One scanner now gives both adapters the identical guarantee.
+const CODEX_IDENTITY: IdentitySpec = {
+  cwd: ["cwd", "payload.cwd", "git.repository_path", "payload.git.repository_path"],
+  session: ["id", "session_id", "payload.id", "payload.session_id"],
+};
+
+function routeMeta(path: string): { cwd: string | null; session: string | null } {
+  return scanIdentity(path, CODEX_IDENTITY);
+}
+
 function probeMeta(path: string): { cwd: string | null; session: string | null; lines: number } {
   let cwd: string | null = null;
   let session: string | null = null;
@@ -143,8 +250,16 @@ function probeMeta(path: string): { cwd: string | null; session: string | null; 
 // there, so compare on a forward-slash-normalized form (both / and \ are accepted).
 function isCodexTranscript(path: string): boolean {
   if (!path.endsWith(".jsonl") && !path.endsWith(".jsonl.zst")) return false;
-  const p = path.replace(/\\/g, "/");
-  const root = SESSIONS_ROOT.replace(/\\/g, "/");
+  let realPath = path;
+  let realRoot = sessionsRoot();
+  try {
+    realPath = realpathSync(path);
+    realRoot = realpathSync(sessionsRoot());
+  } catch {
+    /* a raced path is rejected by its caller; keep lexical paths for the cheap probe guard */
+  }
+  const p = realPath.replace(/\\/g, "/");
+  const root = realRoot.replace(/\\/g, "/");
   return p === root || p.startsWith(root + "/");
 }
 
@@ -161,9 +276,9 @@ function summaryFor(path: string): string | null {
     const m = path.replace(/\\/g, "/").match(THREAD_ID_RE);
     if (!m) return null;
     const threadId = m[1]!.toLowerCase();
-    // env read is LAZY (unlike SESSIONS_ROOT) so tests can point CODEX_HOME at a fixture.
-    const home = process.env.CODEX_HOME?.trim() || join(HOME, ".codex");
-    const dir = join(home, "memories", "rollout_summaries");
+    // env read is LAZY (unlike sessionsRoot()) so tests can point CODEX_HOME at a fixture.
+    const codexDir = codexHome();
+    const dir = join(codexDir, "memories", "rollout_summaries");
     let entries: string[];
     try {
       entries = readdirSync(dir).filter((f) => f.endsWith(".md"));
@@ -193,13 +308,64 @@ export const codexSource: TranscriptSource = {
   kind: "codex",
   summaryFor,
 
-  discover(): DiscoveredSession[] {
+  // Routing reads the HEAD of a plain rollout under the shared byte/record budget, and does not
+  // touch compressed ones at all: decompressing a .zst means materializing an entire conversation
+  // in memory just to learn which repository it belonged to — the exact work this stage exists to
+  // avoid for repositories that were never enrolled. A rollout that is already in the capture
+  // queue keeps resolving its .zst sibling through the condense path, and an explicit `ingest`
+  // remains an intentional full read.
+  discoverRoutes(): DiscoveredRoute[] {
     const files: string[] = [];
-    walkJsonl(SESSIONS_ROOT, files);
-    return files.map((path) => {
-      const { cwd, session, lines } = probeMeta(path);
-      return { path, sessionId: session, repo: cwd, lines };
-    });
+    walkJsonl(sessionsRoot(), files);
+    const out: DiscoveredRoute[] = [];
+    for (const path of files) {
+      if (path.endsWith(".zst")) continue;
+      const { cwd, session } = routeMeta(path);
+      out.push({ path, sessionId: session, repo: cwd });
+    }
+    out.push(...indexedCompressedRoutes());
+    return out;
+  },
+
+  materialize(route: DiscoveredRoute): DiscoveredSession | null {
+    if (!route.repo) return null;
+    if (resolveRolloutPath(route.path).endsWith(".zst")) {
+      // Enrollment has already been checked by the daemon. Now full decompression is allowed, but
+      // revalidate the index metadata against the rollout before the content can enter the queue.
+      const meta = probeMeta(route.path);
+      const transcriptRepo = meta.cwd ? canonicalWorktree(meta.cwd) : null;
+      const routedRepo = canonicalWorktree(route.repo);
+      if (
+        !meta.session ||
+        !route.sessionId ||
+        meta.session !== route.sessionId ||
+        !transcriptRepo ||
+        transcriptRepo !== routedRepo
+      ) {
+        return null;
+      }
+      return { path: route.path, sessionId: route.sessionId, repo: transcriptRepo, lines: meta.lines };
+    }
+    return { path: route.path, sessionId: route.sessionId, repo: route.repo, lines: countLines(route.path) };
+  },
+
+  routeFor(path: string): DiscoveredRoute | null {
+    if (!isCodexTranscript(path)) return null;
+    if (path.endsWith(".zst")) {
+      let real = path;
+      try {
+        real = realpathSync(path);
+      } catch {
+        return null;
+      }
+      return indexedCompressedRoutes().find((route) => route.sourcePath === real) ?? null;
+    }
+    const { cwd, session } = routeMeta(path);
+    return { path, sessionId: session, repo: cwd };
+  },
+
+  discover(): DiscoveredSession[] {
+    return discoverViaRoutes(codexSource);
   },
 
   probe(path: string): DiscoveredSession | null {
@@ -260,7 +426,7 @@ export const codexSource: TranscriptSource = {
 
   watchRoots(): string[] {
     try {
-      return statSync(SESSIONS_ROOT).isDirectory() ? [SESSIONS_ROOT] : [];
+      return statSync(sessionsRoot()).isDirectory() ? [sessionsRoot()] : [];
     } catch {
       return []; // no ~/.codex → nothing to watch (byte-identical to claude-only daemon)
     }

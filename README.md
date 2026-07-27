@@ -23,6 +23,11 @@ git clone https://github.com/suwonleee/llmwiki.git
 cd ~/llmwiki
 ```
 
+These commands install the current public version. If you need a reproducible deployment, choose
+a tagged version on the [Releases page](https://github.com/suwonleee/llmwiki/releases) before
+setup. Updates are always manual. Uninstall before moving or deleting this directory (see below):
+the installed hooks point at it.
+
 Start **one** agent from this folder:
 
 ```bash
@@ -41,6 +46,25 @@ This is the recommended installation path. The README stays human-facing; exact 
 health checks, `PATH` handling, hook trust, OS notes, and recovery rules live in the
 agent contract [`setup_text.md`](setup_text.md) and its
 [installation-flow reference](reference/INSTALLATION_FLOW.md).
+
+### Then turn it on for a project — once
+
+Installation is machine-level, but it stays **inert everywhere until you enroll a repository**:
+
+```bash
+llmwiki init /absolute/path/to/my-project     # one project-level activation step
+```
+
+`init` scaffolds the wiki and records a marker under that worktree's `.git/` directory. Until it
+runs, that project produces no cold-start context, no per-turn injection, and no captured
+sessions — even if it already contains a complete `docs/wiki/`, because a wiki arrives with any
+`git clone` and cloning someone's repository is not a decision to run llmwiki in it. After `init`
+there are no further prompts or confirmations, ever.
+
+- `llmwiki status <repo>` — is it on, and why not
+- `llmwiki disable <repo>` — turn it back off (your wiki files are untouched)
+- automatic integration is **git-only** and per-worktree; two linked worktrees enroll separately,
+  and moving a repository requires re-running `init` (the marker records its canonical path)
 
 After setup reports healthy, stay in the same setup session and tell the agent:
 
@@ -235,13 +259,43 @@ Storage principle — three homes, one owner each:
 - content — each repo's own `docs/wiki/` (co-located; markdown = source of truth)
 - index — `<repo>/.llmwiki/index.db` (regenerable at any time)
 
+## Uninstall
+
+```bash
+cd ~/llmwiki
+./setup.sh --uninstall                 # remove every llmwiki-owned hook, plugin, command, launcher and service
+./setup.sh --uninstall --purge-data    # …and delete llmwiki's local runtime state as well
+```
+
+Removal is by ownership, not by restoring a backup: entries llmwiki installed are removed, and
+anything else in your harness configuration is left exactly as it is (including hooks you added
+between two installs). Run it from the installed clone **before** you move or delete that clone.
+
+- your wikis are never touched — `docs/wiki/` is ordinary Markdown in your own repositories
+- without `--purge-data`, the local state (capture queue, daemon log, transcript exports) is kept
+  and its location reported; `--purge-data` deletes exactly the artifacts llmwiki created, never a
+  directory or file it did not create
+- per-project enrollment markers live in each repo's `.git/llmwiki/` and are inert without the
+  engine; remove one explicitly with `llmwiki disable <repo>`
+
+## Data llmwiki keeps on your machine
+
+| what | where | retention |
+|---|---|---|
+| capture queue (which repositories you worked in, when — metadata only) | `<clone>/.state/capture.db` | kept until `--purge-data` |
+| daemon log (aggregate counts; never repository paths of unenrolled projects) | `<clone>/.state/daemon.log` | kept until `--purge-data` |
+| OpenCode transcript exports (conversation text — the only bodies llmwiki stores) | `<clone>/.state/opencode-export/` | **auto-deleted after 30 days** |
+
+The state directory and everything in it are created private (`0700` / `0600`). Claude and Codex
+transcripts are read in place from the harness's own store — llmwiki makes no copy of them.
+
 ## Prerequisites
 
 | | Required | Notes |
 |---|---|---|
 | **Bun ≥ 1.1** | ✔ required | Single binary (`curl -fsSL https://bun.sh/install \| bash`). Runs `.ts` directly, and `bun:sqlite` bundles FTS5 — zero build·`node_modules`. Running the engine and `bun test` work with no install; only `bun run typecheck` (tsc) needs a one-time `bun install` (dev-only). |
 | **Codex · OpenCode CLI** | their quick starts only | `codex` / `opencode` on `PATH`. Codex additionally needs lifecycle-hook support with the stable `hooks` feature enabled. Setup checks support — and any existing feature setting — before changing hooks, skills, or services. |
-| **LLM CLI** | only for the generative pass | Capture·read-injection·`/wiki-*`·`ingest` (capture-only, queues pending updates) work without it. `autoupdate·review` and `ingest`'s consolidation call an LLM CLI — default `claude -p` ([install](https://docs.claude.com/en/docs/claude-code/setup)), or point `LLMWIKI_LLM_CMD` at a different CLI/provider. |
+| **LLM CLI** | optional, opt-in | Capture·read-injection·`/wiki-*`·`ingest` (capture-only, queues pending updates) work without it, and **nothing is sent anywhere by default**. `autoupdate·review` and `ingest`'s consolidation launch a generative subprocess only when you set `LLMWIKI_LLM_CMD` in your shell environment (e.g. `export LLMWIKI_LLM_CMD='claude -p {prompt} --model {model} --disallowedTools Write Edit NotebookEdit Bash'`). Unset → those passes report "unavailable" and skip; everything deterministic keeps working. |
 | **OS** | macOS / Linux | macOS=launchd, Linux=systemd (`--user`), falls back to cron+nohup if systemd is unavailable. Daemon details in [`daemon/README.md`](daemon/README.md) |
 
 ### Harness · OS notes (Claude Code / Codex / OpenCode / Windows)
@@ -252,7 +306,7 @@ Storage principle — three homes, one owner each:
     - installs the user CLI + five `$wiki-*` skills, and merges native `SessionStart`/`UserPromptSubmit` hooks into `$CODEX_HOME/hooks.json`
     - one-time: start Codex and review the exact commands in `/hooks` — new or changed hooks stay skipped until trusted
     - capture watches `$CODEX_HOME/sessions/**/*.jsonl[.zst]`
-    - warm skills run on Codex itself; unattended `autoupdate`/`review` still need `LLMWIKI_LLM_CMD` when the Claude CLI is absent
+    - warm skills run on Codex itself; unattended `autoupdate`/`review` run only when `LLMWIKI_LLM_CMD` is set
 - **OpenCode** — `./setup.sh --harness opencode`
     - installs global `/wiki-*` custom commands, a clone-pinned read-injection plugin, and the user CLI
     - capture reads the SQLite session store; `XDG_DATA_HOME`/`OPENCODE_DB` are preserved in the daemon environment
@@ -304,14 +358,20 @@ cd llmwiki
 
 ## Configuration (environment variables) — provider · model · CLI agnostic
 
-The generative pass (autoupdate/review) defaults to `claude -p` + the built-in pinned model IDs listed below; with no configuration at all, behavior is identical to stock.
+The generative pass (autoupdate/review) is **off until you enable it**: with no configuration at
+all, llmwiki launches no subprocess and sends nothing to any provider. Setting `LLMWIKI_LLM_CMD` in
+your machine's environment is the one-time opt-in — it cannot be set by a repository's config file,
+a Markdown page, a tracked file, or an autoloaded `.env`. Once enabled, every transcript- or
+page-derived block is screened for secrets before it becomes part of a prompt, and a block that
+screens down to nothing cancels the call instead of sending the remainder.
 
 | env | default | purpose |
 |---|---|---|
 | `LLMWIKI_MODEL_HEAVY` | `claude-opus-4-8` | reasoning-tier — VERIFY (adversarial gate)·review (semantic check) |
 | `LLMWIKI_MODEL_LIGHT` | `claude-sonnet-5` | draft-tier — WRITE (page generation) |
 | `CLAUDE_CONFIG_DIR` | (Claude Code standard) | If set, that directory is also recognized as a Claude profile — hook wiring (wire)·capture (claude source)·doctor all honor it. |
-| `LLMWIKI_LLM_CMD` | `claude -p {prompt} --model {model} --disallowedTools …` | argv template for the LLM call. `{prompt}`·`{model}` are substituted token-by-token (no shell parsing). If `{prompt}` is absent, the prompt is sent via stdin. For multi-word values needing quotes, use a JSON array (`["my-llm","--q","{prompt}"]`). Any CLI works — Codex·`llm`·ollama, etc. |
+| `LLMWIKI_LLM_CMD` | **unset — no subprocess, no network** | argv template for the LLM call. `{prompt}`·`{model}` are substituted token-by-token (no shell parsing). If `{prompt}` is absent, the prompt is sent via stdin. For multi-word values needing quotes, use a JSON array (`["my-llm","--q","{prompt}"]`). Any CLI works — Codex·`llm`·ollama, etc. |
+| `LLMWIKI_STATE_DIR` | `<clone>/.state` | Optional machine-local state location. Repository `.env` files cannot redirect it. A custom path must be new, empty, or already owned by llmwiki; foreign non-empty directories fail closed. |
 | `LLMWIKI_LANG` | `en` | Language for cold-start operating rules/headers. `ko` for Korean. (The wiki body itself stays as written — only the UI copy switches.) |
 | `LLMWIKI_SEARCH_RELAX` | (on) | Set `off` to disable the relaxed-recall fallback — when a natural-language query strict-AND matches 0 rows, search retries ONCE with the same terms OR-joined (trigram-safe, Unicode/CJK-aware, no stopword lists). Kill-switch for A/B measurement. |
 | `LLMWIKI_MAX_SOURCE_BYTES` | `262144` (256KB) | Per-file content cap for SOURCE files. Larger files (multi-MB yaml/json fixtures) are registered metadata-only — findable by name, but not full-text indexed. Wiki pages are exempt. Keeps the index compact and search fast on fixture-heavy repos, with no quality change on search/turn-context. |

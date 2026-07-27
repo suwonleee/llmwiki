@@ -7,16 +7,15 @@
 // ADVISORY ONLY: review never edits existing pages. It emits a report (default: print;
 // --commit writes docs/wiki/0_review/semantic-review-<date>.md, status: draft) for a
 // human to act on. Single WRITE pass (no VERIFY second model).
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { getConfig, isRepoKorean, renderBodyStyleRule } from "./config.ts";
 import { today as todayLocal } from "./today.ts";
 import { createHash } from "node:crypto";
 import { basename, join, relative as relpath, resolve } from "node:path";
-import { llm } from "./claude.ts";
+import { UNAVAILABLE, llm, llmAvailable, screenOutbound } from "./claude.ts";
 import { WikiIndex, type DocRow } from "./db.ts";
 import { appendLog } from "./update.ts";
 import { MODEL_HEAVY } from "./models.ts";
-import { writeRepoFile } from "./repo-write.ts";
+import { ensureRepoDir, readRepoFile, repoFileExists, writeRepoFile } from "./repo-write.ts";
 
 // review is the JUDGMENT half (semantic lint + grounding adjudication). It is the place
 // where real judgment is needed, so it runs on the heavy tier (strongest model): deterministic
@@ -241,12 +240,11 @@ export function _runHash(briefs: Brief[]): string {
   for (const b of briefs) h.update(`${b.link}|${b.date}|${b.cites}|${b.excerpt}\n`);
   return h.digest("hex").slice(0, 16);
 }
-function _statePath(root: string): string {
-  return join(root, ".llmwiki", "review-state.json");
-}
+const REVIEW_STATE_REL = join(".llmwiki", "review-state.json");
 function _readState(root: string): { hash?: string; date?: string; dest?: string; launched?: string } {
   try {
-    return JSON.parse(readFileSync(_statePath(root), "utf-8"));
+    const raw = readRepoFile(root, REVIEW_STATE_REL);
+    return raw === null ? {} : JSON.parse(raw);
   } catch {
     return {};
   }
@@ -278,17 +276,15 @@ export function inspectReviewHealth(ws: string, today = todayLocal()): ReviewHea
 // existing state so the last completed stamp stays readable; the completion _writeState
 // overwrites with a launch-free object, which is what clears the marker.
 function _markLaunched(root: string, date: string): void {
-  const dir = join(root, ".llmwiki");
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(_statePath(root), JSON.stringify({ ..._readState(root), launched: date }, null, 2), "utf-8");
+  ensureRepoDir(root, ".llmwiki");
+  writeRepoFile(root, REVIEW_STATE_REL, JSON.stringify({ ..._readState(root), launched: date }, null, 2));
 }
 // A completion writes a launch-free object — this is what clears the `launched` marker, and it
 // also clears any CONCURRENT run's marker (two same-repo close-outs racing): acceptable, because
 // the erasing run is itself a completed review and the cadence gate re-runs on schedule anyway.
 function _writeState(root: string, st: { hash: string; date: string; dest: string }): void {
-  const dir = join(root, ".llmwiki");
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(_statePath(root), JSON.stringify(st, null, 2), "utf-8");
+  ensureRepoDir(root, ".llmwiki");
+  writeRepoFile(root, REVIEW_STATE_REL, JSON.stringify(st, null, 2));
 }
 
 // The two lines appended to log.md when a report lands. This is page content in the user's
@@ -366,7 +362,7 @@ export async function review(ws: string, opts: ReviewOpts): Promise<Record<strin
   const runHash = _runHash(scoped);
   if (!force) {
     const st = _readState(root);
-    if (st.hash === runHash && st.dest && existsSync(join(root, st.dest))) {
+    if (st.hash === runHash && st.dest && repoFileExists(root, st.dest)) {
       return {
         verdict: "skip",
         n_pages: scoped.length,
@@ -381,12 +377,50 @@ export async function review(ws: string, opts: ReviewOpts): Promise<Record<strin
     .map((b) => `- [${b.date}] [[${b.link}]] — ${b.title} (cites=${b.cites})\n    Gist: ${b.tldr}\n    Excerpt: ${b.excerpt}`)
     .join("\n");
 
-  const prompt = _PROMPT.replace("{repo}", name).replace("{date}", date).replace("{scopenote}", note).replace("{pages}", pagesTxt);
+  // The brief carries page excerpts — repository text — so it is screened before it becomes a
+  // prompt. Screened to nothing means no call at all, not a redacted call.
+  const screened = screenOutbound({ pages: pagesTxt });
+  if (!screened) {
+    return {
+      verdict: "skipped-screened",
+      n_pages: scoped.length,
+      ...prevIncomplete,
+      reason: "outbound data screened to nothing (secrets); no generative call was made",
+    };
+  }
+  const prompt = _PROMPT.replace("{repo}", name).replace("{date}", date).replace("{scopenote}", note).replace("{pages}", screened.pages!);
+  // An absent or invalid provider is a configuration skip, not evidence that a background
+  // process launched and died. Resolve that state before writing the crash-detection marker.
+  if (!llmAvailable()) {
+    const unavailable = await llm(prompt, model);
+    if (unavailable.startsWith(UNAVAILABLE)) {
+      return {
+        verdict: "skipped-no-provider",
+        n_pages: scoped.length,
+        ...prevIncomplete,
+        reason: unavailable.slice(UNAVAILABLE.length + 1),
+      };
+    }
+    return {
+      verdict: "fail",
+      n_pages: scoped.length,
+      ...prevIncomplete,
+      reason: unavailable.slice(0, 200),
+    };
+  }
   // Past every gate, about to spend the heavy call: stamp the launch (commit runs only — a
   // dry-run never commits by design, so a launch marker there would be a permanent false
   // positive). A successful commit's _writeState below overwrites launch-free = completion.
   if (commit) _markLaunched(root, date);
   const raw = await llm(prompt, model);
+  if (raw.startsWith(UNAVAILABLE)) {
+    return {
+      verdict: "skipped-no-provider",
+      n_pages: scoped.length,
+      ...prevIncomplete,
+      reason: raw.slice(UNAVAILABLE.length + 1),
+    };
+  }
   const page = _extractPage(raw);
   if (raw.startsWith("__ERROR__") || !page.startsWith("---")) {
     return { verdict: "fail", n_pages: scoped.length, ...prevIncomplete, reason: raw.slice(0, 200) };
@@ -398,7 +432,8 @@ export async function review(ws: string, opts: ReviewOpts): Promise<Record<strin
     ...prevIncomplete,
     scope: { included: scoped.length, total: briefs.length, bounded: scoped.length < briefs.length },
   };
-  const dest = join(root, "docs", "wiki", getConfig(root).queueDir, `semantic-review-${date}.md`);
+  const destRel = join("docs", "wiki", getConfig(root).queueDir, `semantic-review-${date}.md`);
+  const dest = join(root, destRel);
   result.dest = relpath(root, dest);
   if (!commit) {
     result.dry_run = true;
@@ -408,9 +443,8 @@ export async function review(ws: string, opts: ReviewOpts): Promise<Record<strin
 
   // advisory report → always lands in 0_review/ (human-judgment queue; never edits live
   // pages). status: draft.
-  const destDir = join(root, "docs", "wiki", getConfig(root).queueDir);
-  if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true });
-  writeRepoFile(dest, page + (page.endsWith("\n") ? "" : "\n"));
+  ensureRepoDir(root, join("docs", "wiki", getConfig(root).queueDir));
+  writeRepoFile(root, destRel, page + (page.endsWith("\n") ? "" : "\n"));
   _writeState(root, { hash: runHash, date, dest: result.dest as string });
   new WikiIndex(ws).indexAll();
   appendLog(

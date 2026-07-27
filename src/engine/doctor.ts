@@ -10,7 +10,10 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { RETIRED_CODEX_SKILLS } from "./install-history.ts";
 import { CLONE_ROOT } from "./paths.ts";
-import { claudeConfigDirs } from "./sources/claude.ts";
+import { claudeConfigDirs, claudeRetentionDays } from "./sources/claude.ts";
+import { EXPIRY_WARN_DAYS, healthReadOnly, pendingPastRetentionReadOnly } from "./capture.ts";
+import { effectiveStateRoot, probeStateRoot } from "./state-dir.ts";
+import { inspectEnrollment } from "./enrollment.ts";
 
 const HOME = process.env.HOME?.trim() || homedir();
 const CORE = [
@@ -269,6 +272,48 @@ function tryRun(cmd: string[], timeoutMs = 5000): { code: number | null; stdout:
 // Re-add a read-injection hook (SessionStart or UserPromptSubmit) to an existing
 // settings.json. Safe: backup → parse → append (preserving OMC/other hooks) →
 // JSON-validate → write.
+/**
+ * Re-add the read-injection hooks a live session silently dropped.
+ *
+ * The harness holds settings.json in memory and writes it back whole on any in-session change
+ * (/model, a permission grant) — clobbering hooks added on disk after that session started,
+ * including the ones setup.sh installed from INSIDE that very session. Observed twice in one day
+ * on the author's machine; both times every check stayed green while the read loop was dead until
+ * the next manual doctor run. The capture daemon is the one llmwiki process that outlives
+ * sessions, so it re-asserts what the human installed.
+ *
+ * Conservative on purpose: only profiles that already exist (never create one), only when NO
+ * llmwiki hook of that event survives in the file — a hook pointing at a DIFFERENT clone is a
+ * conflict for doctor to report, never for a daemon to fight — and only through repairHook's
+ * validated backup → parse → append → re-parse write.
+ */
+export function reassertClaudeReadHooks(): string[] {
+  const notes: string[] = [];
+  for (const dir of claudeConfigDirs()) {
+    const sp = join(dir, "settings.json");
+    if (!existsSync(sp)) continue;
+    let raw: string;
+    try {
+      raw = readFileSync(sp, "utf-8");
+    } catch {
+      continue;
+    }
+    for (const [event, script, cmd] of [
+      ["SessionStart", "hooks/sessionstart-inject.sh", SESSIONSTART_CMD],
+      ["UserPromptSubmit", "hooks/userpromptsubmit-inject.sh", TURNCTX_CMD],
+    ] as const) {
+      if (raw.includes(script)) continue; // some clone's hook survives → not ours to touch
+      notes.push(`${basename(dir)} ${event}: ${repairHook(sp, event, cmd)}`);
+      try {
+        raw = readFileSync(sp, "utf-8"); // repairHook rewrote the file; re-read before the next event
+      } catch {
+        break;
+      }
+    }
+  }
+  return notes;
+}
+
 function repairHook(sp: string, event = "SessionStart", cmd = SESSIONSTART_CMD): string {
   let settings: any;
   try {
@@ -302,6 +347,107 @@ function claudeProfiles(): string[] {
 
 export type DoctorHarness = "all" | "codex" | "claude" | "opencode";
 
+function ageDays(utcText: string | null): number | null {
+  if (!utcText) return null;
+  // capture_queue.first_seen is sqlite's `datetime('now')` — UTC, space-separated.
+  const ms = Date.parse(`${utcText.replace(" ", "T")}Z`);
+  return Number.isFinite(ms) ? (Date.now() - ms) / 86_400_000 : null;
+}
+
+function humanAge(days: number): string {
+  if (days < 1) return "today";
+  if (days < 2) return "1 day ago";
+  return `${Math.floor(days)} days ago`;
+}
+
+/**
+ * Capture health — the half of this installation that fails SILENTLY.
+ *
+ * Every other check here asks "is the wiring present?", and wiring being present is exactly what
+ * both field failures looked like while capture was dead: a router resolving 22 of 2,687 sessions,
+ * and a state root the engine refused to adopt. Neither moved a single ✅ to ⚠️. These three lines
+ * are the ones that would have.
+ */
+function reportCaptureHealth(): number {
+  let issues = 0;
+  const root = effectiveStateRoot();
+  const state = probeStateRoot(root);
+  if (state.usable) {
+    console.log(`  [capture] ✅ state root: ${root} (${state.detail})`);
+  } else {
+    console.log(`  [capture] ❌ state root unusable: ${root}`);
+    console.log(`  [capture]    ${state.detail} — capture cannot write; nothing is being recorded`);
+    issues += 1;
+  }
+
+  const health = healthReadOnly();
+  if (health === null) {
+    console.log("  [capture] • no capture history yet (queue not created)");
+    return issues;
+  }
+
+  // Enrollment inventory, drawn only from repositories the queue already knows — no machine scan.
+  const known = health.repos.filter((r) => existsSync(r));
+  const enrolled: string[] = [];
+  const dormant: string[] = []; // has a wiki, but automatic integration is off
+  for (const repo of known) {
+    if (inspectEnrollment(repo).enabled) enrolled.push(repo);
+    else if (existsSync(join(repo, "docs", "wiki"))) dormant.push(repo);
+  }
+  const preview = (list: string[]): string =>
+    `${list.slice(0, 5).join(" · ")}${list.length > 5 ? ` … (+${list.length - 5})` : ""}`;
+  console.log(`  [capture] ✅ enrolled repositories: ${enrolled.length}${enrolled.length ? ` — ${preview(enrolled)}` : ""}`);
+  if (dormant.length) {
+    // The upgrade trap: a repository whose wiki you still use, silently inert because enrollment
+    // arrived after it. Cold start prints nothing there BY DESIGN, so this is the only surface
+    // that can say so.
+    console.log(`  [capture] ⚠️ ${dormant.length} repositor(ies) hold a wiki but are not enrolled — \`llmwiki init <repo>\``);
+    console.log(`  [capture]    ${preview(dormant)}`);
+    issues += 1;
+  }
+
+  for (const k of health.byKind) {
+    const days = ageDays(k.lastSeen);
+    console.log(`  [capture] • ${k.kind}: ${k.rows} row(s), last ${days === null ? "unknown" : humanAge(days)}`);
+  }
+
+  // Claude Code deletes its own transcripts on `settings.cleanupPeriodDays` (default 30). That is
+  // the real deadline on the backlog — the transcript is the evidence, so a pending session that
+  // passes it is not late, it is gone. Read the number instead of assuming it.
+  const retention = claudeRetentionDays();
+  const backlog = pendingPastRetentionReadOnly(retention.days);
+  const source = retention.configured ? "settings.cleanupPeriodDays" : "Claude Code default";
+  if (backlog.atRisk > 0) {
+    console.log(
+      `  [capture] ⚠️ ${backlog.atRisk} pending Claude session(s) are older than the ${retention.days}-day transcript retention (${source}) — /wiki-deep files them if they are worth keeping`,
+    );
+    issues += 1;
+  } else if (backlog.expiringSoon === 0) {
+    console.log(`  [capture] ✅ no pending session past the ${retention.days}-day transcript retention (${source})`);
+  }
+  // Independent of the line above, not an alternative to it: "already overdue" and "overdue this
+  // week" are different amounts of work with different deadlines, and the second is the only one
+  // where the advice can still be taken.
+  if (backlog.expiringSoon > 0) {
+    console.log(
+      `  [capture] ⚠️ ${backlog.expiringSoon} pending Claude session(s) lose their transcript within ${EXPIRY_WARN_DAYS} day(s) (${retention.days}-day retention, ${source}) — /wiki-deep if any is worth keeping`,
+    );
+    issues += 1;
+  }
+  // Deliberately NOT reported: rows whose transcript is already gone. The 2026-07-22 retention
+  // decision keeps those as a silent ledger (device 2) — an un-filed session that expired is
+  // usually one the human chose not to keep, so announcing it is a nag about a decision they
+  // already made, and telling them to delete the row destroys the only record that it existed.
+  const newest = ageDays(health.lastSeen);
+  if (newest !== null && newest > 7) {
+    console.log(
+      `  [capture] ⚠️ nothing captured in ${Math.floor(newest)} days — check \`llmwiki status <repo>\` and the daemon log`,
+    );
+    issues += 1;
+  }
+  return issues;
+}
+
 export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
   console.log(
     `=== llmwiki doctor (root=${CLONE_ROOT}, harness=${harness}${fix ? ", --fix" : ""}) ===`,
@@ -317,25 +463,31 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
 
   // daemon installed? (OS-aware: macOS launchd / Linux systemd / cron·nohup)
   if (process.platform === "darwin") {
-    if (existsSync(PLIST)) {
-      console.log(`  [daemon] ✅ plist installed: ${PLIST}`);
-      const r = tryRun(["launchctl", "list"]);
-      if (!r.ok) {
-        console.log(`  [daemon] ⚠️ launchctl check failed`);
-      } else {
-        const running = r.stdout.includes(LABEL);
-        if (running) {
-          console.log("  [daemon] ✅ loaded (launchctl)");
-        } else if (fix) {
-          tryRun(["launchctl", "load", PLIST]);
-          console.log("  [daemon] 🔧 launchctl load attempted (re-run doctor to confirm)");
-        } else {
-          console.log("  [daemon] ⚠️ not loaded — `doctor --fix` (or launchctl load it)");
-          issues += 1;
-        }
-      }
-    } else {
+    // What matters is whether capture is RUNNING, not which supervisor is holding it. macOS
+    // without a usable launchd falls back to the same plain background process Linux uses, so the
+    // check accepts that state too — reporting it honestly as degraded (it will not survive a
+    // reboot) rather than as a failure, which would fail `setup.sh` over a working loop.
+    const pgrep = tryRun(["pgrep", "-f", "daemon/watch.ts"]);
+    const unsupervised = pgrep.ok && pgrep.code === 0;
+    const r = existsSync(PLIST) ? tryRun(["launchctl", "list"]) : { ok: false, stdout: "", code: 1 };
+    if (existsSync(PLIST)) console.log(`  [daemon] ✅ plist installed: ${PLIST}`);
+    if (r.ok && r.stdout.includes(LABEL)) {
+      console.log("  [daemon] ✅ loaded (launchctl)");
+    } else if (unsupervised) {
+      console.log(
+        "  [daemon] ⚠️ running unsupervised (no launchd) — capture works now but will NOT survive a reboot; " +
+          "re-run daemon/install.sh after each boot, or see daemon/README.md",
+      );
+    } else if (!existsSync(PLIST)) {
       console.log("  [daemon] ⚠️ not installed — capture loop inactive. Run setup.sh, or see daemon/README.md.");
+      issues += 1;
+    } else if (!r.ok) {
+      console.log("  [daemon] ⚠️ launchctl check failed");
+    } else if (fix) {
+      tryRun(["launchctl", "load", PLIST]);
+      console.log("  [daemon] 🔧 launchctl load attempted (re-run doctor to confirm)");
+    } else {
+      console.log("  [daemon] ⚠️ not loaded — `doctor --fix` (or launchctl load it)");
       issues += 1;
     }
   } else {
@@ -361,6 +513,8 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
       issues += 1;
     }
   }
+
+  issues += reportCaptureHealth();
 
   // SessionStart read-injection hooks across profiles. A Codex-only setup must not fail
   // because an independently managed Claude profile points at another llmwiki clone.

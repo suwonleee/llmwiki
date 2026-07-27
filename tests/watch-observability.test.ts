@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { enrollRepo, makeGitRepo } from "./support/git-repo.ts";
 
 const ROOT = join(import.meta.dir, "..");
 
@@ -20,8 +21,11 @@ describe("capture sweep observability", () => {
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
   test("reports why a discovered Codex session was skipped", () => {
+    // The sweep only materializes sessions belonging to an ENROLLED worktree, so the routed
+    // repository is a real one here; "skipped_short" is then about volume, not about trust.
+    const repo = enrollRepo(makeGitRepo(join(dir, "repo")));
     const rollout = join(codexHome, "sessions", "2026", "07", "22", "rollout-short.jsonl");
-    const records = [{ type: "session_meta", payload: { id: "short", cwd: join(dir, "repo") } }];
+    const records = [{ type: "session_meta", payload: { id: "short", cwd: repo } }];
     while (records.length < 49) records.push({ type: "event_msg", payload: { type: "token_count" } } as any);
     writeFileSync(rollout, records.map((record) => JSON.stringify(record)).join("\n") + "\n");
 

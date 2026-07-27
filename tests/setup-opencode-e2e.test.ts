@@ -49,6 +49,7 @@ describe("fresh OpenCode setup", () => {
       XDG_CONFIG_HOME: configRoot,
       XDG_DATA_HOME: dataRoot,
       OPENCODE_DB: dbPath,
+      LLMWIKI_STATE_DIR: join(dir, "state"),
       PATH: path,
       USER: "fresh-opencode-user",
     };

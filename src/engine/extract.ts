@@ -30,6 +30,19 @@ export function readTail(path: string, startOffset = 0): { raw: Buffer; newOffse
   return { raw, newOffset: startOffset + raw.length };
 }
 
+/**
+ * "Long enough to be a conclusion", measured in meaning rather than in characters.
+ *
+ * A raw character count is a different bar in every script. Hangul and Han carry roughly twice the
+ * meaning per character that English does, so one number silently holds CJK sessions to twice the
+ * standard — the same distortion turn-context's term weighting already corrects for. Measured on
+ * this author's own transcripts (275 Korean assistant messages): 27.6% clear 180, and a further
+ * 17.8% sit between 90 and 180. Those are conclusions, dropped for being written densely.
+ */
+export function substantiveFloor(text: string, minChars: number): number {
+  return /[^\x00-\x7F]/.test(text) ? Math.ceil(minChars / 2) : minChars;
+}
+
 export function extractIncrement(
   path: string,
   startOffset = 0,
@@ -58,6 +71,16 @@ export function extractIncrement(
     cwd = o.cwd || cwd;
     sessionId = o.sessionId || o.session_id || sessionId;
 
+    // Rows that parse as ordinary turns but are nobody's words. A compact-summary row is the
+    // harness's machine-written recap of the previous context window, and a sidechain row belongs
+    // to a subagent's thread — its "user" turn is the orchestrator's task prompt. Both would flow
+    // downstream into `excerpt --kind judgment`, whose whole promise is "a verbatim HUMAN
+    // utterance"; a decision page quoting either would be grounded on something no human said.
+    // (Subagent threads live in subagents/ files today, which discovery already excludes — this
+    // guard covers the rows older sessions carried inline, and the summary rows every compacted
+    // session still carries.)
+    if (o.isSidechain === true || o.isCompactSummary === true) continue;
+
     const typ = o.type;
     const msg = o.message || {};
     const content = msg.content;
@@ -77,7 +100,9 @@ export function extractIncrement(
       if (t.startsWith("<") || t.slice(0, 40).includes("system-reminder")) continue;
       users.push({ ts, role: "user", text: t.slice(0, cap) });
     } else if (typ === "assistant") {
-      if (t.length >= minChars) assistants.push({ ts, role: "assistant", text: t.slice(0, cap) });
+      if (t.length >= substantiveFloor(t, minChars)) {
+        assistants.push({ ts, role: "assistant", text: t.slice(0, cap) });
+      }
     }
   }
 

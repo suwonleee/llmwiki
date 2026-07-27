@@ -6,9 +6,9 @@
 // edits the files. They shape agent behavior across ALL future sessions, so pruning is human judgment,
 // the same stance as `review` (advisory → human applies). Absent files are skipped
 // (never created). Conceptually this is the lint operation extended to the schema layer.
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { getConfig, isRepoKorean } from "./config.ts";
 import { join, relative as relpath } from "node:path";
+import { readRepoFile, readRepoRoot, repoFileExists, repoRelative } from "./repo-write.ts";
 
 // Message language resolves per repo at call time (per-repo config).
 const _ko = (repo: string) => isRepoKorean(repo);
@@ -52,26 +52,21 @@ function targetFiles(repo: string): string[] {
     "MEMORY.md", ".claude/MEMORY.md",
   ];
   for (const c of cands) {
-    const p = join(repo, c);
-    if (existsSync(p) && statSync(p).isFile()) out.push(p);
+    if (repoFileExists(repo, c)) out.push(join(repo, c));
   }
   // Hierarchical AGENTS.md: scan immediate subdirs (one level) for nested files.
-  try {
-    for (const e of readdirSync(repo, { withFileTypes: true })) {
-      if (e.isDirectory() && !e.name.startsWith(".") && !["node_modules", "docs", "dist", "build"].includes(e.name)) {
-        const p = join(repo, e.name, "AGENTS.md");
-        if (existsSync(p)) out.push(p);
-      }
+  for (const e of readRepoRoot(repo)) {
+    if (e.isDirectory && !e.name.startsWith(".") && !["node_modules", "docs", "dist", "build"].includes(e.name)) {
+      const rel = join(e.name, "AGENTS.md");
+      if (repoFileExists(repo, rel)) out.push(join(repo, rel));
     }
-  } catch {
-    /* unreadable repo root → just return what we have */
   }
   return out;
 }
 
 function auditFile(repo: string, path: string): AuditFinding {
   const ko = _ko(repo);
-  const content = readFileSync(path, "utf-8");
+  const content = readRepoFile(repo, repoRelative(repo, path)) ?? "";
   const tokens = estTokens(content);
   const issues: string[] = [];
 
@@ -95,7 +90,7 @@ function auditFile(repo: string, path: string): AuditFinding {
   // Wiki redundancy: if this repo has an llmwiki L0 that the cold-start hook already injects, an
   // overview-laden config file double-injects the same orientation.
   if (
-    existsSync(join(repo, "docs", "wiki", "current-state.md")) &&
+    repoFileExists(repo, join("docs", "wiki", "current-state.md")) &&
     /current-state|docs\/wiki/i.test(content) &&
     overview > 0
   ) {

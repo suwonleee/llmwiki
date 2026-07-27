@@ -7,8 +7,11 @@
 # prompt/session/cwd from it. Codex's native UserPromptSubmit hook can run this same
 # script (payload shape is compatible); other harnesses call the CLI with --prompt.
 #
-# Output contract: plain stdout on exit 0 is added as context. The engine prints AT MOST
-# a few pointer lines and is SILENT when unconfident — so most turns inject nothing.
+# Output contract: `--hook-event` makes the engine emit the JSON envelope BOTH harnesses DECLARE
+# ({"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"…"}}). Bare text
+# also works today (both accept it as a fallback); the envelope is the declared contract rather than
+# the undeclared one. The engine prints AT MOST a few pointer lines and is SILENT when unconfident,
+# and silence stays zero bytes (never an empty envelope) — so most turns inject nothing.
 # Fail-safe: any error → silent exit 0 (never block or pollute a turn).
 set +e
 
@@ -22,5 +25,5 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 PROJ="${CLAUDE_PROJECT_DIR:-$PWD}"
 BUN="$(command -v bun)"
 
-[ -n "$BUN" ] && "$BUN" "$ROOT/src/cli.ts" turn-context "$PROJ" 2>/dev/null
+[ -n "$BUN" ] && "$BUN" "$ROOT/src/cli.ts" turn-context "$PROJ" --hook-event UserPromptSubmit 2>/dev/null
 exit 0

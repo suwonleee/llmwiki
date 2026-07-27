@@ -1,7 +1,6 @@
 // Update orchestration — deterministic scaffolding around the LLM write step.
 // Owns only deterministic parts: watermark state, incremental extraction, wiki
 // skeleton + log bookkeeping.
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import * as capture from "./capture.ts";
@@ -10,7 +9,11 @@ import { getConfig, logDirs, pickLangValue, resolveWikiLang, type WikiConfig } f
 import { render } from "./extract.ts";
 import { sourceForKind, sourceForPath } from "./source.ts";
 import { WikiIndex } from "./db.ts";
-import { appendRepoFile, readRepoFile, repoFileExists, writeRepoFile } from "./repo-write.ts";
+import { appendRepoFile, ensureRepoDir, readRepoFile, repoFileExists, writeRepoFile } from "./repo-write.ts";
+
+// Every repository path in this module is expressed relative to the repo root and resolved by
+// the boundary (repo-write.ts) — never joined onto the root by hand.
+const wikiRel = (...parts: string[]): string => join("docs", "wiki", ...parts);
 
 // Wiki categories: numbered by reading order.
 // The LLM writes all of these by summarizing what the HUMAN decided/realized in the
@@ -71,24 +74,26 @@ export function markUpdated(ws: string, transcriptPath: string, newOffset: numbe
 
 export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(ws))): void {
   const root = resolve(ws);
-  const wiki = join(root, "docs", "wiki");
   // Skeleton template language adapts to LLMWIKI_LANG (default English, Korean when set) — a
   // fresh adopter's wiki should start in their language. (Page CONTENT later matches the conversation.)
-  mkdirSync(wiki, { recursive: true });
-  for (const c of logDirs(cfg)) mkdirSync(join(wiki, c), { recursive: true });
-  mkdirSync(join(wiki, cfg.queueDir), { recursive: true });
+  // Directory creation goes through the boundary: a `docs` or `docs/wiki` symlink planted by
+  // someone else's commit must not become the place a fresh skeleton is scaffolded into.
+  ensureRepoDir(root, wikiRel());
+  for (const c of logDirs(cfg)) ensureRepoDir(root, wikiRel(c));
+  ensureRepoDir(root, wikiRel(cfg.queueDir));
   // The topic encyclopedia (5_topic): per-concept living pages built by consolidate.ts.
   // A different axis from the numbered log categories — created here so a fresh wiki is ready.
-  mkdirSync(join(wiki, cfg.topicDir), { recursive: true });
+  ensureRepoDir(root, wikiRel(cfg.topicDir));
   // The quiz layer (6_quiz): the HUMAN-side memory loop (ledger + session records, written by
   // /wiki-quiz + quiz-record). Deliberately excluded from index/search/cold-start — see quiz.ts.
-  mkdirSync(join(wiki, cfg.quizDir), { recursive: true });
+  ensureRepoDir(root, wikiRel(cfg.quizDir));
   const name = basename(root);
   const today = todayLocal();
   const lang = resolveWikiLang(root, cfg); // unset config → this session's own language
-  const overview = join(wiki, cfg.files.overview);
-  if (!repoFileExists(overview) && !repoFileExists(join(wiki, cfg.files.l0))) {
+  const overview = wikiRel(cfg.files.overview);
+  if (!repoFileExists(root, overview) && !repoFileExists(root, wikiRel(cfg.files.l0))) {
     writeRepoFile(
+      root,
       overview,
       `---\ntitle: Overview — ${name}\ndescription: Front page / cold-start context for ${name}\n` +
         `date: ${today}\ntags: [overview, meta]\n---\n\n` +
@@ -111,9 +116,10 @@ export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(w
         )(name),
     );
   }
-  const cs = join(wiki, cfg.files.l0);
-  if (!repoFileExists(cs)) {
+  const cs = wikiRel(cfg.files.l0);
+  if (!repoFileExists(root, cs)) {
     writeRepoFile(
+      root,
       cs,
       `---\ntitle: Current State — ${name} (L0)\n` +
         pickLangValue(
@@ -157,9 +163,10 @@ export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(w
         ),
     );
   }
-  const log = join(wiki, cfg.files.log);
-  if (!repoFileExists(log)) {
+  const log = wikiRel(cfg.files.log);
+  if (!repoFileExists(root, log)) {
     writeRepoFile(
+      root,
       log,
       `---\ntitle: Log\ndescription: ${pickLangValue(LOG_DESCRIPTION, lang)}\ndate: ${today}\ntags: [log, meta]\n---\n\n` +
         pickLangValue(LOG_BODY, lang),
@@ -170,8 +177,8 @@ export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(w
   //   .gitignore    — .llmwiki/ is a derived, regenerable index; never commit it.
   //   .gitattributes — log.md is append-only, so merge=union concatenates concurrent appends
   //                    instead of conflicting (ecosystem-proven: OmegaWiki/AutoSci).
-  _ensureLine(join(root, ".gitignore"), ".llmwiki/");
-  _ensureLine(join(root, ".gitattributes"), "docs/wiki/log.md merge=union");
+  _ensureLine(root, ".gitignore", ".llmwiki/");
+  _ensureLine(root, ".gitattributes", "docs/wiki/log.md merge=union");
   //   .mailmap — authorship is READ from git rather than cached in frontmatter (decision
   //              2026-07-10), and git's own answer is wrong by default: one person committing
   //              from a work and a personal profile shows up as two contributors. .mailmap is
@@ -188,8 +195,8 @@ export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(w
 // default) changes nothing — the team feature stays additive and silent for solo use.
 export function ensurePrivateDirs(root: string, cfg: WikiConfig): void {
   for (const d of cfg.privateDirs) {
-    mkdirSync(join(root, "docs", "wiki", d), { recursive: true });
-    _ensureLine(join(root, ".gitignore"), `docs/wiki/${d}/`);
+    ensureRepoDir(root, wikiRel(d));
+    _ensureLine(root, ".gitignore", `docs/wiki/${d}/`);
   }
 }
 
@@ -211,8 +218,7 @@ const LOG_BODY = {
 };
 
 function _ensureMailmap(root: string): void {
-  const path = join(root, ".mailmap");
-  if (repoFileExists(path)) return;
+  if (repoFileExists(root, ".mailmap")) return;
   const name = _gitConfig("user.name");
   const email = _gitConfig("user.email");
   const header =
@@ -220,7 +226,7 @@ function _ensureMailmap(root: string): void {
     "# in page frontmatter). One line per alias:  Canonical Name <canonical@email>  Alias <alias@email>\n";
   const seed = name && email ? `${name} <${email}> ${name} <${email}>\n` : "";
   try {
-    writeRepoFile(path, header + seed);
+    writeRepoFile(root, ".mailmap", header + seed);
   } catch {
     /* unwritable repo root → skip; scaffolding must never break a close-out */
   }
@@ -237,14 +243,14 @@ function _gitConfig(key: string): string {
 
 // Append `line` to `file` unless an identical line already exists; create the file if missing.
 // Never rewrites existing content — safe on user-owned files.
-function _ensureLine(file: string, line: string): void {
+function _ensureLine(root: string, file: string, line: string): void {
   try {
-    const cur = readRepoFile(file);
+    const cur = readRepoFile(root, file);
     if (cur !== null) {
       if (cur.split("\n").some((l) => l.trim() === line)) return;
-      appendRepoFile(file, (cur.endsWith("\n") || cur === "" ? "" : "\n") + line + "\n");
+      appendRepoFile(root, file, (cur.endsWith("\n") || cur === "" ? "" : "\n") + line + "\n");
     } else {
-      writeRepoFile(file, line + "\n");
+      writeRepoFile(root, file, line + "\n");
     }
   } catch {
     /* fail-safe: never let a bookkeeping nicety break skeleton creation */
@@ -252,9 +258,10 @@ function _ensureLine(file: string, line: string): void {
 }
 
 export function appendLog(ws: string, kind: string, title: string, bullets: string[], date: string, cfg: WikiConfig = getConfig(resolve(ws))): void {
-  const log = join(resolve(ws), "docs", "wiki", cfg.files.log);
-  if (!repoFileExists(log)) ensureSkeleton(ws, cfg);
+  const root = resolve(ws);
+  const log = wikiRel(cfg.files.log);
+  if (!repoFileExists(root, log)) ensureSkeleton(ws, cfg);
   const block = [`\n## [${date}] ${kind} | ${title}`];
   for (const b of bullets) block.push(`- ${b}`);
-  appendRepoFile(log, block.join("\n") + "\n");
+  appendRepoFile(root, log, block.join("\n") + "\n");
 }

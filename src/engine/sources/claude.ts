@@ -7,28 +7,33 @@
 import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { DiscoveredSession, ParseOpts, TranscriptSource } from "../source.ts";
+import type { DiscoveredRoute, DiscoveredSession, ParseOpts, TranscriptSource } from "../source.ts";
+import { countLines, discoverViaRoutes, scanIdentity, type IdentitySpec } from "./routing.ts";
 import { extractIncrement, type Increment } from "../extract.ts";
 
 // Respect an explicitly isolated HOME (fresh-install tests, containers, CI). On macOS
 // os.homedir() can resolve the account database home even when HOME was overridden,
 // which made a disposable setup test discover and rewrite the real user profile.
-const HOME = process.env.HOME?.trim() || homedir();
+// Read LAZILY: a module-level snapshot ignores a HOME set after import, so an isolated test (or
+// a container that exports HOME late) silently scanned the real profile instead of the fixture.
+function home(): string {
+  return process.env.HOME?.trim() || homedir();
+}
 
 // Every Claude config dir: ~/.claude* plus an explicit $CLAUDE_CONFIG_DIR override
 // (which may live outside $HOME or not match the .claude* naming). Without the env
 // check, such a setup was misread as "no Claude here" — wire skipped the hooks
 // silently and capture discovered no transcripts. Shared by wire.ts and doctor.ts.
-export function claudeConfigDirs(home: string = HOME): string[] {
+export function claudeConfigDirs(root: string = home()): string[] {
   let entries: string[];
   try {
-    entries = readdirSync(home);
+    entries = readdirSync(root);
   } catch {
     entries = [];
   }
-  const candidates = entries.filter((d) => d.startsWith(".claude")).map((d) => join(home, d));
+  const candidates = entries.filter((d) => d.startsWith(".claude")).map((d) => join(root, d));
   const cfg = process.env.CLAUDE_CONFIG_DIR?.trim().replace(/[\\/]+$/, "");
-  if (cfg) candidates.push(cfg.startsWith("~/") ? join(home, cfg.slice(2)) : cfg);
+  if (cfg) candidates.push(cfg.startsWith("~/") ? join(root, cfg.slice(2)) : cfg);
   const out: string[] = [];
   for (const p of candidates) {
     if (out.includes(p)) continue;
@@ -77,7 +82,28 @@ function scanTranscripts(): string[] {
   return found.filter((p) => !p.replace(/\\/g, "/").includes("/subagents/"));
 }
 
-// Cheap meta read (cwd, sessionId, line count) used for enqueue routing.
+// ---- stage 1: routing metadata, under a hard budget -------------------------------------
+//
+// This runs over EVERY Claude transcript on the machine, including sessions from repositories
+// the user never enrolled. It may therefore learn only two things — which repository, which
+// session — and it must stop reading the moment it knows them. The caps are absolute: at most
+// ROUTE_MAX_BYTES from the head of the file, at most ROUTE_MAX_RECORDS complete JSON records
+// scanned out of that slice. Raw bytes stay bounded; message values are never decoded, parsed,
+// retained, logged, or counted here.
+// If the repository is not identifiable inside both budgets, the session is skipped (fail
+// closed) rather than read further.
+// Claude writes routing identity at the top level of a record; the body lives under `message`
+// (and friends), which the shared scanner walks past without interpreting.
+const CLAUDE_IDENTITY: IdentitySpec = {
+  cwd: ["cwd"],
+  session: ["sessionId", "session_id"],
+};
+
+function routeMeta(path: string): { cwd: string | null; session: string | null } {
+  return scanIdentity(path, CLAUDE_IDENTITY);
+}
+
+// Cheap meta read (cwd, sessionId, line count) used by probe() on an explicit path.
 function parseMeta(path: string): { cwd: string | null; session: string | null; lines: number } {
   let cwd: string | null = null;
   let session: string | null = null;
@@ -113,13 +139,13 @@ function isClaudeTranscript(path: string): boolean {
   // yield backslash paths (e.g. C:\Users\me\.claude\projects\…): the forward-slash literals
   // and the regex below would otherwise never match and capture would find nothing.
   const p = path.replace(/\\/g, "/");
-  const home = HOME.replace(/\\/g, "/");
+  const homeDir = home().replace(/\\/g, "/");
   if (p.includes("/subagents/")) return false;
-  if ((p.startsWith(home + "/") || p === home) && /\/\.claude[^/]*\/projects\//.test(p)) return true;
+  if ((p.startsWith(homeDir + "/") || p === homeDir) && /\/\.claude[^/]*\/projects\//.test(p)) return true;
   // Explicit config dir: accept <cfg>/projects/** wherever cfg lives (may be outside $HOME).
   const cfg = process.env.CLAUDE_CONFIG_DIR?.trim().replace(/[\\/]+$/, "");
   if (cfg) {
-    const cfgN = (cfg.startsWith("~/") ? join(HOME, cfg.slice(2)) : cfg).replace(/\\/g, "/");
+    const cfgN = (cfg.startsWith("~/") ? join(home(), cfg.slice(2)) : cfg).replace(/\\/g, "/");
     if (p.startsWith(cfgN + "/projects/")) return true;
   }
   return false;
@@ -254,18 +280,70 @@ function recapFor(path: string): string | null {
   }
 }
 
+/**
+ * How long Claude Code keeps a transcript before deleting it.
+ *
+ * Claude Code's own cleanup pass removes `projects/**\/*.jsonl` older than
+ * `settings.cleanupPeriodDays` (default 30). That number is the real deadline on this machine's
+ * capture backlog: a session not condensed before it passes is gone, because the transcript — not
+ * the queue row — is the evidence. Assuming 30 is wrong for anyone who tuned it, in either
+ * direction, so read it.
+ *
+ * Returns the SHORTEST period across installed profiles (the first deadline that bites), or the
+ * documented default when no profile sets one.
+ */
+export const CLAUDE_DEFAULT_RETENTION_DAYS = 30;
+
+export function claudeRetentionDays(): { days: number; configured: boolean } {
+  let shortest: number | null = null;
+  for (const dir of claudeConfigDirs()) {
+    let raw: string;
+    try {
+      raw = readFileSync(join(dir, "settings.json"), "utf-8");
+    } catch {
+      continue;
+    }
+    let value: unknown;
+    try {
+      value = (JSON.parse(raw) as Record<string, unknown>)?.cleanupPeriodDays;
+    } catch {
+      continue; // a settings file we cannot parse is not a retention claim
+    }
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) continue;
+    shortest = shortest === null ? value : Math.min(shortest, value);
+  }
+  return shortest === null
+    ? { days: CLAUDE_DEFAULT_RETENTION_DAYS, configured: false }
+    : { days: shortest, configured: true };
+}
+
 export const claudeJsonlSource: TranscriptSource = {
   kind: "claude-jsonl",
   recapFor,
   summaryFor,
 
-  discover(): DiscoveredSession[] {
-    const out: DiscoveredSession[] = [];
+  discoverRoutes(): DiscoveredRoute[] {
+    const out: DiscoveredRoute[] = [];
     for (const path of scanTranscripts()) {
-      const { cwd, session, lines } = parseMeta(path);
-      out.push({ path, sessionId: session, repo: cwd, lines });
+      const { cwd, session } = routeMeta(path);
+      out.push({ path, sessionId: session, repo: cwd });
     }
     return out;
+  },
+
+  materialize(route: DiscoveredRoute): DiscoveredSession | null {
+    if (!route.repo) return null;
+    return { path: route.path, sessionId: route.sessionId, repo: route.repo, lines: countLines(route.path) };
+  },
+
+  routeFor(path: string): DiscoveredRoute | null {
+    if (!isClaudeTranscript(path)) return null;
+    const { cwd, session } = routeMeta(path);
+    return { path, sessionId: session, repo: cwd };
+  },
+
+  discover(): DiscoveredSession[] {
+    return discoverViaRoutes(claudeJsonlSource);
   },
 
   probe(path: string): DiscoveredSession | null {

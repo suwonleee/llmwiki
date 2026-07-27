@@ -1,5 +1,6 @@
-// capture-prune: dead pending rows (transcript rotated away) leave the queue; everything
-// that can still condense — or is merely too recently gone — stays.
+// capture-prune: dead pending rows (transcript rotated away) are tombstoned as `lost` — they
+// leave the pending set but stay on the books; everything that can still condense — or is merely
+// too recently gone — stays pending.
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,8 +11,9 @@ describe("capture prune", () => {
   let dir: string;
 
   beforeEach(() => {
+    // The state root holds only llmwiki's own files; transcript fixtures live beside it.
     dir = mkdtempSync(join(tmpdir(), "llmwiki-prune-"));
-    capture.setStateDir(dir);
+    capture.setStateDir(join(dir, "state"));
   });
 
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
@@ -32,11 +34,17 @@ describe("capture prune", () => {
     expect(capture.stats()["pending"]).toBe(1);
   });
 
-  test("a dead pending row past the age guard is removed", () => {
+  test("a dead pending row past the age guard becomes a lost tombstone, not a deletion", () => {
+    // The transcript is gone, so this row is the ONLY evidence the session ever existed. Deleting
+    // it is what the 2026-07-22 retention decision rejected: an un-filed session that expired is
+    // usually one the human chose not to keep, and the ledger is how that stays auditable later.
     capture.enqueue(join(dir, "gone.jsonl"), "s1", "/repo/a", 1);
 
     expect(capture.prune(0)).toEqual({ removed: 1, kept: 0 });
-    expect(capture.stats()["pending"]).toBeUndefined();
+
+    const stats = capture.stats();
+    expect(stats["pending"]).toBeUndefined(); // it will never be condensed…
+    expect(stats["lost"]).toBe(1); // …but it is still on the books
   });
 
   test("a compressed-in-place transcript (.zst sibling) still counts as alive", () => {

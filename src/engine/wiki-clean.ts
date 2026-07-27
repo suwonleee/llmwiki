@@ -1,12 +1,11 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { getConfig } from "./config.ts";
 import { today } from "./today.ts";
 import { WikiIndex } from "./db.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import { classifyTier, type AmbiguousReason, type AutoReason, type ProtectionReason } from "./tiering.ts";
-import { writeRepoFile } from "./repo-write.ts";
+import { ensureRepoDir, readRepoDir, readRepoFile, removeRepoFile, repoFileExists, repoRelative, writeRepoFile } from "./repo-write.ts";
 
 type TierAction = "hot" | "warm" | "cold";
 type AutomaticCandidate = { readonly id: string; readonly path: string; readonly action: TierAction; readonly reason: AutoReason; readonly pageHash: string; readonly bytes: number };
@@ -35,13 +34,12 @@ function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function wikiFiles(dir: string): readonly string[] {
-  if (!existsSync(dir)) return [];
+function wikiFiles(root: string, relativeDir: string): readonly string[] {
   const files: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) files.push(...wikiFiles(path));
-    else if (entry.isFile() && entry.name.endsWith(".md")) files.push(path);
+  for (const entry of readRepoDir(root, relativeDir)) {
+    const path = join(relativeDir, entry.name);
+    if (entry.isDirectory) files.push(...wikiFiles(root, path));
+    else if (entry.isFile && entry.name.endsWith(".md")) files.push(path);
   }
   return files;
 }
@@ -148,11 +146,13 @@ export function planWikiClean(root: string, options: { readonly today?: string }
   const automatic: AutomaticCandidate[] = [];
   const ambiguous: AmbiguousCandidate[] = [];
   const protectedPages: ProtectedCandidate[] = [];
-  for (const path of wikiFiles(wiki)) {
-    const pagePath = relative(root, path).replace(/\\/g, "/");
-    const localPath = relative(wiki, path).replace(/\\/g, "/");
+  for (const discoveredPath of wikiFiles(root, join("docs", "wiki"))) {
+    const pagePath = discoveredPath.replace(/\\/g, "/");
+    const path = join(root, pagePath);
+    const localPath = relative(join("docs", "wiki"), pagePath).replace(/\\/g, "/");
     if (localPath === "cold-index.md" || ignored.has(localPath.split("/")[0] ?? "")) continue;
-    const content = readFileSync(path, "utf8");
+    const content = readRepoFile(root, pagePath);
+    if (content === null) continue;
     const metadata = parseFrontmatter(content);
     const result = classifyTier({
       page: {
@@ -194,14 +194,20 @@ export function planWikiClean(root: string, options: { readonly today?: string }
 export function commitWikiClean(root: string, options: { readonly today?: string } = {}): WikiCleanCommitResult {
   const plan = planWikiClean(root, options);
   for (const candidate of plan.automatic) {
-    const path = join(root, ...candidate.path.split("/"));
-    writeRepoFile(path, tieredContent(readFileSync(path, "utf8"), candidate.action));
+    // candidate.path is repository-relative and comes from a wiki scan; read and write both go
+    // through the boundary, so a symlinked page is skipped rather than followed and rewritten.
+    const current = readRepoFile(root, candidate.path);
+    if (current === null) continue;
+    writeRepoFile(root, candidate.path, tieredContent(current, candidate.action));
   }
   let reviewPath: string | null = null;
   if (plan.ambiguous.length > 0) {
-    reviewPath = join(root, "docs", "wiki", getConfig(root).queueDir, `wiki-clean-${options.today ?? today()}.md`);
-    mkdirSync(join(root, "docs", "wiki", getConfig(root).queueDir), { recursive: true });
-    if (!existsSync(reviewPath)) writeRepoFile(reviewPath, reviewText(plan.ambiguous, options.today ?? today()));
+    const reviewRel = join("docs", "wiki", getConfig(root).queueDir, `wiki-clean-${options.today ?? today()}.md`);
+    reviewPath = join(root, reviewRel);
+    ensureRepoDir(root, join("docs", "wiki", getConfig(root).queueDir));
+    if (!repoFileExists(root, reviewRel)) {
+      writeRepoFile(root, reviewRel, reviewText(plan.ambiguous, options.today ?? today()));
+    }
   }
   new WikiIndex(root).indexAll();
   return { ...plan, reviewPath };
@@ -222,19 +228,21 @@ function reviewPathInside(root: string, reviewPath: string): string {
 
 export function applyWikiCleanReview(root: string, options: { readonly reviewPath: string }): WikiCleanApplyResult {
   const reviewPath = reviewPathInside(root, options.reviewPath);
-  const content = readFileSync(reviewPath, "utf8");
+  const content = readRepoFile(root, repoRelative(root, reviewPath));
+  if (content === null) throw new WikiCleanReviewError("malformed", `cleanup review is unreadable: ${options.reviewPath}`);
   const accepted = parseReview(content);
+  const bodies = new Map<string, string>();
   for (const candidate of accepted) {
-    const path = join(root, ...candidate.path.split("/"));
-    if (!existsSync(path) || sha256(readFileSync(path, "utf8")) !== candidate.pageHash) {
+    const body = readRepoFile(root, candidate.path);
+    if (body === null || sha256(body) !== candidate.pageHash) {
       throw new WikiCleanReviewError("stale", `cleanup review is stale: ${candidate.path}`);
     }
+    bodies.set(candidate.path, body);
   }
   for (const candidate of accepted) {
-    const path = join(root, ...candidate.path.split("/"));
-    writeRepoFile(path, tieredContent(readFileSync(path, "utf8"), candidate.action));
+    writeRepoFile(root, candidate.path, tieredContent(bodies.get(candidate.path)!, candidate.action));
   }
   new WikiIndex(root).indexAll();
-  unlinkSync(reviewPath);
+  removeRepoFile(root, repoRelative(root, reviewPath)); // consumed through the boundary
   return { applied: accepted.map((candidate) => candidate.id) };
 }

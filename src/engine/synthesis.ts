@@ -16,10 +16,10 @@
 // The output is a DERIVED VIEW (like the index/refs graph), never a committed wiki page —
 // so it is always rebuildable and can never accumulate error.
 import { spawnSync } from "node:child_process";
-import { readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { WikiIndex } from "./db.ts";
 import { effectiveKo, getConfig, logDirs, type WikiConfig } from "./config.ts";
+import { readRepoDir } from "./repo-write.ts";
 
 // User-facing output adapts to LLMWIKI_LANG (default English, Korean when set) — same policy as
 // the cold-start context builder. (The LLM-facing prompts stay English elsewhere by design.)
@@ -73,14 +73,9 @@ function titleOf(d: any): string {
 // gap-queue.md / semantic-review-*.md are the LLM's own managed backlog (fact bookkeeping,
 // filled at /wiki-deep), not human questions — excluded so the count matches cold-start's.
 function openReviewItems(repo: string): string[] {
-  const dir = join(repo, "docs", "wiki", getConfig(repo).queueDir);
-  try {
-    return readdirSync(dir)
-      .filter((f) => f.endsWith(".md") && f !== "gap-queue.md" && !/^semantic-review-/.test(f))
-      .map((f) => f.replace(/\.md$/, ""));
-  } catch {
-    return [];
-  }
+  return readRepoDir(repo, join("docs", "wiki", getConfig(repo).queueDir))
+    .filter((entry) => entry.isFile && entry.name.endsWith(".md") && entry.name !== "gap-queue.md" && !/^semantic-review-/.test(entry.name))
+    .map((entry) => entry.name.replace(/\.md$/, ""));
 }
 
 interface Analysis {

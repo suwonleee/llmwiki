@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { ensureRepoDir, readRepoFile, writeRepoFile } from "./repo-write.ts";
 
 type MaintenanceState = {
   readonly lastNoticeAt: string;
@@ -20,10 +20,10 @@ function isMaintenanceState(value: unknown): value is MaintenanceState {
 }
 
 function parseState(root: string): MaintenanceState | null {
-  const path = join(root, STATE_PATH);
-  if (!existsSync(path)) return null;
+  const raw = readRepoFile(root, STATE_PATH);
+  if (raw === null) return null;
   try {
-    const value: unknown = JSON.parse(readFileSync(path, "utf8"));
+    const value: unknown = JSON.parse(raw);
     if (isMaintenanceState(value)) return value;
   } catch {
     return null;
@@ -32,11 +32,10 @@ function parseState(root: string): MaintenanceState | null {
 }
 
 function writeState(root: string, state: MaintenanceState): void {
-  const path = join(root, STATE_PATH);
-  mkdirSync(join(root, ".llmwiki"), { recursive: true });
-  const temp = `${path}.tmp-${crypto.randomUUID()}`;
-  writeFileSync(temp, JSON.stringify(state), "utf8");
-  renameSync(temp, path);
+  // .llmwiki/ lives inside the user's repository, so this goes through the boundary too: the
+  // atomic temp-and-rename is the boundary's own, and a symlinked .llmwiki is refused.
+  ensureRepoDir(root, ".llmwiki");
+  writeRepoFile(root, STATE_PATH, JSON.stringify(state));
 }
 
 export function maintenanceNotice(root: string, report: { readonly compactionEligible: boolean; readonly liveIndexedBytes: number }, now = new Date()): boolean {

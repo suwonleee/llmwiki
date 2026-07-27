@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { enrollRepo, makeGitRepo } from "./support/git-repo.ts";
 
 const ROOT = join(import.meta.dir, "..");
 
@@ -25,8 +26,11 @@ describe("capture sweep resilience", () => {
 
   test("a session that cannot be enqueued is counted and skipped, not fatal", () => {
     // Given: one capture-worthy session…
+    // Enrolled, so the session reaches the enqueue step — which is where the broken state dir
+    // must be survived rather than avoided.
+    const repo = enrollRepo(makeGitRepo(join(dir, "repo")));
     const rollout = join(codexHome, "sessions", "2026", "07", "25", "rollout-long.jsonl");
-    const records: unknown[] = [{ type: "session_meta", payload: { id: "long", cwd: join(dir, "repo") } }];
+    const records: unknown[] = [{ type: "session_meta", payload: { id: "long", cwd: repo } }];
     while (records.length < 80) records.push({ type: "event_msg", payload: { type: "agent_message" } });
     writeFileSync(rollout, records.map((record) => JSON.stringify(record)).join("\n") + "\n");
 

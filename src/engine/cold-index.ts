@@ -1,9 +1,8 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { estimateTokens, type Chunk } from "./chunker.ts";
 import type { Frontmatter, KnowledgeTier } from "./frontmatter.ts";
 import { stripCode, stripEvidence } from "./refs.ts";
-import { writeRepoFile } from "./repo-write.ts";
+import { readRepoFile, writeRepoFile } from "./repo-write.ts";
 
 export const COLD_INDEX_RELATIVE_PATH = "docs/wiki/cold-index.md";
 const MAX_STRUCTURAL_LABELS = 24;
@@ -31,9 +30,6 @@ function clipped(value: string, maxLength: number): string {
   return value.length <= maxLength ? value : `${value.slice(0, maxLength - 1)}…`;
 }
 
-function coldIndexPath(root: string): string {
-  return join(root, ...COLD_INDEX_RELATIVE_PATH.split("/"));
-}
 
 function boundedValues(values: readonly string[]): string {
   return clipped([...new Set(values.map((value) => value.trim()).filter(Boolean))].join(", "), 600);
@@ -84,9 +80,9 @@ export function coldDiscoveryChunk(input: ColdDiscoveryInput): readonly Chunk[] 
 }
 
 export function readColdPageBody(root: string, relativePath: string): string {
-  const path = join(root, ...relativePath.split("/"));
-  if (!existsSync(path)) throw new ColdPageBodyMissingError(relativePath);
-  return readFileSync(path, "utf-8");
+  const body = readRepoFile(root, relativePath);
+  if (body === null) throw new ColdPageBodyMissingError(relativePath);
+  return body;
 }
 
 export function writeColdIndex(root: string, entries: readonly ColdIndexEntry[]): void {
@@ -111,5 +107,5 @@ export function writeColdIndex(root: string, entries: readonly ColdIndexEntry[])
     lines.push(`- [${entry.title}](${path})${date}${tags}${description} · source: ${entry.relativePath}`);
   }
   lines.push("");
-  writeRepoFile(coldIndexPath(root), lines.join("\n"));
+  writeRepoFile(root, COLD_INDEX_RELATIVE_PATH, lines.join("\n"));
 }

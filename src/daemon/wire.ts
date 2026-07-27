@@ -11,30 +11,37 @@
 import {
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
-  readdirSync,
   readFileSync,
+  readlinkSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { RETIRED_CLAUDE_COMMANDS } from "../engine/install-history.ts";
 import { CLONE_ROOT } from "../engine/paths.ts";
 import { claudeConfigDirs } from "../engine/sources/claude.ts";
 
-const HOME = process.env.HOME?.trim() || homedir();
 const ROOT = CLONE_ROOT; // resolved from this file's location — path/name-agnostic
-const INJECT = `bash ${ROOT}/hooks/sessionstart-inject.sh`;
-const TURN_INJECT = `bash ${ROOT}/hooks/userpromptsubmit-inject.sh`;
+
+// The hook command is a SHELL string that Claude Code runs. A clone path containing a space,
+// a quote, `$(…)`, a backtick or a `;` would otherwise split into the wrong argv — or execute.
+// Quoting matches the Codex/OpenCode wiring, which already did this.
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+const INJECT = `bash ${shellQuote(`${ROOT}/hooks/sessionstart-inject.sh`)}`;
+const TURN_INJECT = `bash ${shellQuote(`${ROOT}/hooks/userpromptsubmit-inject.sh`)}`;
+
+// Stamped into every command file this installer COPIES, so uninstall can recognize its own
+// work without depending on backup chronology (which is wrong after a reinstall) or on the
+// clone still sitting where it was.
+const OWNED_MARK = "<!-- installed by llmwiki (owned; removed by uninstall) -->";
 const SKILLS = ["wiki-save.md", "wiki-ask.md", "wiki-deep.md", "wiki-quiz.md", "wiki-doctor.md"];
-// When the clone IS ~/llmwiki, the skills' `~/llmwiki` references resolve correctly at runtime
-// (shell ~-expansion), so we can SYMLINK the installed commands to the repo skills instead of
-// copying. That eliminates installed-vs-repo drift (an edit to skill/*.md is immediately live, no
-// re-wire). A non-canonical clone (public template elsewhere) still needs the absolute path baked
-// in, so it falls back to copy-with-rewrite.
-const CANONICAL = ROOT === join(HOME, "llmwiki");
+// Commands are marker-bearing copies even for ~/llmwiki. A generic symlink target is not a
+// trustworthy ownership proof; copies make conflict/uninstall decisions exact and local.
 // stable filename key — present regardless of clone path, so re-running from a new
 // location detects & re-points the old hook instead of leaving a stale duplicate.
 const NEW_MARK = "hooks/sessionstart-inject.sh";
@@ -54,6 +61,15 @@ type Settings = { hooks?: Record<string, HookBlock[]>; [k: string]: unknown };
 function profiles(): string[] {
   // ~/.claude* plus an explicit $CLAUDE_CONFIG_DIR (shared discovery — engine/sources/claude.ts).
   return claudeConfigDirs();
+}
+
+function pathExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function has(settings: Settings, event: string, mark: string): boolean {
@@ -98,7 +114,19 @@ function timestamp(): string {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
-function apply(): number {
+function commandConflicts(profs: readonly string[]): string[] {
+  const conflicts: string[] = [];
+  for (const prof of profs) {
+    const commandDir = join(prof, "commands");
+    for (const file of [...SKILLS, ...RETIRED_CLAUDE_COMMANDS]) {
+      const path = join(commandDir, file);
+      if (pathExists(path) && !isOwnedCommandFile(path)) conflicts.push(path);
+    }
+  }
+  return conflicts.sort();
+}
+
+function apply(dryRun = false): number {
   const profs = profiles();
   if (!profs.length) {
     // Non-Claude harness: nothing Claude-specific to wire. The engine is harness-neutral —
@@ -108,6 +136,18 @@ function apply(): number {
     console.log("  Harness-neutral usage (Codex / any): inject cold-start with");
     console.log(`    bun ${ROOT}/src/cli.ts context <repo>`);
     console.log("  from your harness's startup config (e.g. AGENTS.md), and run /wiki-* steps via the same CLI.");
+    return 0;
+  }
+  const conflicts = commandConflicts(profs);
+  if (conflicts.length) {
+    console.error("🔴 Claude command conflict(s); setup left every profile untouched:");
+    for (const path of conflicts) console.error(`    ${path}`);
+    console.error("   Move or rename those user-owned files, then re-run setup.");
+    return 1;
+  }
+  if (dryRun) {
+    console.log("✓ Claude preflight: no command conflicts");
+    for (const prof of profs) console.log(`  would wire: ${prof}`);
     return 0;
   }
   for (const prof of profs) {
@@ -150,50 +190,120 @@ function apply(): number {
     mkdirSync(join(prof, "commands"), { recursive: true });
     // prune retired commands before re-installing so renamed skills leave no broken command
     for (const stale of RETIRED_CLAUDE_COMMANDS) {
-      rmSync(join(prof, "commands", stale), { force: true });
+      const path = join(prof, "commands", stale);
+      if (isOwnedCommandFile(path)) rmSync(path, { force: true });
     }
     for (const skill of SKILLS) {
       const src = join(ROOT, "skill", skill);
       const dst = join(prof, "commands", skill);
-      rmSync(dst, { force: true }); // drop any prior copy/symlink before re-installing
-      if (CANONICAL) {
-        symlinkSync(src, dst); // live link to the repo skill — no drift, no re-wire needed
-      } else {
-        let body = readFileSync(src, "utf-8");
-        body = body.split("~/llmwiki").join(ROOT).split("$HOME/llmwiki").join(ROOT);
-        writeFileSync(dst, body, "utf-8");
-      }
+      if (isOwnedCommandFile(dst)) rmSync(dst, { force: true }); // prior llmwiki copy/symlink
+      let body = readFileSync(src, "utf-8");
+      body = body.split("~/llmwiki").join(ROOT).split("$HOME/llmwiki").join(ROOT);
+      writeFileSync(dst, `${body.replace(/\n*$/, "\n")}\n${OWNED_MARK}\n`, "utf-8");
     }
 
     const cmds = SKILLS.map((s) => "/" + s.slice(0, -3)).join(", ");
     console.log(
       `  [${name}] ✅ old removed: ${removed}, re-pointed: ${repointed}, ` +
-        `SessionStart+UserPromptSubmit → ${ROOT.split("/").pop()}, installed (${CANONICAL ? "symlink" : "copy"}): ${cmds}`,
+        `SessionStart+UserPromptSubmit → ${ROOT.split("/").pop()}, installed (owned copy): ${cmds}`,
     );
   }
   console.log("✓ cutover applied (backups: settings.json.llmwiki-bak.*)");
   return 0;
 }
 
-function revert(): number {
-  for (const prof of profiles()) {
-    const sp = join(prof, "settings.json");
-    const dir = prof;
-    let baks: string[] = [];
+// Uninstall by OWNERSHIP, not by chronology.
+//
+// Restoring the newest `settings.json.llmwiki-bak.*` was wrong in the ordinary case: on a second
+// install that backup is a file that ALREADY contains llmwiki's hooks, so "revert" reinstated
+// them — and any unrelated hook the user added between the two installs was silently rolled back
+// with it. Removing exactly the entries that carry our marker leaves everything else alone,
+// whatever order things happened in. Backups stay on disk for human recovery; they are simply
+// not the source of truth for removal.
+function isOwnedCommandFile(path: string): boolean {
+  let st;
+  try {
+    st = lstatSync(path);
+  } catch {
+    return false;
+  }
+  if (st.isSymbolicLink()) {
     try {
-      baks = readdirSync(dir)
-        .filter((f) => f.startsWith("settings.json.llmwiki-bak."))
-        .sort();
+      const target = resolve(dirname(path), readlinkSync(path));
+      return target === join(ROOT, "skill", basename(path));
     } catch {
-      /* none */
-    }
-    if (baks.length) {
-      copyFileSync(join(dir, baks[baks.length - 1]!), sp);
-      console.log(`  [${prof.split("/").pop()}] ↩ restored ${baks[baks.length - 1]}`);
+      return false;
     }
   }
-  console.log("✓ reverted to most recent backups");
-  return 0;
+  if (!st.isFile()) return false;
+  try {
+    return readFileSync(path, "utf-8").includes(OWNED_MARK);
+  } catch {
+    return false;
+  }
 }
 
-process.exit(process.argv.includes("--revert") ? revert() : apply());
+function revert(): number {
+  let hooks = 0;
+  let commands = 0;
+  let failures = 0;
+  for (const prof of profiles()) {
+    const name = prof.split("/").pop()!;
+    const sp = join(prof, "settings.json");
+    if (existsSync(sp)) {
+      let settings: Settings | null = null;
+      try {
+        settings = JSON.parse(readFileSync(sp, "utf-8"));
+      } catch (e) {
+        console.log(`  [${name}] 🔴 parse failed (${e}) — left untouched`);
+        failures += 1;
+      }
+      if (settings) {
+        try {
+          copyFileSync(sp, `${sp}.llmwiki-bak.${timestamp()}`);
+          let removed = 0;
+          for (const mark of [NEW_MARK, TURN_MARK, ...OLD_MARKS]) {
+            for (const event of ["SessionStart", "UserPromptSubmit", "Stop"]) {
+              removed += strip(settings, event, mark);
+            }
+          }
+          // drop hook events we emptied, so uninstall leaves no `"SessionStart": []` residue
+          for (const [event, blocks] of Object.entries(settings.hooks ?? {})) {
+            if (Array.isArray(blocks) && blocks.length === 0) delete settings.hooks![event];
+          }
+          if (settings.hooks && Object.keys(settings.hooks).length === 0) delete settings.hooks;
+          const text = JSON.stringify(settings, null, 2) + "\n";
+          JSON.parse(text); // validate before writing
+          writeFileSync(sp, text, "utf-8");
+          hooks += removed;
+          console.log(`  [${name}] ↩ removed ${removed} llmwiki hook entr${removed === 1 ? "y" : "ies"}`);
+        } catch (e) {
+          failures += 1;
+          console.log(`  [${name}] 🔴 hook removal failed (${e}) — settings left for inspection`);
+        }
+      }
+    }
+    // installed commands: marker-bearing copies, plus exact legacy links into THIS clone.
+    const cmdDir = join(prof, "commands");
+    for (const file of [...SKILLS, ...RETIRED_CLAUDE_COMMANDS]) {
+      const path = join(cmdDir, file);
+      if (!isOwnedCommandFile(path)) continue;
+      try {
+        rmSync(path, { force: true });
+        commands += 1;
+      } catch (e) {
+        failures += 1;
+        console.log(`  [${name}] 🔴 command removal failed (${path}: ${e})`);
+      }
+    }
+  }
+  console.log(
+    `${failures ? "⚠" : "✓"} llmwiki Claude wiring removed: ${hooks} hook entr${hooks === 1 ? "y" : "ies"}, ${commands} command file(s)`,
+  );
+  console.log("  (unrelated hooks and commands were left untouched; settings backups kept as settings.json.llmwiki-bak.*)");
+  if (failures) console.log(`  🔴 ${failures} removal step(s) failed; inspect the messages above and re-run uninstall.`);
+  return failures ? 1 : 0;
+}
+
+if (process.argv.includes("--revert")) process.exit(revert());
+process.exit(apply(process.argv.includes("--dry-run")));

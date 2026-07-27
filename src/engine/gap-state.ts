@@ -1,6 +1,6 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Gap } from "./gaps.ts";
+import { ensureRepoDir, readRepoFile, writeRepoFile } from "./repo-write.ts";
 
 export const GAP_STATE_RELATIVE_PATH = join(".llmwiki", "gap-queue-state.json");
 
@@ -44,21 +44,25 @@ export function gapStatePath(root: string): string {
   return join(root, GAP_STATE_RELATIVE_PATH);
 }
 
-export function loadResolvedGapState(path: string): readonly Gap[] | null {
-  if (!existsSync(path)) return null;
+// Engine state that lives INSIDE the user's repository (.llmwiki/) is still repository-relative
+// I/O: a `.llmwiki` symlink planted by someone else's commit must neither be read through nor
+// written through. Both directions go via the boundary.
+export function loadResolvedGapState(root: string): readonly Gap[] | null {
+  const raw = readRepoFile(root, GAP_STATE_RELATIVE_PATH);
+  if (raw === null) return null;
   try {
-    const value: unknown = JSON.parse(readFileSync(path, "utf-8"));
-    return parseGapState(value);
+    return parseGapState(JSON.parse(raw) as unknown);
   } catch (error) {
     if (error instanceof SyntaxError) return null;
     throw error;
   }
 }
 
-export function writeResolvedGapState(path: string, gaps: readonly Gap[]): void {
+export function writeResolvedGapState(root: string, gaps: readonly Gap[]): void {
   const resolved = gaps
     .filter((gap) => gap.status === "resolved")
     .sort((a, b) => a.hash.localeCompare(b.hash));
   const state: GapState = { version: 1, resolved };
-  writeFileSync(path, JSON.stringify(state), "utf-8");
+  ensureRepoDir(root, ".llmwiki");
+  writeRepoFile(root, GAP_STATE_RELATIVE_PATH, JSON.stringify(state));
 }

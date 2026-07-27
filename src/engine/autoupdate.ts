@@ -20,9 +20,15 @@
 // Default is dry-run; commit=true applies the gated results.
 //
 // Returned dict keys are kept snake_case (cli.ts prints them by name).
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+
 import { basename, join, relative as relpath, resolve } from "node:path";
-import { llm } from "./claude.ts";
+import { UNAVAILABLE, llm, screenOutbound } from "./claude.ts";
+
+// Why a pass can be skipped without being a failure: no provider is configured (the default), or
+// the outbound data screened down to nothing. Both are deterministic, non-destructive outcomes —
+// the watermark is not advanced and nothing is written.
+const SCREENED_REASON =
+  "outbound data screened to nothing (secrets); no generative call was made";
 import * as capture from "./capture.ts";
 import * as update from "./update.ts";
 import {
@@ -43,9 +49,17 @@ import { sourceForKind } from "./source.ts";
 import { collectGroundedFacts, assessGrounding } from "./grounding.ts";
 import { ensureExcerpts } from "./excerpt.ts";
 import { updateReferences } from "./refs.ts";
-import { Linter, type LintIssue, type WikiIndexLike } from "./lint.ts";
+import {
+  Linter,
+  type ForwardRef,
+  type LintIssue,
+  type SourceRow,
+  type StaleRow,
+  type WikiDoc,
+  type WikiIndexLike,
+} from "./lint.ts";
 import { MODEL_HEAVY, MODEL_LIGHT } from "./models.ts";
-import { writeRepoFile } from "./repo-write.ts";
+import { ensureRepoDir, removeRepoFile, writeRepoFile } from "./repo-write.ts";
 
 // WRITE = light tier (cheap, high-volume drafting). VERIFY = heavy tier — the adversarial
 // gate uses the strongest model; volume is small (one call per pending transcript), so it
@@ -184,7 +198,7 @@ function _stampDate(page: string, inc: Increment): string {
 // reads and answers inline. On resolution the candidate is finalized into its category and
 // this file is deleted — 0_review stays empty when idle. Labels and the question are English
 // (scaffolding); the draft body matches the source language (content). Same shape the skills author.
-export function _reviewWrapper(o: {
+function _reviewWrapper(o: {
   kind: "quarantine" | "question";
   title: string;
   date: string;
@@ -204,6 +218,56 @@ export function _reviewWrapper(o: {
     `A. (write your decision below; on the next /wiki-save or /wiki-deep the LLM applies it and deletes this file)\n\n\n` +
     `Draft (candidate page; moved into the chosen N_category once confirmed):\n${o.candidate}\n`
   );
+}
+
+/**
+ * Run the ordinary deterministic wiki linter against a candidate without putting that candidate
+ * on disk. Direction drafts ultimately live inside 0_review (which lint intentionally skips), so
+ * they need this virtual category-page view before being wrapped for human confirmation.
+ */
+export function _lintCandidate(
+  idx: WikiIndex,
+  cfg: WikiConfig,
+  relativePath: string,
+  content: string,
+): LintIssue[] {
+  idx.indexAll();
+  const conn = idx.connect();
+  try {
+    const normalized = relativePath.replaceAll("\\", "/");
+    const filename = basename(normalized);
+    const slash = normalized.lastIndexOf("/");
+    const path = slash >= 0 ? `/${normalized.slice(0, slash + 1)}` : "/";
+    const virtualId = "__llmwiki_direction_candidate__";
+    const virtual: WikiDoc = {
+      id: virtualId,
+      path,
+      filename,
+      relative_path: normalized,
+      content,
+      source_kind: "wiki",
+    };
+    const existing = (idx
+      .listDocumentsWithContent(conn) as unknown as WikiDoc[])
+      .filter((doc) => String(doc.relative_path).replaceAll("\\", "/") !== normalized);
+    const virtualIndex: WikiIndexLike = {
+      root: idx.root,
+      listDocumentsWithContent: () => [...existing, virtual],
+      findUncitedSources: (db) => idx.findUncitedSources(db) as unknown as SourceRow[],
+      findStalePages: (db) => idx.findStalePages(db) as unknown as StaleRow[],
+      // A virtual page has no persisted graph row. Citation resolution is still checked by the
+      // linter; treat every currently indexed target as materialized for this in-memory pass.
+      getForwardReferences: (db, docId) =>
+        docId === virtualId
+          ? existing.map((doc) => ({ id: doc.id, reference_type: "cites" }))
+          : idx.getForwardReferences(db, docId) as unknown as ForwardRef[],
+      getBacklinks: (db, docId) =>
+        docId === virtualId ? [] : idx.getBacklinks(db, docId),
+    };
+    return new Linter(virtualIndex, conn, cfg).run(normalized, "wiki")[0];
+  } finally {
+    conn.close();
+  }
 }
 
 export async function updateOne(
@@ -242,16 +306,25 @@ export async function updateOne(
   const evidence = collectGroundedFacts(transcriptPath, offset, kind);
   const supportText = extractTxt + "\n" + evidence.corpus;
 
-  // 1) WRITE
+  // 1) WRITE — the extract is raw session text, so it is SCREENED before it becomes a prompt.
+  // A block that screens down to nothing launches no subprocess at all: a mostly-«redacted»
+  // extract cannot ground a page, and sending its remainder is a transfer with no upside.
+  const writeBlocks = screenOutbound({ extract: extractTxt });
+  if (!writeBlocks) {
+    return { transcript: fn, verdict: "skipped-screened", reason: SCREENED_REASON };
+  }
   const raw = await llm(
     formatPrompt(writePromptTemplate(cfg), {
       schema: schemaText(cfg),
       transcript_filename: fn,
       repo_name: name,
-      extract: extractTxt,
+      extract: writeBlocks.extract!,
     }),
     wm,
   );
+  if (raw.startsWith(UNAVAILABLE)) {
+    return { transcript: fn, verdict: "skipped-no-provider", reason: raw.slice(UNAVAILABLE.length + 1) };
+  }
   let page = _extractPage(raw);
   if (raw.startsWith("__ERROR__") || !page.startsWith("---")) {
     return { transcript: fn, verdict: "fail-write", reason: raw.slice(0, 200) };
@@ -263,11 +336,18 @@ export async function updateOne(
   // already adjudicates them). No LLM, no embeddings.
   const grounding = assessGrounding(page, supportText);
 
-  // 2) VERIFY (independent second model, adversarial)
+  // 2) VERIFY (independent second model, adversarial) — same screening on the way out.
+  const verifyBlocks = screenOutbound({ extract: extractTxt, page });
+  if (!verifyBlocks) {
+    return { transcript: fn, verdict: "skipped-screened", reason: SCREENED_REASON };
+  }
   const verdict = await llm(
-    formatPrompt(VERIFY_PROMPT, { extract: extractTxt, page }),
+    formatPrompt(VERIFY_PROMPT, { extract: verifyBlocks.extract!, page: verifyBlocks.page! }),
     vm,
   );
+  if (verdict.startsWith(UNAVAILABLE)) {
+    return { transcript: fn, verdict: "skipped-no-provider", reason: verdict.slice(UNAVAILABLE.length + 1) };
+  }
   // The prompt's contract: a fully-grounded page yields *exactly* the token VERIFIED and
   // nothing else; any unsupported claim is returned as bullets. So a reply that merely
   // *starts* with VERIFIED but carries caveats ("VERIFIED, but claim 3 is unsupported…")
@@ -286,7 +366,8 @@ export async function updateOne(
   const isDirection = isHumanReviewDir(cat, cfg); // review="human" categories route to the queue
   const titleSlug = _slug(page) || fn.slice(0, 8);
   const subdir = isDirection ? cfg.queueDir : cat;
-  const dest = join(root, "docs", "wiki", subdir, `${_date(inc)}-${titleSlug}.md`);
+  const destRel = join("docs", "wiki", subdir, `${_date(inc)}-${titleSlug}.md`);
+  const dest = join(root, destRel);
 
   // Grounding gate: Phase A is the MEASUREMENT phase — the grounding signal is
   // recorded and surfaced but does NOT block acceptance by default (advisory), so we can
@@ -329,19 +410,44 @@ export async function updateOne(
   if (isDirection) {
     // Prose names the category from config (stock: "direction shift … `1_direction/`", byte-identical).
     const catDomain = cfg.categories.find((c) => c.dir === cat)?.domain ?? cat;
-    const qdest = join(root, "docs", "wiki", cfg.queueDir, `${_date(inc)}-${titleSlug}.md`);
-    mkdirSync(join(qdest, ".."), { recursive: true });
-    writeFileSync(
-      qdest,
+    // The direction draft is a TRACKED file like any other page, so it passes the same screening
+    // gate: a candidate that screens down to nothing is not written at all (it would land a
+    // mostly-«redacted» question in the human queue and still carry the remainder into git).
+    const screenedCandidate = screenOutbound({ candidate: page });
+    if (!screenedCandidate) {
+      result.verdict = "skipped-screened";
+      result.reason = SCREENED_REASON;
+      result.accepted = false;
+      return result;
+    }
+    const candidateRel = join("docs", "wiki", cat, `${_date(inc)}-${titleSlug}.md`);
+    const candidateErrors = _lintCandidate(
+      idx,
+      cfg,
+      candidateRel,
+      screenedCandidate.candidate!,
+    ).filter((issue) => issue.severity === "error");
+    if (candidateErrors.length > 0) {
+      result.verdict = "rejected";
+      result.reason = `${ko ? "lint 오류" : "lint error"} — ${candidateErrors.map((issue) => issue.code).join(", ")}`;
+      result.accepted = false;
+      result.lint_errors = candidateErrors.map((issue) => `${issue.code}:${issue.path}`);
+      return result;
+    }
+    const qrel = join("docs", "wiki", cfg.queueDir, `${_date(inc)}-${titleSlug}.md`);
+    const qdest = join(root, qrel);
+    ensureRepoDir(root, join("docs", "wiki", cfg.queueDir));
+    writeRepoFile(
+      root,
+      qrel,
       _reviewWrapper({
         kind: "question",
         title: _title(page) || fn.slice(0, 8),
         date: _date(inc),
         source: fn,
         question: `A ${catDomain} shift (from→to) appears in this session. Confirm and promote to \`${cat}/\`, or discard?`,
-        candidate: page,
+        candidate: screenedCandidate.candidate!,
       }),
-      "utf-8",
     );
     idx.indexAll();
     result.dest = relpath(root, qdest);
@@ -350,12 +456,12 @@ export async function updateOne(
   }
 
   // 3b) NON-DIRECTION → write to its category, register provenance, run deterministic LINT.
-  mkdirSync(join(dest, ".."), { recursive: true });
+  ensureRepoDir(root, join("docs", "wiki", subdir));
   // Attach portable evidence before the page leaves this machine — the transcript is open right
   // here, and on any other clone it will not be readable at all (page format v3).
   // (Authorship is deliberately NOT stamped: git already records it — decision 2026-07-10.)
   page = ensureExcerpts(page, transcriptPath, offset);
-  writeRepoFile(dest, page + (page.endsWith("\n") ? "" : "\n"));
+  writeRepoFile(root, destRel, page + (page.endsWith("\n") ? "" : "\n"));
   idx.indexAll();
   const conn = idx.connect();
   const destName = basename(dest);
@@ -402,7 +508,7 @@ export async function updateOne(
       `${ko ? "근거 없는 파일경로" : "ungrounded file path(s)"} — ${grounding.unsupportedPaths.join(", ")}`,
     );
   if (pageErrors.length > 0) reasonBits.push(`${ko ? "lint 오류" : "lint error"} — ${pageErrors.map((i) => i.code).join(", ")}`);
-  if (existsSync(dest)) rmSync(dest);
+  removeRepoFile(root, destRel); // roll back through the boundary, never by raw path
   idx.indexAll();
   update.appendLog(
     ws,

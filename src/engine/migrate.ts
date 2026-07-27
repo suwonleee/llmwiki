@@ -13,7 +13,6 @@
 // Pairing rule: an on-disk `N_*` dir not in the config maps to the config dir with the SAME
 // leading number (1_direction → 1_goal). Ambiguity (no counterpart) is reported, never guessed;
 // explicit pairs via `--map old=new[,old=new…]` win over the heuristic.
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { effectiveKo, getConfig, resolveLang, type WikiConfig } from "./config.ts";
 import { parseLedger, renderLedger, type QuizEntry } from "./quiz.ts";
@@ -21,7 +20,7 @@ import { today } from "./today.ts";
 import { WikiIndex } from "./db.ts";
 import { updateReferences, autoRegisterCitedTranscripts } from "./refs.ts";
 import { Linter, type WikiIndexLike } from "./lint.ts";
-import { writeRepoFile } from "./repo-write.ts";
+import { readRepoDir, readRepoFile, renameRepoPath, repoDirExists, repoFileExists, repoRelative, writeRepoFile } from "./repo-write.ts";
 
 export const SCHEMA_VERSION_FILE = ".schema-version";
 
@@ -60,15 +59,11 @@ function wikiDir(ws: string): string {
   return join(resolve(ws), "docs", "wiki");
 }
 
-function numberedDirsOnDisk(wiki: string): string[] {
-  try {
-    // sorted → deterministic pairing/reporting regardless of filesystem readdir order
-    return readdirSync(wiki)
-      .filter((d) => /^\d+_/.test(d) && statSync(join(wiki, d)).isDirectory())
-      .sort();
-  } catch {
-    return [];
-  }
+function numberedDirsOnDisk(root: string): string[] {
+  return readRepoDir(root, join("docs", "wiki"))
+    .filter((entry) => entry.isDirectory && /^\d+_/.test(entry.name))
+    .map((entry) => entry.name)
+    .sort();
 }
 
 function leadingNum(dir: string): string {
@@ -77,28 +72,22 @@ function leadingNum(dir: string): string {
 
 // All .md files under docs/wiki (recursive) — link rewriting scans everything, including the
 // queue and topic layers, so no page keeps a dangling link after a rename.
-function allPages(wiki: string, dir = wiki, out: string[] = []): string[] {
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return out;
-  }
-  for (const e of entries) {
+function allPages(root: string, dir = join("docs", "wiki"), out: string[] = []): string[] {
+  for (const e of readRepoDir(root, dir)) {
     const p = join(dir, e.name);
-    if (e.isDirectory()) allPages(wiki, p, out);
-    else if (e.name.endsWith(".md")) out.push(p);
+    if (e.isDirectory) allPages(root, p, out);
+    else if (e.isFile && e.name.endsWith(".md")) out.push(p.replace(/\\/g, "/"));
   }
   return out;
 }
 
-function planPairs(wiki: string, cfg: WikiConfig, explicit: Record<string, string>): { pairs: Pair[]; strays: string[] } {
+function planPairs(root: string, cfg: WikiConfig, explicit: Record<string, string>): { pairs: Pair[]; strays: string[] } {
   // quizDir is expected structure too (never a stray): without it, a numbered quiz folder
   // could pair-by-leading-number with a missing category and get RENAMED into content.
   // (It stays out of schemaSnapshot deliberately — adding it would flag reverse-drift on
   // every wiki whose .schema-version predates the quiz layer.)
   const expected = new Set([...cfg.categories.map((c) => c.dir), cfg.topicDir, cfg.queueDir, cfg.quizDir]);
-  const onDisk = numberedDirsOnDisk(wiki);
+  const onDisk = numberedDirsOnDisk(root);
   const strayDirs = onDisk.filter((d) => !expected.has(d));
   const missing = [...expected].filter((d) => !onDisk.includes(d));
   const pairs: Pair[] = [];
@@ -138,13 +127,14 @@ export function migrate(
   cfg: WikiConfig = getConfig(ws),
 ): MigrateResult {
   const wiki = wikiDir(ws);
-  if (!existsSync(wiki)) return { verdict: "skip", reason: "no docs/wiki" };
-  const { pairs, strays } = planPairs(wiki, cfg, opts.map ?? {});
+  const root = resolve(ws);
+  if (!repoDirExists(root, join("docs", "wiki"))) return { verdict: "skip", reason: "no docs/wiki" };
+  const { pairs, strays } = planPairs(root, cfg, opts.map ?? {});
 
   if (!pairs.length) {
     // structure already conforms → just (re)stamp the snapshot on commit so reverse-drift
     // detection has a baseline even for wikis created before this feature.
-    if (opts.commit) writeRepoFile(join(wiki, SCHEMA_VERSION_FILE), schemaSnapshot(cfg) + "\n");
+    if (opts.commit) writeRepoFile(ws, join("docs", "wiki", SCHEMA_VERSION_FILE), schemaSnapshot(cfg) + "\n");
     return { verdict: "conforms", strays };
   }
 
@@ -152,8 +142,9 @@ export function migrate(
   let links = 0;
   let domains = 0;
   const pageEdits: { path: string; content: string }[] = [];
-  for (const p of allPages(wiki)) {
-    let content = readFileSync(p, "utf-8");
+  for (const rel of allPages(root)) {
+    let content = readRepoFile(root, rel);
+    if (content === null) continue;
     let touched = false;
     for (const pair of pairs) {
       const [next, n] = rewriteLinks(content, pair.from, pair.to);
@@ -164,7 +155,7 @@ export function migrate(
       }
     }
     // frontmatter domain update — only pages living inside a renamed category dir
-    const owner = pairs.find((pair) => p.startsWith(join(wiki, pair.from) + "/"));
+    const owner = pairs.find((pair) => rel.startsWith(`docs/wiki/${pair.from}/`));
     if (owner?.domain) {
       const next = content.replace(/^domain:\s*\S+$/m, `domain: ${owner.domain}`);
       if (next !== content) {
@@ -173,7 +164,7 @@ export function migrate(
         touched = true;
       }
     }
-    if (touched) pageEdits.push({ path: p, content });
+    if (touched) pageEdits.push({ path: join(root, rel), content });
   }
 
   // The quiz ledger stores page identities as BARE wiki-relative paths — none of rewriteLinks'
@@ -183,11 +174,15 @@ export function migrate(
   // name included) — every one found is remapped. Planned here, written after the dir renames.
   const quizDirPath = join(wiki, cfg.quizDir);
   const ledgers: { file: string; entries: QuizEntry[]; remapped: number }[] = [];
-  if (existsSync(quizDirPath)) {
-    for (const f of readdirSync(quizDirPath).filter((n) => /^quiz-ledger.*\.md$/.test(n))) {
+  if (repoDirExists(root, join("docs", "wiki", cfg.quizDir))) {
+    for (const f of readRepoDir(root, join("docs", "wiki", cfg.quizDir))
+      .filter((entry) => entry.isFile && /^quiz-ledger.*\.md$/.test(entry.name))
+      .map((entry) => entry.name)) {
       const file = join(quizDirPath, f);
       try {
-        const entries = parseLedger(readFileSync(file, "utf-8"));
+        const body = readRepoFile(root, repoRelative(root, file));
+        if (body === null) continue;
+        const entries = parseLedger(body);
         let remapped = 0;
         for (const e of entries) {
           const owner = pairs.find((pair) => e.page.startsWith(pair.from + "/"));
@@ -209,21 +204,25 @@ export function migrate(
   }
 
   // apply: page rewrites first (paths still old), then dir renames, then snapshot + reindex + lint
-  for (const e of pageEdits) writeRepoFile(e.path, e.content);
+  for (const e of pageEdits) writeRepoFile(ws, repoRelative(ws, e.path), e.content);
   for (const pair of pairs) {
     const from = join(wiki, pair.from);
     const to = join(wiki, pair.to);
-    if (existsSync(to)) {
+    // Both sides go through the boundary: a category folder is repository content, and a
+    // symlinked one must not be renamed (or written through) during a migration.
+    if (repoDirExists(root, join("docs", "wiki", pair.to))) {
       // target exists (partially migrated) → move children instead of clobbering
-      for (const f of readdirSync(from)) renameSync(join(from, f), join(to, f));
+      for (const entry of readRepoDir(root, join("docs", "wiki", pair.from))) {
+        renameRepoPath(ws, join("docs", "wiki", pair.from, entry.name), join("docs", "wiki", pair.to, entry.name));
+      }
     } else {
-      renameSync(from, to);
+      renameRepoPath(ws, join("docs", "wiki", pair.from), join("docs", "wiki", pair.to));
     }
   }
   for (const l of ledgers) {
-    writeRepoFile(l.file, renderLedger(l.entries, today(), resolveLang(cfg)));
+    writeRepoFile(ws, repoRelative(ws, l.file), renderLedger(l.entries, today(), resolveLang(cfg)));
   }
-  writeRepoFile(join(wiki, SCHEMA_VERSION_FILE), schemaSnapshot(cfg) + "\n");
+  writeRepoFile(ws, join("docs", "wiki", SCHEMA_VERSION_FILE), schemaSnapshot(cfg) + "\n");
 
   const idx = new WikiIndex(ws);
   idx.indexAll();
@@ -252,16 +251,19 @@ export function migrate(
 // Returns null when clean. Fail-safe by construction (pure reads).
 export function detectConfigDrift(ws: string, cfg: WikiConfig = getConfig(ws)): string | null {
   const wiki = wikiDir(ws);
-  if (!existsSync(wiki)) return null;
-  const { pairs } = planPairs(wiki, cfg, {});
+  const root = resolve(ws);
+  if (!repoDirExists(root, join("docs", "wiki"))) return null;
+  const { pairs } = planPairs(root, cfg, {});
   if (pairs.length) {
     const preview = pairs.map((p) => `${p.from}→${p.to}`).join(", ");
     return `structure drift: ${preview} — run \`llmwiki migrate <repo>\` (dry-run) then \`--commit\``;
   }
   const svPath = join(wiki, SCHEMA_VERSION_FILE);
-  if (existsSync(svPath)) {
+  if (repoFileExists(root, join("docs", "wiki", SCHEMA_VERSION_FILE))) {
     try {
-      const disk = JSON.stringify(JSON.parse(readFileSync(svPath, "utf-8")));
+      const body = readRepoFile(root, join("docs", "wiki", SCHEMA_VERSION_FILE));
+      if (body === null) return null;
+      const disk = JSON.stringify(JSON.parse(body));
       if (disk !== JSON.stringify(JSON.parse(schemaSnapshot(cfg)))) {
         return `wiki ${SCHEMA_VERSION_FILE} differs from this engine's config — pull the team engine fork, or run \`llmwiki migrate\` if the config is the newer truth`;
       }

@@ -3,11 +3,12 @@
 // passes its per-repo cfg. Locks: frontmatter extraction, custom-config routing, unknown/missing
 // domain fallback (first review:"model" category), and stock routing preserved.
 import { test, expect } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { _category } from "../src/engine/autoupdate.ts";
+import { _category, _lintCandidate } from "../src/engine/autoupdate.ts";
 import { defaults, loadFrom, type WikiConfig } from "../src/engine/config.ts";
+import { WikiIndex } from "../src/engine/db.ts";
 
 function customCfg(): WikiConfig {
   const p = join(mkdtempSync(join(tmpdir(), "llmwiki-cat-cfg-")), "llmwiki.config.toml");
@@ -49,4 +50,22 @@ test("_category preserves the historical routing under the stock config", () => 
   expect(_category(page("decision"), c)).toBe("3_decision");
   expect(_category(page("milestone"), c)).toBe("2_milestone");
   expect(_category(page(undefined), c)).toBe("2_milestone"); // fallback = 2_milestone
+});
+
+test("direction candidates receive ordinary lint without ever being written to the repo", () => {
+  const root = mkdtempSync(join(tmpdir(), "llmwiki-direction-lint-"));
+  try {
+    const idx = new WikiIndex(root);
+    idx.init();
+    const relative = "docs/wiki/1_direction/2026-07-25-unsafe.md";
+    const candidate =
+      "---\ndescription: missing a title\ndate: 2026-07-25\ntags: [a, b]\nstatus: ready\ndomain: direction\nsource: note.jsonl\n---\n\n## TL;DR\n\nA direction draft.\n";
+
+    const issues = _lintCandidate(idx, defaults(), relative, candidate);
+
+    expect(issues.some((issue) => issue.severity === "error" && issue.code === "missing-title")).toBe(true);
+    expect(existsSync(join(root, relative))).toBe(false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -58,7 +58,11 @@ const UNSPACED_ONLY_RE = new RegExp(`^[${UNSPACED_CHAR}]+$`, "u");
 // "ngôn" survive whole — the ASCII pattern above cannot even start on ü, and used to hand back
 // the fragment "berhaupt". Without this pass, Cyrillic, Thai, Devanagari, Arabic, Greek and
 // Hebrew prompts yielded NOTHING and the turn injected nothing, ever.
-const WORD_RE = /[\p{L}\p{N}][\p{L}\p{M}\p{N}_]{2,}/gu;
+// Two characters is the minimum here, not three: `add()` below is what enforces the per-script
+// floor (ASCII 4, dense 3), and a two-character candidate is needed by the sub-floor pass — in
+// Hangul the everyday technical words ARE two characters (토큰·만료·검사·배포). Latin two-letter
+// matches are produced and then dropped by that same floor, so the default path is unchanged.
+const WORD_RE = /[\p{L}\p{N}][\p{L}\p{M}\p{N}_]{1,}/gu;
 
 // Window size for unspaced scripts — about a word in Han/Kana/Thai, and short enough to occur
 // inside a page. Overlapping windows so a word straddling two of them is still covered.
@@ -77,7 +81,7 @@ function unspacedWindows(run: string): string[] {
   return out;
 }
 
-export function extractTerms(prompt: string): string[] {
+export function extractTerms(prompt: string, denseFloor = 3): string[] {
   const seen = new Set<string>();
   const terms: string[] = [];
   const add = (raw: string): void => {
@@ -85,7 +89,7 @@ export function extractTerms(prompt: string): string[] {
     // 3 is the FTS5 trigram matching floor; Latin gets 4, because that is what keeps the
     // "the/and/for" class out without a stopword list. A dense script needs no such margin —
     // three characters of Hangul or Han are already a content word.
-    if ([...t].length < (/^[\x00-\x7F]+$/.test(t) ? 4 : 3)) return;
+    if ([...t].length < (/^[\x00-\x7F]+$/.test(t) ? 4 : denseFloor)) return;
     const key = t.toLowerCase();
     if (seen.has(key)) return;
     seen.add(key);
@@ -231,7 +235,13 @@ export function buildTurnContext(repo: string, prompt: string, sessionId = ""): 
     // L0 / meta pages are already injected whole at session start — never re-suggest them.
     const l0Basenames = new Set([cfg.files.overview, cfg.files.l0, cfg.files.log, "index.md"]);
     const terms = extractTerms(prompt ?? "");
-    if (!terms.length) return "";
+    // Two-character Hangul/Han words cannot be represented by the trigram index, so they are kept
+    // out of the MATCH query (a quoted 2-char phrase matches nothing). They are also most of what a
+    // Korean technical prompt is made of — 토큰·만료·검사·배포 — so dropping them entirely made the
+    // per-turn loop silent on exactly the prompts it exists to answer. Carried separately: the
+    // substring pass below can see them, and scoring compares by substring anyway.
+    const subFloor = extractTerms(prompt ?? "", 2).filter((t) => !terms.includes(t));
+    if (!terms.length && !subFloor.length) return "";
 
     const w = new WikiIndex(repo);
     if (!existsSync(w.dbPath)) return ""; // no index yet — stay silent, never create state
@@ -253,7 +263,12 @@ export function buildTurnContext(repo: string, prompt: string, sessionId = ""): 
     const db = w.connect();
     let rows: any[];
     try {
-      rows = w.search(db, ftsQuery(queryTerms), 40, "wiki", true); // raw: pre-quoted OR query
+      rows = queryTerms.length ? w.search(db, ftsQuery(queryTerms), 40, "wiki", true) : []; // raw: pre-quoted OR query
+      // Below-the-floor recall, the same answer search() gives its own callers. It runs only after
+      // MATCH came back empty, so the scan it costs lands only on turns that were getting nothing.
+      if (!rows.length && subFloor.length) {
+        rows = w.searchBelowFloor(db, [...queryTerms, ...subFloor], 40, "wiki");
+      }
     } finally {
       db.close();
     }
@@ -262,7 +277,11 @@ export function buildTurnContext(repo: string, prompt: string, sessionId = ""): 
     // aggregate chunk hits per page; score = distinct terms present in matched chunks.
     // Carried terms add score but can't qualify a page alone — a page must match ≥1 term
     // from the CURRENT prompt (precision gate: a topic switch is never polluted by history).
-    const curSet = new Set(terms.map((t) => t.toLowerCase()));
+    // Sub-floor terms count as CURRENT-prompt terms: they came from this prompt, and the precision
+    // gate below ("a page must match ≥1 term from the current prompt") would otherwise reject every
+    // page a substring pass found, leaving the recall it just bought unused.
+    const scoreTerms = [...queryTerms, ...subFloor];
+    const curSet = new Set([...terms, ...subFloor].map((t) => t.toLowerCase()));
     const byPage = new Map<string, { title: string; terms: Set<string>; cur: number; hits: number }>();
     for (const r of rows) {
       const rel = String(r.relative_path ?? "");
@@ -277,7 +296,7 @@ export function buildTurnContext(repo: string, prompt: string, sessionId = ""): 
         byPage.get(rel) ?? { title: String(r.title ?? base), terms: new Set<string>(), cur: 0, hits: 0 };
       e.hits += 1;
       const content = String(r.content ?? "").toLowerCase();
-      for (const t of queryTerms) {
+      for (const t of scoreTerms) {
         const lt = t.toLowerCase();
         if (!content.includes(lt)) continue;
         if (!e.terms.has(lt) && curSet.has(lt)) e.cur += 1;
@@ -288,6 +307,12 @@ export function buildTurnContext(repo: string, prompt: string, sessionId = ""): 
 
     const score = (e: { terms: Set<string> }) =>
       [...e.terms].reduce((s, t) => s + termWeight(t), 0);
+    // One gate for both paths. A stricter bar for sub-floor-only evidence was tried and measured on
+    // this wiki (91 chunks): it cost a relevant prompt and removed no noise, because the one filler
+    // prompt that qualifies clears either bar. Corpus frequency was tried as a filter too and is
+    // backwards here — in a focused wiki the content words are the COMMON ones (캡처 37%, 훅 27%)
+    // and the filler is rare (해야 5%, 이거 2%), so "common = uninformative" would drop exactly the
+    // words worth matching. Measured trade: relevant Korean prompts 1/7 → 5/7, filler 0/5 → 1/5.
     let pages = [...byPage.entries()]
       .filter(([, e]) => e.cur >= 1 && score(e) >= 2) // current witness + (two weak / one specific)
       .sort((a, b) => score(b[1]) - score(a[1]) || b[1].hits - a[1].hits);

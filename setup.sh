@@ -8,15 +8,27 @@ set -e
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 HARNESS="auto"
 DRY_RUN=0
+UNINSTALL=0
+PURGE_DATA=0
 
 usage() {
     cat <<EOF
 Usage: ./setup.sh [--dry-run] [--harness auto|codex|claude|opencode|all]
+       ./setup.sh --uninstall [--purge-data]
 
 Options:
   --help, -h             Show this help without changing files or services.
   --dry-run              Print planned actions without changing files or services.
   --harness <name>       auto (default), codex, claude, opencode, or all.
+  --uninstall            Remove every llmwiki-owned hook, plugin, command, launcher and
+                         background service. Unrelated configuration is left untouched, and
+                         your wikis (docs/wiki in each project) are never touched.
+  --purge-data           With --uninstall, also delete llmwiki's local runtime state
+                         (capture queue, daemon log, transcript exports). Without it the
+                         state is kept and its location reported.
+
+Run --uninstall from the installed clone, BEFORE moving or deleting that clone: the
+installed hooks point at this directory, so removal needs it to still be here.
 
 Codex installs:
   - native SessionStart + UserPromptSubmit hooks in \$CODEX_HOME/hooks.json
@@ -44,6 +56,14 @@ while [ "$#" -gt 0 ]; do
             [ "$#" -ge 2 ] || { echo "Missing value for --harness" >&2; usage >&2; exit 2; }
             HARNESS="$2"
             shift 2
+            ;;
+        --uninstall)
+            UNINSTALL=1
+            shift
+            ;;
+        --purge-data)
+            PURGE_DATA=1
+            shift
             ;;
         *)
             echo "Unknown option: $1" >&2
@@ -80,6 +100,65 @@ if [ "$BUN_MAJOR" -lt 1 ] || { [ "$BUN_MAJOR" -eq 1 ] && [ "$BUN_MINOR" -lt 1 ];
 fi
 printf -v BUN_Q '%q' "$BUN"
 printf -v ROOT_Q '%q' "$ROOT"
+
+# --- uninstall: ONE documented path that removes every llmwiki-owned surface ----------------
+#
+# Each wiring module removes what it owns (by ownership marker, never by restoring a backup),
+# so this stays correct after a reinstall and never rolls back unrelated configuration the
+# user added in between. Runtime state is separate and opt-in: data is kept and reported
+# unless --purge-data is given.
+if [ "$UNINSTALL" -eq 1 ]; then
+    UNINSTALL_FAILURES=0
+    run_uninstall_step() {
+        LAST_STEP_OK=1
+        STEP_NAME="$1"
+        shift
+        if "$@"; then
+            return 0
+        else
+            STEP_STATUS=$?
+        fi
+        LAST_STEP_OK=0
+        UNINSTALL_FAILURES=$((UNINSTALL_FAILURES + 1))
+        echo "🔴 $STEP_NAME failed (exit $STEP_STATUS); remaining cleanup will continue." >&2
+        return 0
+    }
+
+    echo "=== llmwiki uninstall ==="
+    echo "--- 1) background capture service ---"
+    run_uninstall_step "background capture service" bash "$ROOT/daemon/install.sh" --uninstall
+    DAEMON_STOPPED="$LAST_STEP_OK"
+    echo
+    echo "--- 2) Claude Code hooks + commands ---"
+    run_uninstall_step "Claude Code wiring" "$BUN" "$ROOT/src/daemon/wire.ts" --revert
+    echo
+    echo "--- 3) Codex hooks + skills + launcher ---"
+    run_uninstall_step "Codex wiring" "$BUN" "$ROOT/src/daemon/wire-codex.ts" --revert
+    echo
+    echo "--- 4) OpenCode plugin + commands + launcher ---"
+    run_uninstall_step "OpenCode wiring" "$BUN" "$ROOT/src/daemon/wire-opencode.ts" --revert
+    echo
+    echo "--- 5) local runtime state ---"
+    if [ "$PURGE_DATA" -eq 1 ] && [ "$DAEMON_STOPPED" -ne 1 ]; then
+        echo "🔴 local runtime state purge skipped because the background service was not confirmed stopped." >&2
+    elif [ "$PURGE_DATA" -eq 1 ]; then
+        run_uninstall_step "local runtime state purge" "$BUN" "$ROOT/src/cli.ts" purge-state --confirm
+    else
+        run_uninstall_step "local runtime state report" "$BUN" "$ROOT/src/cli.ts" purge-state --report
+    fi
+    echo
+    if [ "$UNINSTALL_FAILURES" -gt 0 ]; then
+        echo "=== uninstall incomplete: $UNINSTALL_FAILURES step(s) need attention ===" >&2
+    else
+        echo "=== uninstall complete ==="
+    fi
+    echo "  • Your wikis are untouched: docs/wiki/ in each project is ordinary Markdown you own."
+    echo "  • Per-project enrollment markers live in each repo's .git/llmwiki/ and are inert without the engine."
+    echo "    Remove one explicitly with: $BUN_Q ${ROOT_Q}/src/cli.ts disable <repo>"
+    echo "  • This clone was NOT deleted — remove ${ROOT_Q} yourself when you are done."
+    [ "$UNINSTALL_FAILURES" -eq 0 ] || exit 1
+    exit 0
+fi
 
 USE_CODEX=0
 USE_CLAUDE=0
@@ -145,7 +224,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
     echo "  harness: $HARNESS (Codex=$USE_CODEX, Claude=$USE_CLAUDE, OpenCode=$USE_OPENCODE)"
     echo "  would  : run doctor (pre)"
     echo "  would  : install capture daemon"
-    [ "$USE_CLAUDE" -eq 1 ] && echo "  would  : wire Claude Code hooks + /wiki-* commands"
+    [ "$USE_CLAUDE" -eq 1 ] && "$BUN" "$ROOT/src/daemon/wire.ts" --dry-run
     [ "$USE_CODEX" -eq 1 ] && "$BUN" "$ROOT/src/daemon/wire-codex.ts" --dry-run
     [ "$USE_OPENCODE" -eq 1 ] && "$BUN" "$ROOT/src/daemon/wire-opencode.ts" --dry-run
     echo "  would  : run doctor (post) and propagate failures"
@@ -175,6 +254,12 @@ echo "--- 1) doctor (pre) ---"
 echo
 
 STEP=2
+if [ "$USE_CLAUDE" -eq 1 ]; then
+    echo "--- $STEP) Claude Code preflight (read-only conflict check) ---"
+    "$BUN" "$ROOT/src/daemon/wire.ts" --dry-run
+    echo
+    STEP=$((STEP + 1))
+fi
 if [ "$USE_CODEX" -eq 1 ]; then
     echo "--- $STEP) Codex preflight (read-only conflict/schema check) ---"
     "$BUN" "$ROOT/src/daemon/wire-codex.ts" --dry-run
@@ -248,6 +333,5 @@ if [ "$USE_OPENCODE" -eq 1 ]; then
     echo "  • OpenCode close-out: /wiki-save"
     echo "  • OpenCode project-wiki repair: /wiki-doctor"
 fi
-echo "  • Undo Codex: $BUN_Q ${ROOT_Q}/src/daemon/wire-codex.ts --revert"
-echo "  • Undo OpenCode: $BUN_Q ${ROOT_Q}/src/daemon/wire-opencode.ts --revert"
-echo "  • Undo daemon/Claude: bash ${ROOT_Q}/daemon/install.sh --uninstall · $BUN_Q ${ROOT_Q}/src/daemon/wire.ts --revert"
+echo "  • Uninstall everything llmwiki owns: ${ROOT_Q}/setup.sh --uninstall"
+echo "  • Also remove local runtime state: ${ROOT_Q}/setup.sh --uninstall --purge-data"

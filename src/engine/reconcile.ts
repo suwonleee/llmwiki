@@ -10,23 +10,17 @@
 // This reconciles the ledger against EVIDENCE, deterministically: a session is "reflected" iff a
 // wiki page CITES its transcript (footnote `[^n]: <name>.jsonl` or frontmatter `source:`). Cited
 // pending rows are advanced to distilled; only genuinely un-cited sessions remain pending. No LLM.
-import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
+import { statSync, existsSync } from "node:fs";
 import { basename, join, sep } from "node:path";
 import * as capture from "./capture.ts";
 import { getConfig } from "./config.ts";
+import { readRepoDir, readRepoFile } from "./repo-write.ts";
 
-function walkMarkdown(dir: string, out: string[]): void {
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const e of entries) {
-    if (e.isSymbolicLink()) continue; // don't follow symlinks (avoids loops)
-    const full = join(dir, e.name);
-    if (e.isDirectory()) walkMarkdown(full, out);
-    else if (e.isFile() && e.name.endsWith(".md")) out.push(full);
+function walkMarkdown(repo: string, relativeDir: string, out: string[]): void {
+  for (const e of readRepoDir(repo, relativeDir)) {
+    const rel = join(relativeDir, e.name);
+    if (e.isDirectory) walkMarkdown(repo, rel, out);
+    else if (e.isFile && e.name.endsWith(".md")) out.push(rel);
   }
 }
 
@@ -35,20 +29,16 @@ function walkMarkdown(dir: string, out: string[]): void {
 // not mistaken for a citation.
 export function citedTranscripts(repo: string): Set<string> {
   const files: string[] = [];
-  walkMarkdown(join(repo, "docs", "wiki"), files);
+  walkMarkdown(repo, join("docs", "wiki"), files);
   // The quiz layer is the HUMAN's notebook, not wiki coverage: a transcript cited inside a
   // quiz record must never mark that session as reflected — it would advance the capture
   // watermark and silently suppress the backlog nag (quiz.ts one-directional contract).
-  const quizRoot = join(repo, "docs", "wiki", getConfig(repo).quizDir) + sep;
+  const quizRoot = join("docs", "wiki", getConfig(repo).quizDir) + sep;
   const cited = new Set<string>();
   for (const f of files) {
     if (f.startsWith(quizRoot)) continue;
-    let text: string;
-    try {
-      text = readFileSync(f, "utf-8");
-    } catch {
-      continue;
-    }
+    const text = readRepoFile(repo, f);
+    if (text === null) continue;
     for (const line of text.split("\n")) {
       const t = line.trim();
       if (!/^(\[\^[^\]]+\]:|source:)/.test(t)) continue;

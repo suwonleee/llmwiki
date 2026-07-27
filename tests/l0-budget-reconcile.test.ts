@@ -4,6 +4,13 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { buildContext } from "../src/engine/context.ts";
+import { enrollRepo, makeGitRepo } from "./support/git-repo.ts";
+
+// Cold start is fail-closed: only an enrolled git worktree emits anything, so every fixture that
+// asserts on cold-start output is built as one.
+function enrolledRepo(prefix: string): string {
+  return enrollRepo(makeGitRepo(join(mkdtempSync(join(tmpdir(), prefix)), "repo")));
+}
 import { Linter } from "../src/engine/lint.ts";
 import * as capture from "../src/engine/capture.ts";
 import { reconcileReflected, citedTranscripts, uncitedPending } from "../src/engine/reconcile.ts";
@@ -14,7 +21,7 @@ process.env.LLMWIKI_LANG = "en";
 
 // ---- F1: cold-start L0 standard (no-cut principle, 2026-07-12) --------------
 test("an over-standard current-state injects WHOLE — nothing cut, notice appended", () => {
-  const repo = mkdtempSync(join(tmpdir(), "llmwiki-f1-"));
+  const repo = enrolledRepo("llmwiki-f1-");
   mkdirSync(join(repo, "docs", "wiki"), { recursive: true });
   const big = "---\ntitle: CS\n---\n\n" + "x".repeat(5000) + "ZZZSENTINELZZZ";
   writeFileSync(join(repo, "docs", "wiki", "current-state.md"), big, "utf-8");
@@ -25,7 +32,7 @@ test("an over-standard current-state injects WHOLE — nothing cut, notice appen
 });
 
 test("a giant frontmatter injects intact — fences balanced, nothing dropped", () => {
-  const repo = mkdtempSync(join(tmpdir(), "llmwiki-f1fm-"));
+  const repo = enrolledRepo("llmwiki-f1fm-");
   mkdirSync(join(repo, "docs", "wiki"), { recursive: true });
   // frontmatter ALONE exceeds the standard; whole-page injection must keep the pair balanced
   const fm = "---\ntitle: CS\ndescription: " + "F".repeat(2200) + "\n---\n";
@@ -41,7 +48,7 @@ test("a giant frontmatter injects intact — fences balanced, nothing dropped", 
 });
 
 test("an under-standard page injects intact with NO notice", () => {
-  const repo = mkdtempSync(join(tmpdir(), "llmwiki-f1b-"));
+  const repo = enrolledRepo("llmwiki-f1b-");
   mkdirSync(join(repo, "docs", "wiki"), { recursive: true });
   const small = "---\ntitle: CS\n---\n\nnow: shipping. next: nothing. UNIQUEMARK42";
   writeFileSync(join(repo, "docs", "wiki", "current-state.md"), small, "utf-8");
@@ -52,7 +59,7 @@ test("an under-standard page injects intact with NO notice", () => {
 });
 
 test("mildly over the standard: the LAST Next bullet survives (the measured failure case)", () => {
-  const repo = mkdtempSync(join(tmpdir(), "llmwiki-f1qa-"));
+  const repo = enrolledRepo("llmwiki-f1qa-");
   mkdirSync(join(repo, "docs", "wiki"), { recursive: true });
   // ~1.8K chars — the exact class of page (1,639 chars, measured 07-12) whose final
   // "push pending" Next bullet the old 1,600 blind tail cut used to eat.
@@ -68,7 +75,7 @@ test("mildly over the standard: the LAST Next bullet survives (the measured fail
 });
 
 test("a huge multi-section L0 loses nothing — every section body survives", () => {
-  const repo = mkdtempSync(join(tmpdir(), "llmwiki-f1big-"));
+  const repo = enrolledRepo("llmwiki-f1big-");
   mkdirSync(join(repo, "docs", "wiki"), { recursive: true });
   const body =
     "---\ntitle: CS\n---\n\n## Direction (human-confirmed)\n" +
@@ -124,7 +131,7 @@ beforeAll(() => {
 });
 
 test("reconcile marks cited sessions distilled, leaves un-cited as backlog", () => {
-  const repo = mkdtempSync(join(tmpdir(), "llmwiki-f3-repo-"));
+  const repo = enrolledRepo("llmwiki-f3-repo-");
   mkdirSync(join(repo, "docs", "wiki", "2_milestone"), { recursive: true });
 
   const tdir = mkdtempSync(join(tmpdir(), "llmwiki-f3-tx-"));
@@ -155,7 +162,7 @@ test("reconcile marks cited sessions distilled, leaves un-cited as backlog", () 
 });
 
 test("reconcile dry-run reports without advancing the watermark", () => {
-  const repo = mkdtempSync(join(tmpdir(), "llmwiki-f3b-repo-"));
+  const repo = enrolledRepo("llmwiki-f3b-repo-");
   mkdirSync(join(repo, "docs", "wiki", "2_milestone"), { recursive: true });
   const tdir = mkdtempSync(join(tmpdir(), "llmwiki-f3b-tx-"));
   const tC = join(tdir, "sessC-ccc.jsonl");
@@ -174,7 +181,7 @@ test("reconcile dry-run reports without advancing the watermark", () => {
 });
 
 test("reconcile does NOT advance a partially-condensed (byte_offset>0) session", () => {
-  const repo = mkdtempSync(join(tmpdir(), "llmwiki-f3c-repo-"));
+  const repo = enrolledRepo("llmwiki-f3c-repo-");
   mkdirSync(join(repo, "docs", "wiki", "2_milestone"), { recursive: true });
   const tdir = mkdtempSync(join(tmpdir(), "llmwiki-f3c-tx-"));
   const tD = join(tdir, "sessD-ddd.jsonl");
@@ -199,7 +206,7 @@ test("reconcile does NOT advance a partially-condensed (byte_offset>0) session",
 });
 
 test("uncitedPending is the human backlog: excludes cited (full & partial), keeps un-cited", () => {
-  const repo = mkdtempSync(join(tmpdir(), "llmwiki-f3e-repo-"));
+  const repo = enrolledRepo("llmwiki-f3e-repo-");
   mkdirSync(join(repo, "docs", "wiki", "2_milestone"), { recursive: true });
   const tdir = mkdtempSync(join(tmpdir(), "llmwiki-f3e-tx-"));
   const cit = join(tdir, "cited-full-e.jsonl"); // cited, watermark 0
@@ -225,7 +232,7 @@ test("uncitedPending is the human backlog: excludes cited (full & partial), keep
 });
 
 test("cold-start pending nag counts only un-cited sessions (cited-partial never inflates it)", () => {
-  const repo = mkdtempSync(join(tmpdir(), "llmwiki-f3f-repo-"));
+  const repo = enrolledRepo("llmwiki-f3f-repo-");
   mkdirSync(join(repo, "docs", "wiki", "2_milestone"), { recursive: true });
   writeFileSync(join(repo, "docs", "wiki", "current-state.md"), "---\ntitle: CS\n---\n\nnow.", "utf-8");
   const tdir = mkdtempSync(join(tmpdir(), "llmwiki-f3f-tx-"));
@@ -250,7 +257,7 @@ test("cold-start pending nag counts only un-cited sessions (cited-partial never 
 });
 
 test("citedTranscripts matches case-insensitively (.JSONL)", () => {
-  const repo = mkdtempSync(join(tmpdir(), "llmwiki-f3d-repo-"));
+  const repo = enrolledRepo("llmwiki-f3d-repo-");
   mkdirSync(join(repo, "docs", "wiki"), { recursive: true });
   writeFileSync(
     join(repo, "docs", "wiki", "overview.md"),

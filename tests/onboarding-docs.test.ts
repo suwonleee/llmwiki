@@ -61,6 +61,23 @@ describe("public onboarding documentation", () => {
     }
   });
 
+  test("every language documents enrollment, unified uninstall, and opt-in generation", () => {
+    for (const path of [
+      "README.md",
+      "readmes/README.ko.md",
+      "readmes/README.ja.md",
+      "readmes/README.zh.md",
+    ]) {
+      const content = read(path);
+      expect(content).toContain("llmwiki init");
+      expect(content).toContain("./setup.sh --uninstall");
+      expect(content).toContain("LLMWIKI_LLM_CMD");
+      expect(content).toContain("LLMWIKI_STATE_DIR");
+      expect(content).toContain("https://github.com/suwonleee/llmwiki/releases");
+      expect(content).not.toContain("git checkout <");
+    }
+  });
+
   test("keeps retired command names out of current user-facing surfaces", () => {
     const surfaces = [
       "README.md",

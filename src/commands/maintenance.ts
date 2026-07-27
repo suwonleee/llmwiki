@@ -107,7 +107,15 @@ export function createMaintenanceHandlers(dependencies: MaintenanceDependencies)
         die("capture-prune [--older-than <days>] — days must be a non-negative number");
       }
       const result = capture.prune(days);
-      console.log(`✓ capture queue pruned: ${result.removed} dead pending row(s) removed, ${result.kept} pending kept (age guard ${days}d)`);
+      console.log(`✓ capture queue pruned: ${result.removed} expired row(s) recorded as lost (kept as an audit ledger, never deleted), ${result.kept} pending kept (age guard ${days}d)`);
+      // The queue is metadata; the OpenCode exports are conversation TEXT and expire on their own
+      // clock (30 days by the newest member of an export/meta pair). The daemon does this daily —
+      // doing it here too means the explicit maintenance path is not weaker than the automatic one.
+      const exports_ = capture.pruneExports();
+      console.log(
+        `✓ transcript exports pruned: ${exports_.pairs} expired pair(s) removed (${exports_.rows} pending row(s) cleared)\n` +
+          `  capture.db metadata and daemon.log have no automatic expiry — remove them with \`setup.sh --uninstall --purge-data\``,
+      );
     },
     doctor: (args) => {
       const harness = getFlagValue(args, "--harness") ?? "all";

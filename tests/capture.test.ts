@@ -8,11 +8,15 @@ import * as capture from "../src/engine/capture.ts";
 
 describe("capture queue", () => {
   let dir: string;
+  let state: string;
   let transcript: string;
 
   beforeEach(() => {
+    // Transcripts live OUTSIDE the state root: llmwiki refuses to adopt a state directory
+    // holding files it did not create, so a fixture that mixes the two is not a valid setup.
     dir = mkdtempSync(join(tmpdir(), "llmwiki-cap-"));
-    capture.setStateDir(dir);
+    state = join(dir, "state");
+    capture.setStateDir(state);
     transcript = join(dir, "t.jsonl");
     writeFileSync(transcript, "line one\nline two\n");
   });

@@ -6,9 +6,16 @@
 // debt. Today the only auto-discovering source is claude-jsonl, so the
 // default sweep is byte-identical to the pre-abstraction daemon. Zero-dep by default (fs
 // size polling, 30s); uses chokidar for instant capture only if it happens to be installed.
-import { statSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import * as capture from "../engine/capture.ts";
-import { sources, discoverableSources, type DiscoveredSession } from "../engine/source.ts";
+import { reassertClaudeReadHooks } from "../engine/doctor.ts";
+import { isEnrolled, isEnrolledFresh, resetEnrollmentCache } from "../engine/enrollment.ts";
+import {
+  sources,
+  discoverableSources,
+  routeNeedsMaterialization,
+  type DiscoveredSession,
+} from "../engine/source.ts";
 
 const THRESHOLD_LINES = 50; // skip trivial Q&A sessions (work-volume signal)
 const POLL_SECONDS = 30;
@@ -18,17 +25,78 @@ function log(msg: string): void {
   console.log(`${ts} INFO llmwiki-daemon: ${msg}`);
 }
 
-// All auto-discoverable sessions across every registered source (plain returns none).
-function discoverAll(): { d: DiscoveredSession; kind: string }[] {
-  const out: { d: DiscoveredSession; kind: string }[] = [];
-  for (const s of sources()) {
-    for (const d of s.discover()) out.push({ d, kind: s.kind });
-  }
-  return out;
+export interface SweepCounts {
+  discovered: number;
+  enqueued: number;
+  skippedShort: number;
+  skippedUnenrolled: number;
+  routeUnresolved: number;
+  failed: number;
 }
 
-function process_(d: DiscoveredSession, kind: string): "enqueued" | "skipped_short" {
+function emptyCounts(): SweepCounts {
+  return { discovered: 0, enqueued: 0, skippedShort: 0, skippedUnenrolled: 0, routeUnresolved: 0, failed: 0 };
+}
+
+// The two-stage sweep. Stage 1 (discoverRoutes) learns only where a session belongs; the
+// enrollment predicate then decides whether stage 2 (materialize) may look at the session at
+// all. Everything an unenrolled repository contributes to this process is a counter.
+//
+// Logging is deliberately AGGREGATE for the rejected side: printing the repository path of a
+// session we refused to read would put the very inventory we are protecting into daemon.log.
+function sweep(lastSizes?: Record<string, number>): SweepCounts {
+  const counts = emptyCounts();
+  // Enrollment is cached per process; a sweep is the natural refresh point, so `llmwiki init`
+  // takes effect on the next poll without restarting the daemon.
+  resetEnrollmentCache();
+  for (const s of sources()) {
+    for (let route of s.discoverRoutes()) {
+      counts.discovered += 1;
+      // Stage-1 could not tell whose session this is. Before giving up, check whether a harness
+      // already told us during that session's SessionStart hook — the answer we were handed beats
+      // the answer we infer from a file format we do not own.
+      const hinted = route.repo ?? capture.routeHintFor(route.path)?.repo ?? null;
+      if (!hinted) {
+        counts.routeUnresolved += 1;
+        continue;
+      }
+      route = { ...route, repo: hinted };
+      // Enrollment is decided HERE — after routing (however the repository was learned) and before
+      // materialization. tests/repo-io-static-boundary.test.ts pins this ordering by grep.
+      if (!isEnrolled(route.repo)) {
+        counts.skippedUnenrolled += 1;
+        continue;
+      }
+      // Poll-mode short circuit: an enrolled transcript whose size has not moved since the last
+      // sweep has nothing new to count or enqueue.
+      if (!routeNeedsMaterialization(route, lastSizes)) continue;
+      let session: DiscoveredSession | null;
+      try {
+        session = s.materialize(route);
+      } catch (e) {
+        counts.failed += 1;
+        log(`materialize FAILED [${s.kind}]: ${e}`);
+        continue;
+      }
+      if (!session) {
+        counts.routeUnresolved += 1;
+        continue;
+      }
+      const outcome = processGuarded(session, s.kind);
+      if (outcome === "enqueued") counts.enqueued += 1;
+      else if (outcome === "failed") counts.failed += 1;
+      else if (outcome === "skipped_unenrolled") counts.skippedUnenrolled += 1;
+      else counts.skippedShort += 1;
+    }
+  }
+  return counts;
+}
+
+function process_(d: DiscoveredSession, kind: string): "enqueued" | "skipped_short" | "skipped_unenrolled" {
   if (d.lines < THRESHOLD_LINES) return "skipped_short";
+  // Re-check immediately before the write. Materialization can take a while on a large session,
+  // and `llmwiki disable` during that window must not still land a row.
+  if (!isEnrolledFresh(d.repo)) return "skipped_unenrolled";
   capture.enqueue(d.path, d.sessionId, d.repo, d.lines, kind);
   log(`captured sess=${(d.sessionId || "?").slice(0, 8)} repo=${d.repo} lines=${d.lines} [${kind}]`);
   return "enqueued";
@@ -38,7 +106,10 @@ function process_(d: DiscoveredSession, kind: string): "enqueued" | "skipped_sho
 // file that vanished mid-sweep, an unwritable state dir. A throw here used to kill the process,
 // and capture then stops SILENTLY — transcripts keep rotating per the harness's own retention, so
 // the sessions are simply gone while the wiki merely looks quiet. Log it, count it, carry on.
-function processGuarded(d: DiscoveredSession, kind: string): "enqueued" | "skipped_short" | "failed" {
+function processGuarded(
+  d: DiscoveredSession,
+  kind: string,
+): "enqueued" | "skipped_short" | "skipped_unenrolled" | "failed" {
   try {
     return process_(d, kind);
   } catch (e) {
@@ -57,41 +128,48 @@ function queueStats(): string {
   }
 }
 
-function runOnce(): { discovered: number; enqueued: number; skippedShort: number; failed: number } {
-  const counts = { discovered: 0, enqueued: 0, skippedShort: 0, failed: 0 };
-  for (const { d, kind } of discoverAll()) {
-    const outcome = processGuarded(d, kind);
-    counts.discovered += 1;
-    if (outcome === "enqueued") counts.enqueued += 1;
-    else if (outcome === "failed") counts.failed += 1;
-    else counts.skippedShort += 1;
-  }
+function runCycle(lastSizes?: Record<string, number>): SweepCounts {
+  const counts = sweep(lastSizes);
+  // Retention is deliberately after materialization: legacy exports can be migration evidence.
+  pruneExportsIfDue();
   return counts;
 }
 
+function runOnce(): SweepCounts {
+  return runCycle();
+}
+
 async function pollLoop(): Promise<void> {
-  const last: Record<string, number> = {};
+  const lastSizes: Record<string, number> = {};
   // eslint-disable-next-line no-constant-condition
   while (true) {
     // Discovery walks other tools' directories, so it can throw on a permission or race too —
     // a failed sweep costs one poll interval, never the loop.
     try {
-      for (const { d, kind } of discoverAll()) {
-        let size: number;
-        try {
-          size = statSync(d.path).size;
-        } catch {
-          continue;
-        }
-        if (last[d.path] !== size) {
-          last[d.path] = size;
-          processGuarded(d, kind);
-        }
-      }
+      runCycle(lastSizes);
     } catch (e) {
       log(`sweep FAILED (retrying next poll): ${e}`);
     }
+    reassertWiringIfDue();
     await Bun.sleep(POLL_SECONDS * 1000);
+  }
+}
+
+// A live session writes settings.json back from its in-memory snapshot on any in-session change,
+// silently dropping hooks added on disk after it started — including what setup.sh installed from
+// inside that session. Re-assert daily, from the loop ONLY: `--once` runs inside tests and
+// one-shot sweeps, and a sweep must never edit the user's profiles.
+const WIRING_INTERVAL_MS = 24 * 60 * 60 * 1000;
+let lastWiringAt = 0;
+
+function reassertWiringIfDue(): void {
+  const now = Date.now();
+  if (now - lastWiringAt < WIRING_INTERVAL_MS) return;
+  lastWiringAt = now;
+  try {
+    for (const note of reassertClaudeReadHooks()) log(`wiring self-heal: ${note}`);
+  } catch (e) {
+    log(`wiring self-heal FAILED (will retry tomorrow): ${e}`);
   }
 }
 
@@ -109,20 +187,37 @@ async function watchLoop(): Promise<void> {
     const dirs = discoverableSources().flatMap((s) => s.watchRoots?.() ?? []);
     if (chokidar && dirs.length) {
       log(`chokidar mode on: ${dirs.join(", ")}`);
-      runOnce(); // initial sweep
       const watcher = chokidar.watch(dirs, { ignoreInitial: true });
+      // Same two stages as the poll sweep, one file at a time: route (bounded metadata), check
+      // enrollment, and only then materialize. probe() would read the whole transcript, which is
+      // exactly what an unenrolled session must not cost.
       const onChange = (p: string) => {
         if (!p.endsWith(".jsonl") || !existsSync(p)) return;
+        resetEnrollmentCache();
         for (const s of discoverableSources()) {
-          const d = s.probe(p);
-          if (d) {
-            process_(d, s.kind);
-            return;
+          const found = s.routeFor?.(p);
+          if (!found) continue;
+          // Same order as the sweep: inference first, then what the harness told us at SessionStart.
+          const hinted = found.repo ?? capture.routeHintFor(found.path)?.repo ?? null;
+          if (!hinted) return;
+          const route = { ...found, repo: hinted };
+          if (!isEnrolled(route.repo)) return;
+          try {
+            const d = s.materialize(route);
+            if (d) processGuarded(d, s.kind);
+          } catch (e) {
+            log(`materialize FAILED [${s.kind}]: ${e}`);
           }
+          return;
         }
       };
       watcher.on("add", onChange).on("change", onChange);
-      return; // watcher keeps the process alive
+      // Chokidar is a latency optimization, not a replacement for discovery. OpenCode changes
+      // happen inside SQLite (outside these watch roots), enrollment can change without a file
+      // event, and TTL must keep running. Retain the authoritative periodic sweep alongside it.
+      log(`polling every ${POLL_SECONDS}s (chokidar fast path also active)`);
+      await pollLoop();
+      return;
     }
   } catch {
     /* fall through to polling */
@@ -131,16 +226,37 @@ async function watchLoop(): Promise<void> {
   await pollLoop();
 }
 
+// Retention runs at daemon startup and then at most once a day: the exports are the only
+// conversation bodies llmwiki keeps, and an expiry that only fires on an explicit maintenance
+// command is an expiry nobody runs.
+const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+let lastPruneAt = 0;
+
+function pruneExportsIfDue(force = false): void {
+  const now = Date.now();
+  if (!force && now - lastPruneAt < PRUNE_INTERVAL_MS) return;
+  lastPruneAt = now;
+  try {
+    const { pairs, rows } = capture.pruneExports();
+    if (pairs) log(`retention: removed ${pairs} expired OpenCode export pair(s), ${rows} pending row(s)`);
+  } catch (e) {
+    log(`retention FAILED (will retry tomorrow): ${e}`);
+  }
+}
+
 async function main(): Promise<void> {
   if (process.argv.includes("--once")) {
     const counts = runOnce();
     console.log(
       `sweep: discovered=${counts.discovered} enqueued=${counts.enqueued} ` +
-        `skipped_short=${counts.skippedShort} failed=${counts.failed}; queue stats: ${queueStats()}`,
+        `skipped_short=${counts.skippedShort} skipped_unenrolled=${counts.skippedUnenrolled} ` +
+        `route_unresolved=${counts.routeUnresolved} failed=${counts.failed}; queue stats: ${queueStats()}`,
     );
     return;
   }
   log("llmwiki capture daemon starting");
+  // The first poll sweeps before retention for the same migration-before-deletion invariant.
+  lastPruneAt = 0;
   await watchLoop();
 }
 

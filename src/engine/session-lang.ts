@@ -67,11 +67,11 @@ function readAll(paths: readonly string[]): string[] {
 /** The human's own turns from this repo's captured sessions (never the assistant's). */
 function humanUtterances(root: string): string[] {
   try {
-    // Imported lazily: capture opens the queue database, and language resolution must stay cheap
-    // for callers that never need this tier (an existing wiki answers from its pages).
+    // Imported lazily: an existing wiki answers from its pages and never needs the queue module.
+    // The read-only query below also refuses to create a queue on a fresh installation.
     const capture = require("./capture.ts") as typeof import("./capture.ts");
     const extract = require("./extract.ts") as typeof import("./extract.ts");
-    const transcripts = capture.transcriptsForRepo(root).slice(-MAX_TRANSCRIPTS);
+    const transcripts = capture.transcriptsForRepoReadOnly(root).slice(-MAX_TRANSCRIPTS);
     const said: string[] = [];
     for (const { path } of transcripts) {
       if (!existsSync(path)) continue;

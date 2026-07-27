@@ -6,6 +6,7 @@
 import type { Database } from "bun:sqlite";
 import { resolve as pathResolve, dirname as pathDirname } from "node:path";
 import { existsSync } from "node:fs";
+import { repoFileExists, repoRelative } from "./repo-write.ts";
 import {
   buildLinkIndex,
   lookupKey,
@@ -347,7 +348,7 @@ export class Linter {
     if (
       name === "overview.md" &&
       this.index &&
-      existsSync(pathResolve(this.index.root, "docs", "wiki", "current-state.md"))
+      repoFileExists(this.index.root, "docs/wiki/current-state.md")
     ) {
       return [];
     }
@@ -664,7 +665,13 @@ export class Linter {
       if (IMG_EXT.test(href)) continue;
       const bare = href.split("#")[0]!;
       const target = pathResolve(pageDir, bare);
-      if (target.startsWith(root) && existsSync(target)) continue;
+      if (target.startsWith(root)) {
+        try {
+          if (repoFileExists(root, repoRelative(root, target))) continue;
+        } catch {
+          // outside/root paths are unresolved links
+        }
+      }
       if (this._resolveLink(clamp(bare, curDir), wikiLookup)) continue;
       out.push({
         severity: "error",

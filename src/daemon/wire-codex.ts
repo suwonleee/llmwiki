@@ -145,8 +145,13 @@ function stripCurrentHooks(file: HooksFile): number {
       });
       if (hooks.length) kept.push({ ...group, hooks });
     }
-    if (file.hooks && event in file.hooks) file.hooks[event] = kept;
+    if (file.hooks && event in file.hooks) {
+      if (kept.length) file.hooks[event] = kept;
+      else delete file.hooks[event];
+    }
   }
+  if (file.hooks && Object.keys(file.hooks).length === 0) delete file.hooks;
+  if (file.description === "llmwiki lifecycle hooks for Codex") delete file.description;
   return removed;
 }
 
@@ -187,7 +192,10 @@ function capturePriorInstall(hooks: HooksFile): InstallBackup | null {
   let launcher: InstallBackup["launcher"] = null;
   try {
     const content = readFileSync(LAUNCHER, "utf8");
-    if (isManagedLauncher(content)) launcher = { content, mode: statSync(LAUNCHER).mode & 0o777 };
+    if (isManagedLauncher(content)) {
+      launcher = { content, mode: statSync(LAUNCHER).mode & 0o777 };
+      if (content.includes(CLONE_ROOT)) currentOwned = true; // shared launcher from this clone's OpenCode wiring
+    }
   } catch {
     /* absent */
   }
