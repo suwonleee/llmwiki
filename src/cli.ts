@@ -227,6 +227,9 @@ function cmdUpdateNext(p: Parsed) {
     `# cwd=${inc.cwd} session=${inc.sessionId} new_offset=${inc.newOffset} ` +
       `users=${inc.nUsers} assistants=${inc.nAssistants}`,
   );
+  // Route check — `cwd=` above is the bucket key and matches this queue by construction; these
+  // lines say where the segment's mutations actually landed (advisory when that is elsewhere).
+  for (const line of update.renderRouteLines(ws, inc.touched)) console.log(line);
   // P2: surface a summary the harness ALREADY wrote (session-memory / compact / rollout
   // summary) as draft material — the condense pass must still ground claims in the raw
   // extract below (harness summary = material, wiki = record of record).
@@ -779,6 +782,26 @@ function cmdBench(p: Parsed) {
   for (const [k, v] of Object.entries(report.recall)) console.log(`  search ${k}: ${pct(v)}`);
   console.log(`  turn-context pointer hit: ${pct(report.tc_pointer_hit)}`);
   if (report.n_refusal) console.log(`  turn-context refusal ok: ${pct(report.tc_refusal_ok)}`);
+  // What a session gets without anyone running a command — the two automatic channels, priced.
+  const ps = report.passive;
+  const kb = (b: number) => `${(b / 1024).toFixed(1)}KB`;
+  console.log(`--- passive delivery (no command, no /wiki-ask) ---`);
+  console.log(`  reach (pointer arrived unasked): ${pct(ps.reach)}`);
+  if (report.n_refusal) console.log(`  silence on off-topic prompts:    ${pct(ps.silence)}`);
+  console.log(`  cost: ${kb(ps.coldstart_bytes)} once per session · per turn p50 ${kb(ps.turn_bytes_p50)} / p95 ${kb(ps.turn_bytes_p95)}`);
+  const langs = Object.entries(ps.by_lang);
+  if (langs.length) {
+    console.log(`  reach by asking language:   ${langs.map(([l, v]) => `${l} ${pct(v.reach)} (n=${v.n})`).join(" · ")}`);
+  }
+  const langsS = Object.entries(ps.by_lang_silence);
+  if (langsS.length) {
+    console.log(`  silence by asking language: ${langsS.map(([l, v]) => `${l} ${pct(v.reach)} (n=${v.n})`).join(" · ")}`);
+  }
+  const rec = Object.entries(ps.by_recoverability);
+  if (rec.length) {
+    console.log(`  reach by where else the answer exists: ${rec.map(([k, v]) => `${k} ${pct(v.reach)} (n=${v.n})`).join(" · ")}`);
+    console.log(`  answerable from the wiki and nowhere else: ${pct(ps.irreplaceable)}`);
+  }
   const out = writeResults(ws, report);
   console.log(`  → ${out}`);
 }

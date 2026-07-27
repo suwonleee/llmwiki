@@ -70,6 +70,9 @@ there are no further prompts or confirmations, ever.
 - the `llmwiki` launcher is installed by the Codex and OpenCode wiring. On a **Claude-only**
   install there is no such command — run the CLI from the clone instead:
   `bun ~/llmwiki/src/cli.ts init /absolute/path/to/my-project` (same for `status` and `disable`)
+- **start your agent from the project directory**: a session reads, captures into, and files the
+  wiki at its cwd. A session whose edits actually went to a different enrolled repo is flagged at
+  close-out (`# ⚠ route:` on the extract header) so its record lands in the right wiki
 
 After setup reports healthy, stay in the same setup session and tell the agent:
 

@@ -5,7 +5,8 @@
 //
 // CRITICAL: offsets are BYTE positions. new_offset = start + raw.length must be
 // computed on the Buffer (bytes), never on a decoded string (JS strings are UTF-16).
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 export interface Turn {
   ts: string;
@@ -19,6 +20,45 @@ export interface Increment {
   newOffset: number; // byte offset to persist as the new watermark
   cwd: string | null; // working directory of the session (repo routing key)
   sessionId: string | null;
+  /**
+   * Git roots of the files this segment MUTATED (root → tool-call count). The routing question a
+   * close-out actually asks is "where did the work happen?", and `cwd` cannot answer it: capture
+   * buckets by session cwd, so for a session started in an enrolled home (or any ancestor repo)
+   * the bucket and the cwd agree BY CONSTRUCTION while every edit went somewhere else — observed
+   * 2026-07-27, when a session run from `~` produced three releases in `~/llmwiki-runtime` and
+   * nothing in its own extract said so. Mutations only (Edit/Write/…): reads roam everywhere;
+   * where you changed files is where the record belongs. Optional — the Claude adapter fills it;
+   * adapters that don't simply leave the route check silent.
+   */
+  touched?: Record<string, number>;
+}
+
+// The mutation tools whose file_path names "the work". Read/Grep/Glob roam across repos during
+// any investigation and would drown the signal; Bash is a string (unparseable cwd side effects).
+const MUTATION_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+
+/** Nearest ancestor containing `.git` (dir OR file — linked worktrees use a file). Cached. */
+function gitRootOf(dir: string, cache: Map<string, string | null>): string | null {
+  const seen: string[] = [];
+  let d = dir;
+  for (;;) {
+    const hit = cache.get(d);
+    if (hit !== undefined) {
+      for (const s of seen) cache.set(s, hit);
+      return hit;
+    }
+    seen.push(d);
+    if (existsSync(join(d, ".git"))) {
+      for (const s of seen) cache.set(s, d);
+      return d;
+    }
+    const parent = dirname(d);
+    if (parent === d) {
+      for (const s of seen) cache.set(s, null);
+      return null;
+    }
+    d = parent;
+  }
 }
 
 // Shared byte-tail read used by every source adapter: read from `startOffset` (the
@@ -53,6 +93,8 @@ export function extractIncrement(
   const assistants: Turn[] = [];
   let cwd: string | null = null;
   let sessionId: string | null = null;
+  const touched: Record<string, number> = {};
+  const rootCache = new Map<string, string | null>();
 
   const { raw, newOffset } = readTail(path, startOffset);
 
@@ -89,7 +131,17 @@ export function extractIncrement(
       t = content;
     } else if (Array.isArray(content)) {
       for (const p of content) {
-        if (p && typeof p === "object" && p.type === "text") t += p.text ?? "";
+        if (!p || typeof p !== "object") continue;
+        if (p.type === "text") t += p.text ?? "";
+        // Collected here, BEFORE the empty-text `continue` below: a tool_use-only assistant row
+        // carries no text at all, which is exactly the row the route signal lives in.
+        else if (p.type === "tool_use" && MUTATION_TOOLS.has(p.name)) {
+          const fp = p.input && typeof p.input === "object" ? p.input.file_path : null;
+          if (typeof fp === "string" && fp.startsWith("/")) {
+            const root = gitRootOf(dirname(fp), rootCache);
+            if (root) touched[root] = (touched[root] ?? 0) + 1;
+          }
+        }
       }
     }
     t = t.split(/\s+/).filter(Boolean).join(" ").trim();
@@ -106,7 +158,7 @@ export function extractIncrement(
     }
   }
 
-  return { users, assistants, newOffset, cwd, sessionId };
+  return { users, assistants, newOffset, cwd, sessionId, touched };
 }
 
 export function render(inc: Increment): string {

@@ -65,6 +65,9 @@ llmwiki init /absolute/path/to/my-project
 - `llmwiki` ランチャーはCodex・OpenCodeの配線が導入します。**Claude単独構成にはこのコマンドがない**ため、
   クローンから直接実行してください: `bun ~/llmwiki/src/cli.ts init /absolute/path/to/my-project`
   (`status`・`disable` も同様)
+- **エージェントは作業するプロジェクトのディレクトリから起動**: セッションは自分のcwdのwikiを読み、
+  そこにキャプチャされ、そこに記録されます。編集が実際には別の登録済みリポジトリに向かったセッションは、
+  クローズアウト時に抽出ヘッダーの `# ⚠ route:` 行で示され、正しいwikiに記録されるよう誘導されます
 
 セットアップが正常終了したら、同じセットアップセッションでエージェントに依頼します。
 

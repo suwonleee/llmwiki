@@ -62,6 +62,8 @@ llmwiki init /absolute/path/to/my-project
 - 自动集成仅用于Git，且按worktree隔离；移动仓库后需重新运行 `init`
 - `llmwiki` 启动器由Codex与OpenCode的接线安装。**仅安装Claude时没有该命令**，请直接从克隆目录运行：
   `bun ~/llmwiki/src/cli.ts init /absolute/path/to/my-project`（`status`、`disable` 同理）
+- **从要工作的项目目录启动智能体**：会话读取、捕获并记录其cwd处的wiki。若某个会话的编辑实际落在
+  另一个已登记的仓库，收尾时抽取头部会以一行 `# ⚠ route:` 标出，引导记录进正确的wiki
 
 setup正常完成后，在同一个安装会话中告诉智能体：
 

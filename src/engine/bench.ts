@@ -20,12 +20,20 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { WikiIndex, dedupeByPage } from "./db.ts";
 import { buildTurnContext } from "./turncontext.ts";
+import { buildContext } from "./context.ts";
 
 export interface BenchQuery {
   id: string;
   question: string;
   target_pages: string[]; // repo-relative wiki paths; empty for refusal queries
   must_refuse?: boolean;
+  // Optional labels. `lang` is the language the question is ASKED in — a team whose wiki is in one
+  // language and whose members ask in another needs to see reach per language, not averaged.
+  lang?: string;
+  // Where the answer exists outside this wiki: readable in the code, reconstructable from git
+  // history, or nowhere ("wiki_only" — a rejected alternative and its reason, a trap someone hit
+  // once). The share labelled wiki_only is the honest answer to "why keep a wiki at all".
+  recoverable_from?: "code" | "git" | "wiki_only";
 }
 
 export interface BenchSplit {
@@ -109,6 +117,21 @@ function tcPages(tc: string): string[] {
   return [...tc.matchAll(/→\s+(\S+)/g)].map((m) => m[1]!);
 }
 
+// What reaches a session that never runs a command. The two channels are the whole story:
+// cold start injects L0 once, unconditionally; turn-context injects pointers per prompt, only when
+// confident. Everything a model can do with the wiki unasked is downstream of these two.
+export interface PassiveReport {
+  reach: number; // share of content questions a pointer reached WITHOUT anyone asking
+  silence: number; // share of off-topic prompts that correctly got nothing
+  coldstart_bytes: number; // per-session constant, paid once
+  turn_bytes_p50: number; // per-turn cost, median
+  turn_bytes_p95: number; // per-turn cost, tail
+  irreplaceable: number; // share of questions labelled answerable from the wiki and nowhere else
+  by_lang: Record<string, { n: number; reach: number }>; // reach, content questions only
+  by_lang_silence: Record<string, { n: number; reach: number }>; // silence, refusal prompts only
+  by_recoverability: Record<string, { n: number; reach: number }>;
+}
+
 export interface BenchReport {
   subset: string;
   n: number;
@@ -117,6 +140,7 @@ export interface BenchReport {
   tc_refusal_ok: number; // share of refusal queries where turn-context stayed silent
   n_content: number;
   n_refusal: number;
+  passive: PassiveReport;
   per_query: Record<string, any>[];
 }
 
@@ -137,18 +161,28 @@ export function runBench(ws: string, subset: "all" | "tune" | "sealed" = "all"):
   const conn = idx.connect();
   const per: Record<string, any>[] = [];
   const sums: Record<string, number> = {};
+  const turnBytes: number[] = [];
+  // Kept apart on purpose: reach and silence are different questions, and averaging them into one
+  // per-language number would hide which of the two a language is failing.
+  const byLang: Record<string, { n: number; hits: number }> = {};
+  const byLangSilence: Record<string, { n: number; hits: number }> = {};
+  const byRecoverability: Record<string, { n: number; hits: number }> = {};
   let tcHits = 0;
   let refusalOk = 0;
   let nContent = 0;
   let nRefusal = 0;
+  let wikiOnly = 0;
+  let labelled = 0;
   try {
     for (const q of selected) {
       const tc = buildTurnContext(root, q.question); // no sessionId → no dedup state
+      turnBytes.push(Buffer.byteLength(tc, "utf-8"));
       if (q.must_refuse) {
         nRefusal += 1;
         const ok = tc.trim() === "";
         refusalOk += ok ? 1 : 0;
-        per.push({ id: q.id, refusal_ok: ok });
+        tally(byLangSilence, q.lang, ok);
+        per.push({ id: q.id, refusal_ok: ok, lang: q.lang });
         continue;
       }
       nContent += 1;
@@ -165,6 +199,12 @@ export function runBench(ws: string, subset: "all" | "tune" | "sealed" = "all"):
       const hit = q.target_pages.some((e) => pointed.some((p) => p.toLowerCase() === e.toLowerCase()));
       row["tc_hit"] = hit;
       tcHits += hit ? 1 : 0;
+      tally(byLang, q.lang, hit);
+      tally(byRecoverability, q.recoverable_from, hit);
+      if (q.recoverable_from === "wiki_only") wikiOnly += 1;
+      if (q.recoverable_from) labelled += 1;
+      row["lang"] = q.lang;
+      row["recoverable_from"] = q.recoverable_from;
       per.push(row);
     }
   } finally {
@@ -173,16 +213,55 @@ export function runBench(ws: string, subset: "all" | "tune" | "sealed" = "all"):
 
   const recall: Record<string, number> = {};
   for (const k of KS) recall[`r@${k}`] = nContent ? (sums[`r@${k}`] ?? 0) / nContent : 0;
+  const reach = nContent ? tcHits / nContent : 0;
+  const silence = nRefusal ? refusalOk / nRefusal : 0;
   return {
     subset,
     n: selected.length,
     recall,
-    tc_pointer_hit: nContent ? tcHits / nContent : 0,
-    tc_refusal_ok: nRefusal ? refusalOk / nRefusal : 0,
+    tc_pointer_hit: reach,
+    tc_refusal_ok: silence,
     n_content: nContent,
     n_refusal: nRefusal,
+    passive: {
+      reach,
+      silence,
+      // The cold-start channel is a per-session constant, not an average over queries: every
+      // session pays it once, whatever is asked. Reported as the one number it is.
+      coldstart_bytes: Buffer.byteLength(buildContext(root), "utf-8"),
+      turn_bytes_p50: percentile(turnBytes, 0.5),
+      turn_bytes_p95: percentile(turnBytes, 0.95),
+      // Claimed only for what a human actually labelled. An unlabelled golden set claims nothing.
+      irreplaceable: labelled ? wikiOnly / labelled : 0,
+      by_lang: rates(byLang),
+      by_lang_silence: rates(byLangSilence),
+      by_recoverability: rates(byRecoverability),
+    },
     per_query: per,
   };
+}
+
+function tally(into: Record<string, { n: number; hits: number }>, key: string | undefined, hit: boolean): void {
+  if (!key) return;
+  const e = (into[key] ??= { n: 0, hits: 0 });
+  e.n += 1;
+  if (hit) e.hits += 1;
+}
+
+function rates(counts: Record<string, { n: number; hits: number }>): Record<string, { n: number; reach: number }> {
+  const out: Record<string, { n: number; reach: number }> = {};
+  for (const key of Object.keys(counts).sort()) {
+    const e = counts[key]!;
+    out[key] = { n: e.n, reach: e.n ? e.hits / e.n : 0 };
+  }
+  return out;
+}
+
+// Nearest-rank on a sorted copy: no interpolation, so the number is always one a real turn paid.
+function percentile(values: readonly number[], p: number): number {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1))]!;
 }
 
 export function writeResults(root: string, report: BenchReport): string {

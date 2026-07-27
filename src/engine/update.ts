@@ -49,6 +49,30 @@ export interface NextIncrement {
   sessionId: string | null;
   nUsers: number;
   nAssistants: number;
+  touched: Record<string, number>; // git roots this segment's mutations landed in (extract.ts)
+}
+
+/**
+ * Header lines answering "where did the work happen?" — the question `cwd=` structurally cannot
+ * answer (capture buckets by session cwd, so bucket and cwd agree by construction even when every
+ * edit went to another repo). One line lists the mutated git roots; a second, advisory line
+ * appears only when the dominant root is NOT the queue repo — the exact silent-misfiling shape a
+ * home-enrolled setup produces. English on purpose: this rides the extract, which is LLM-facing.
+ */
+export function renderRouteLines(ws: string, touched: Record<string, number> | undefined): string[] {
+  const entries = Object.entries(touched ?? {}).sort((a, b) => b[1] - a[1]);
+  if (!entries.length) return [];
+  const lines = [`# touched: ${entries.map(([root, n]) => `${root}(${n})`).join(" · ")}`];
+  const [topRoot, topCount] = entries[0]!;
+  const wsRoot = resolve(ws);
+  if (topRoot !== wsRoot) {
+    lines.push(
+      `# ⚠ route: ${topCount} of this segment's file mutations happened under ${topRoot}, not ${wsRoot} — ` +
+        `file the session into THAT repo's wiki, then advance the watermark where the transcript is queued ` +
+        `(llmwiki update-done ${wsRoot} <transcript> <offset>).`,
+    );
+  }
+  return lines;
 }
 
 export function nextIncrement(ws: string, transcriptPath: string): NextIncrement {
@@ -65,6 +89,7 @@ export function nextIncrement(ws: string, transcriptPath: string): NextIncrement
     sessionId: inc.sessionId,
     nUsers: inc.users.length,
     nAssistants: inc.assistants.length,
+    touched: inc.touched ?? {},
   };
 }
 
