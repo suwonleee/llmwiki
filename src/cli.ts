@@ -12,11 +12,12 @@ import { rebuildReferenceGraph } from "./engine/refs.ts";
 import { effectiveKo, getConfig, isRepoKorean, CONFIG_BASENAME, CONFIGS_DIR } from "./engine/config.ts";
 import { Linter, formatReport } from "./engine/lint.ts";
 import * as update from "./engine/update.ts";
-import { sourceForPath } from "./engine/source.ts";
+import { countLines, sourceForPath } from "./engine/source.ts";
+import { opencodeSource } from "./engine/sources/opencode.ts";
 import * as autoupdate from "./engine/autoupdate.ts";
 import { review } from "./engine/review.ts";
 import { buildContext } from "./engine/context.ts";
-import { wikiRootFor } from "./engine/wiki-root.ts";
+import { captureBucket, wikiRootFor } from "./engine/wiki-root.ts";
 import * as enrollment from "./engine/enrollment.ts";
 import { StateRootError, describeStateRoot, purgeOwnedState } from "./engine/state-dir.ts";
 import { RepoBoundaryError } from "./engine/repo-write.ts";
@@ -217,6 +218,118 @@ function cmdUpdateStatus(p: Parsed) {
   for (const r of rows) {
     console.log(`  • sess ${(r.session_id || "?").slice(0, 8)} @offset ${r.byte_offset} | ${r.transcript_path}`);
   }
+}
+
+/**
+ * `save-current <workspace> --session <id>` — resolve THE CURRENT SESSION's transcripts by exact
+ * identity and make them selectable for a manual close-out. This is /wiki-save's selection step:
+ * the skill used to say "when unsure, the newest pending entry", and in a real 44-line Claude
+ * session that fallback picked a pending CODEX transcript — another harness's session filed as
+ * this one's judgment. Exact match or explicit failure; recency is never an identity.
+ *
+ * Two deliberate policies:
+ *   - A manual save is an explicit human act, so it enqueues even below the daemon's 50-line
+ *     work threshold (that threshold filters PASSIVE capture, not "save this session").
+ *   - Everything stays behind enrollment: unenrolled repositories die before any lookup, and a
+ *     session that belongs to a DIFFERENT repository is counted, never named, never enqueued.
+ */
+function cmdSaveCurrent(p: Parsed) {
+  const ws = p.positionals[0] ?? die("save-current <workspace> --session <id> required");
+  const sid = String(p.flags["--session"] ?? "").trim();
+  if (!sid) {
+    die(
+      ko
+        ? "save-current: --session <id> 필요 — 하네스가 제공한 현재 세션 ID (Claude: $CLAUDE_CODE_SESSION_ID, OpenCode: 플러그인이 주입한 session id)"
+        : "save-current: --session <id> required — the harness-provided CURRENT session id (Claude: $CLAUDE_CODE_SESSION_ID; OpenCode: the plugin-injected session id)",
+    );
+  }
+  const status = enrollment.inspectEnrollment(ws);
+  if (!status.enabled || !status.worktree) {
+    die(
+      ko
+        ? `save-current: 등록되지 않은 저장소 (${ws}) — 먼저 llmwiki init`
+        : `save-current: repository not enrolled (${ws}) — run llmwiki init first`,
+    );
+  }
+  const bucket = captureBucket(ws);
+  const found: { path: string; note: string }[] = [];
+  let elsewhere = 0;
+  const seen = new Set<string>();
+
+  // 1) Hook-based harnesses (Claude/Codex): the SessionStart route hint IS the identity record —
+  //    the harness itself said "this transcript is this session in this repository".
+  for (const hint of capture.routeHintsForSession(sid)) {
+    if (captureBucket(hint.repo) !== bucket) {
+      elsewhere += 1;
+      continue;
+    }
+    if (!existsSync(hint.transcriptPath) || seen.has(hint.transcriptPath)) continue;
+    const lines = countLines(hint.transcriptPath);
+    if (lines < 1) continue;
+    capture.enqueue(
+      hint.transcriptPath,
+      sid,
+      hint.repo,
+      lines,
+      hint.sourceKind ?? sourceForPath(hint.transcriptPath).kind,
+    );
+    seen.add(hint.transcriptPath);
+    found.push({ path: hint.transcriptPath, note: `${lines} lines` });
+  }
+
+  // 2) Queue rows already carrying this session id (a resumed session hinted in an earlier run).
+  for (const row of capture.queueRowsForSession(sid)) {
+    if ((row.repo ?? "") !== bucket) {
+      if (row.repo) elsewhere += 1;
+      continue;
+    }
+    if (seen.has(row.transcript_path)) continue;
+    seen.add(row.transcript_path);
+    found.push({
+      path: row.transcript_path,
+      note: row.status === "pending" ? "pending" : `already ${row.status}`,
+    });
+  }
+
+  // 3) OpenCode (no hooks): resolve the id through stage-1 routing, then materialize+enqueue.
+  //    The repository gate runs BEFORE materialize — another repo's session must not even have
+  //    its export refreshed on this repo's behalf; materialize re-checks enrollment itself.
+  for (const route of opencodeSource.discoverRoutes()) {
+    if (route.sessionId !== sid) continue;
+    if (!route.repo || captureBucket(route.repo) !== bucket) {
+      elsewhere += 1;
+      continue;
+    }
+    let session = null;
+    try {
+      session = opencodeSource.materialize(route);
+    } catch {
+      session = null;
+    }
+    if (!session || seen.has(session.path)) continue;
+    capture.enqueue(session.path, sid, session.repo, session.lines, "opencode");
+    seen.add(session.path);
+    found.push({ path: session.path, note: `${session.lines} lines` });
+  }
+
+  if (!found.length) {
+    const hintTail = elsewhere
+      ? ko
+        ? ` (다른 저장소의 세션 ${elsewhere}건은 제외 — 그 저장소에서 실행할 것)`
+        : ` (${elsewhere} match(es) in OTHER repositories were excluded — run save-current from there)`
+      : "";
+    die(
+      ko
+        ? `save-current: 세션 ${sid} 의 transcript 를 이 저장소에서 찾지 못함 — 추측하지 않는다. 다른 세션의 pending 을 대신 저장하지 말 것.${hintTail}`
+        : `save-current: no transcript for session ${sid} in this repository — refusing to guess. Do NOT file another session's pending entry instead.${hintTail}`,
+    );
+  }
+  console.log(
+    ko
+      ? `✓ 현재 세션 ${sid.slice(0, 8)}: transcript ${found.length}건 (수동 저장 — 50줄 문턱 미적용)`
+      : `✓ current session ${sid.slice(0, 8)}: ${found.length} transcript(s) (manual save — 50-line threshold not applied)`,
+  );
+  for (const f of found) console.log(`  • ${f.path} (${f.note})`);
 }
 
 // Same-topic pending sessions, anchored on this session's transcript (close-out step 2b).
@@ -1037,6 +1150,7 @@ const HANDLERS: Record<string, (p: Parsed) => void | Promise<void>> = {
   lint: cmdLint,
   search: cmdSearch,
   "update-status": cmdUpdateStatus,
+  "save-current": cmdSaveCurrent,
   "update-next": cmdUpdateNext,
   related: cmdRelated,
   "update-done": cmdUpdateDone,

@@ -64,6 +64,32 @@ export const LlmwikiPlugin: Plugin = async ({ $, directory }) => {
   };
 
   return {
+    // /wiki-* commands need to know WHICH session they are closing out, and OpenCode's command
+    // templates substitute only $ARGUMENTS/$1… — there is no session-id variable. This hook is
+    // the one surface that receives the real sessionID at command time, so it (a) materializes
+    // and enqueues THIS session via `save-current` (manual save — works below the daemon's
+    // 50-line threshold), and (b) injects the id into the prompt so the skill can select the
+    // exact transcript instead of ever guessing by recency.
+    "command.execute.before": async (input: any, output: { parts: any[] }) => {
+      try {
+        if (!/^wiki-/.test(String(input?.command ?? ""))) return;
+        if (!(await enabledNow())) {
+          revoke();
+          return;
+        }
+        const sid = String(input?.sessionID ?? "");
+        if (!sid) return;
+        await run(["save-current", directory, "--session", sid]); // best-effort; the skill re-runs it
+        output.parts?.push({
+          type: "text",
+          text:
+            `[llmwiki] current OpenCode session id: ${sid} — for the close-out selection step run: ` +
+            `llmwiki save-current ${directory} --session ${sid}`,
+        });
+      } catch {
+        /* never break a command */
+      }
+    },
     // capture the user's prompt text as it is sent (used by the per-turn query below)
     "chat.message": async (input: any, output) => {
       try {

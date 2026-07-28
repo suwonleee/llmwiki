@@ -188,6 +188,41 @@ function legacyProgressMatches(progress: ExportProgress | null): progress is Exp
   );
 }
 
+// Sidecar progress for the v1 schema: same identity fields, message-id watermark instead of seq.
+interface ExportProgressV1 {
+  readonly kind?: string;
+  readonly exportKey?: string;
+  readonly sessionID?: string;
+  readonly sourcePath?: string;
+  readonly lastMessageId: string;
+}
+
+function readProgressV1(key: string): ExportProgressV1 | null {
+  try {
+    const value = JSON.parse(readFileSync(metaPath(key), "utf-8"));
+    return typeof value === "object" && value !== null && typeof value.lastMessageId === "string"
+      ? (value as ExportProgressV1)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function v1ProgressMatches(
+  progress: ExportProgressV1 | null,
+  key: string,
+  sessionID: string,
+  sourcePath: string,
+): progress is Required<ExportProgressV1> {
+  return (
+    progress !== null &&
+    progress.kind === "opencode-progress-v1" &&
+    progress.exportKey === key &&
+    progress.sessionID === sessionID &&
+    progress.sourcePath === sourcePath
+  );
+}
+
 function renderRow(row: any): string | null {
   let data: any;
   try {
@@ -199,6 +234,32 @@ function renderRow(row: any): string | null {
   if (!message) return null;
   const ts = row.time_created ? new Date(Number(row.time_created)).toISOString().slice(0, 16) : "";
   return JSON.stringify({ role: message.role, text: message.text, ts });
+}
+
+// A projected assistant row is UPDATED in place while the answer streams (step.started appends an
+// empty row, text deltas rewrite `data`, and `seq` never changes). A cursor that advances past it
+// mid-generation therefore never sees the finished text — the row's seq is already behind the
+// watermark when the final update lands. So the export boundary stops at the first row that is
+// not yet SETTLED, and only settled rows advance the cursor.
+//
+// Past this grace, a row with no completion marker is a crashed/abandoned turn: its partial text
+// is all there will ever be, so it settles rather than stranding the tail of the session forever.
+const STREAM_SETTLE_GRACE_MS = 6 * 60 * 60 * 1000;
+
+function rowSettled(row: any, hasLater: boolean): boolean {
+  if (String(row.type ?? "") !== "assistant") return true;
+  // The projector "never resume[s] an older assistant projection": once any later row exists,
+  // this one is final.
+  if (hasLater) return true;
+  let data: any;
+  try {
+    data = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+  } catch {
+    data = null;
+  }
+  if (data?.time?.completed) return true;
+  const created = Number(row.time_created ?? 0);
+  return created > 0 && Date.now() - created > STREAM_SETTLE_GRACE_MS;
 }
 
 function renderedRange(
@@ -215,14 +276,165 @@ function renderedRange(
         `WHERE session_id = ? AND seq > ?${upper} ORDER BY seq ASC`,
     )
     .all(...args) as any[];
+  // The settled boundary applies only to the LIVE sweep. Journal recovery re-renders an explicit
+  // range whose rows were already settled when the journal was written; re-judging them against
+  // the clock would make the byte-exact re-render nondeterministic.
+  let boundary = rows.length;
+  if (throughSeq === undefined) {
+    for (let i = 0; i < rows.length; i++) {
+      if (!rowSettled(rows[i], i < rows.length - 1)) {
+        boundary = i;
+        break;
+      }
+    }
+  }
   let maxSeq = afterSeq;
   let appended = "";
-  for (const row of rows) {
+  for (const row of rows.slice(0, boundary)) {
     const line = renderRow(row);
     if (line) appended += line + "\n";
     if (typeof row.seq === "number" && row.seq > maxSeq) maxSeq = row.seq;
   }
   return { appended, maxSeq };
+}
+
+// ---- v1 (legacy `message` + `part`) schema ---------------------------------------------
+//
+// Installed OpenCode (through at least 1.18.4) projects ordinary sessions via the v1 event
+// family: `MessageUpdated` upserts `message`, `PartUpdated` upserts `part`, and the
+// event-sourced `session_message` projection stays EMPTY (verified against a real installed
+// DB: every session's conversation lives in message/part, session_message has zero rows).
+// Reading only `session_message` therefore captured nothing. The v1 cursor is the last
+// fully-exported message id — OpenCode itself relies on message ids sorting lexicographically
+// in creation order (MessageV2.latest, its pagination cursor), and the same real DB agrees:
+// across every legacy row, none orders differently from time_created.
+
+type SessionSchemaKind = "next" | "v1";
+
+function countRows(db: Database, table: "session_message" | "message", sessionID: string): number {
+  try {
+    const row = db
+      .query(`SELECT COUNT(*) AS n FROM ${table} WHERE session_id = ?`)
+      .get(sessionID) as { n: number } | null;
+    return Number(row?.n ?? 0);
+  } catch {
+    return 0; // table missing / schema drift — this schema simply has no rows
+  }
+}
+
+// Which projection holds THIS session's conversation. Presence of a table is not evidence (the
+// real 1.18.4 DB has an empty session_message table); rows for this session are. Existing durable
+// progress pins the choice so a hypothetical mid-session projection switch can never double-export
+// the overlap under a fresh cursor.
+function sessionSchema(db: Database, sourcePath: string, sessionID: string): SessionSchemaKind | null {
+  if (capture.getOpenCodeProgress(sourcePath, sessionID) !== null) return "next";
+  if (capture.getOpenCodeV1Progress(sourcePath, sessionID) !== null) return "v1";
+  if (countRows(db, "session_message", sessionID) > 0) return "next";
+  if (countRows(db, "message", sessionID) > 0) return "v1";
+  return null;
+}
+
+// One dialog line per v1 message, following MessageV2's own hydrate rules: text parts only
+// (ordered by part id), a user part is dropped when `ignored` (synthetic stays — MessageV2 sends
+// it), an errored assistant is dropped unless it was merely aborted and still carries text, and a
+// `summary` assistant is the compaction summary — summaryFor's material, never a dialog turn.
+function renderV1Row(row: any, data: any, parts: any[]): string | null {
+  const role = data?.role;
+  if (role !== "user" && role !== "assistant") return null;
+  if (role === "assistant") {
+    if (data.summary === true) return null;
+    if (data.error && String(data.error?.name ?? "") !== "MessageAbortedError") return null;
+  }
+  const texts: string[] = [];
+  for (const p of parts) {
+    let pd: any;
+    try {
+      pd = typeof p.data === "string" ? JSON.parse(p.data) : p.data;
+    } catch {
+      continue;
+    }
+    if (pd?.type !== "text" || typeof pd.text !== "string") continue;
+    if (role === "user" && pd.ignored) continue;
+    if (pd.text.trim()) texts.push(pd.text);
+  }
+  const text = texts.join(" ");
+  if (!text.trim()) return null;
+  const ts = row.time_created ? new Date(Number(row.time_created)).toISOString().slice(0, 16) : "";
+  return JSON.stringify({ role, text, ts });
+}
+
+// v1 settled rule. Events project strictly in order, so any LATER message row proves this one is
+// final (an assistant is never resumed once the turn moved on; a prompt's parts land before the
+// next event). Without a later row: a completed assistant is settled; a user message is settled
+// once it has any part row; otherwise wait out the streaming grace.
+function v1RowSettled(row: any, data: any, partCount: number, hasLater: boolean): boolean {
+  if (hasLater) return true;
+  if (data?.role === "assistant") {
+    if (data?.time?.completed) return true;
+  } else if (partCount > 0) {
+    return true;
+  }
+  const created = Number(row.time_created ?? 0);
+  return created > 0 && Date.now() - created > STREAM_SETTLE_GRACE_MS;
+}
+
+function renderedRangeV1(
+  db: Database,
+  sessionID: string,
+  afterId: string,
+  throughId?: string,
+): { appended: string; maxId: string } {
+  const upper = throughId === undefined ? "" : " AND id <= ?";
+  const args = throughId === undefined ? [sessionID, afterId] : [sessionID, afterId, throughId];
+  const rows = db
+    .query(
+      "SELECT id, time_created, data FROM message " +
+        `WHERE session_id = ? AND id > ?${upper} ORDER BY id ASC`,
+    )
+    .all(...args) as any[];
+  // Message ids ascend, so the same id bounds select exactly the fetched messages' parts.
+  const partUpper = throughId === undefined ? "" : " AND message_id <= ?";
+  const partRows = db
+    .query(
+      "SELECT id, message_id, data FROM part " +
+        `WHERE session_id = ? AND message_id > ?${partUpper} ORDER BY message_id ASC, id ASC`,
+    )
+    .all(...args) as any[];
+  const partsByMessage = new Map<string, any[]>();
+  for (const p of partRows) {
+    const mid = String(p.message_id ?? "");
+    const list = partsByMessage.get(mid);
+    if (list) list.push(p);
+    else partsByMessage.set(mid, [p]);
+  }
+  const datas = rows.map((row) => {
+    try {
+      return typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+    } catch {
+      return null;
+    }
+  });
+  // Same live-only settled boundary as renderedRange — recovery re-renders a settled range.
+  let boundary = rows.length;
+  if (throughId === undefined) {
+    for (let i = 0; i < rows.length; i++) {
+      const parts = partsByMessage.get(String(rows[i].id ?? "")) ?? [];
+      if (!v1RowSettled(rows[i], datas[i], parts.length, i < rows.length - 1)) {
+        boundary = i;
+        break;
+      }
+    }
+  }
+  let maxId = afterId;
+  let appended = "";
+  for (let i = 0; i < boundary; i++) {
+    const row = rows[i];
+    const id = String(row.id ?? "");
+    const line = renderV1Row(row, datas[i], partsByMessage.get(id) ?? []);
+    if (line) appended += line + "\n";
+    if (id > maxId) maxId = id;
+  }
+  return { appended, maxId };
 }
 
 /**
@@ -275,6 +487,53 @@ function recoverPendingAppend(
   if (written.length < bytes.length) appendFileSync(ep, bytes.subarray(written.length));
   capture.finishOpenCodeAppend(sourcePath, sessionID, pending.throughSeq);
   return pending.throughSeq;
+}
+
+/** v1 twin of recoverPendingAppend: identical ownership contract over a message-id range. */
+function recoverPendingV1Append(
+  db: Database,
+  sourcePath: string,
+  sessionID: string,
+  ep: string,
+  durable: string | null,
+): string | null {
+  const pending = capture.getOpenCodeV1Append(sourcePath, sessionID);
+  if (!pending) return durable;
+  const previousOwner = { pid: pending.ownerPid, token: pending.ownerToken };
+  const thisOwner = capture.openCodeOwner();
+  if (previousOwner.pid !== thisOwner.pid || previousOwner.token !== thisOwner.token) {
+    const live = capture.openCodeOwnerLive(previousOwner);
+    if (live !== false) {
+      throw new Error(`OpenCode append is still owned by a live or unverifiable process ${pending.ownerPid}`);
+    }
+    if (!capture.claimOpenCodeV1Append(sourcePath, sessionID, previousOwner, thisOwner)) {
+      throw new Error(`OpenCode append ownership changed during recovery: ${ep}`);
+    }
+  }
+  if (pending.exportPath !== ep || pending.fromMessageId !== (durable ?? "") || !safeRegular(ep)) {
+    throw new Error(`refusing to reconcile an inconsistent OpenCode append journal: ${ep}`);
+  }
+  const reconstructed = renderedRangeV1(db, sessionID, pending.fromMessageId, pending.throughMessageId);
+  const bytes = Buffer.from(reconstructed.appended);
+  const hash = createHash("sha256").update(bytes).digest("hex");
+  if (
+    reconstructed.maxId !== pending.throughMessageId ||
+    bytes.length !== pending.expectedBytes ||
+    hash !== pending.expectedSha256
+  ) {
+    throw new Error(`refusing to reconcile a changed OpenCode append source: ${ep}`);
+  }
+  const body = readFileSync(ep);
+  if (body.length < pending.baseSize || body.length > pending.baseSize + bytes.length) {
+    throw new Error(`refusing to reconcile an unexpected OpenCode export size: ${ep}`);
+  }
+  const written = body.subarray(pending.baseSize);
+  if (!written.equals(bytes.subarray(0, written.length))) {
+    throw new Error(`refusing to reconcile an unexpected OpenCode export tail: ${ep}`);
+  }
+  if (written.length < bytes.length) appendFileSync(ep, bytes.subarray(written.length));
+  capture.finishOpenCodeV1Append(sourcePath, sessionID, pending.throughMessageId);
+  return pending.throughMessageId;
 }
 
 /**
@@ -342,7 +601,9 @@ function messageText(type: string, data: any): { role: "user" | "assistant"; tex
   return null;
 }
 
-// Append new messages (seq > lastSeq) for one session; returns total exported line count.
+// Append new messages for one session; returns total exported line count. The shared preamble
+// proves the export pair's identity, then the session's OWN projection (sessionSchema) picks the
+// seq-cursor (`session_message`) or message-id-cursor (`message`+`part`) branch.
 function exportSession(
   db: Database,
   sourcePath: string,
@@ -378,6 +639,25 @@ function exportSession(
       throw new Error(`refusing to append to an unrecognized OpenCode export: ${ep}`);
     }
   }
+  const schema = sessionSchema(db, sourcePath, sessionID);
+  if (schema === null) return { path: ep, lines: 0 }; // nothing projected for this session yet
+  const loc = { key, ep, mp, root };
+  return schema === "v1"
+    ? exportSessionV1(db, sourcePath, sessionID, directory, title, loc)
+    : exportSessionNext(db, sourcePath, sessionID, directory, title, loc);
+}
+
+// The `session_message` (event-sourced, seq-cursor) branch.
+function exportSessionNext(
+  db: Database,
+  sourcePath: string,
+  sessionID: string,
+  directory: string,
+  title: string | null,
+  loc: { key: string; ep: string; mp: string; root: string },
+): { path: string; lines: number } {
+  const { key, ep, mp, root } = loc;
+  const progressExists = existsSync(mp);
   let progress = progressExists ? readProgress(key) : null;
   if (progressExists) {
     const current = modernProgressMatches(progress, key, sessionID, sourcePath);
@@ -432,12 +712,85 @@ function exportSession(
   try {
     reassertPrivateModes(root);
     const exportLines = readFileSync(ep, "utf-8").split("\n").filter(Boolean).length;
-    const activity = db
-      .query("SELECT COUNT(*) AS n FROM session_message WHERE session_id = ?")
-      .get(sessionID) as { n: number } | null;
     // The export may contain only a post-migration/post-TTL tail. Threshold against total
     // session activity so a proven long session is not stranded until 50 brand-new lines arrive.
-    return { path: ep, lines: Math.max(exportLines, Number(activity?.n ?? 0) + 1) };
+    return { path: ep, lines: Math.max(exportLines, countRows(db, "session_message", sessionID) + 1) };
+  } catch {
+    return { path: ep, lines: 0 };
+  }
+}
+
+// The v1 (`message`+`part`, message-id-cursor) branch — the schema every installed OpenCode
+// session actually uses today. Mirrors exportSessionNext step for step; only the cursor type
+// and the renderer differ. No v0.8 sidecar migration here: that format predates v1 exports.
+function exportSessionV1(
+  db: Database,
+  sourcePath: string,
+  sessionID: string,
+  directory: string,
+  title: string | null,
+  loc: { key: string; ep: string; mp: string; root: string },
+): { path: string; lines: number } {
+  const { key, ep, mp, root } = loc;
+  const progressExists = existsSync(mp);
+  const progress = progressExists ? readProgressV1(key) : null;
+  if (progressExists && !v1ProgressMatches(progress, key, sessionID, sourcePath)) {
+    throw new Error(`refusing to replace an unrecognized OpenCode progress file: ${mp}`);
+  }
+  let durable = capture.getOpenCodeV1Progress(sourcePath, sessionID);
+  if (progress && (durable === null || progress.lastMessageId > durable)) {
+    capture.advanceOpenCodeV1Progress(sourcePath, sessionID, progress.lastMessageId);
+    durable = progress.lastMessageId;
+  }
+  durable = recoverPendingV1Append(db, sourcePath, sessionID, ep, durable);
+  const since = durable ?? "";
+  let rendered: { appended: string; maxId: string };
+  try {
+    rendered = renderedRangeV1(db, sessionID, since);
+  } catch {
+    return { path: ep, lines: 0 }; // schema drift — degrade silently
+  }
+  const { appended, maxId } = rendered;
+  if (appended) {
+    if (!existsSync(ep)) {
+      const meta: ExportMeta = { kind: "opencode-meta", sessionID, directory, title, sourcePath, exportKey: key };
+      writeFileSync(ep, JSON.stringify(meta) + "\n", { flag: "wx", mode: 0o600 });
+    }
+    const bytes = Buffer.from(appended);
+    capture.beginOpenCodeV1Append(sourcePath, sessionID, {
+      exportPath: ep,
+      baseSize: readFileSync(ep).length,
+      fromMessageId: since,
+      throughMessageId: maxId,
+      expectedBytes: bytes.length,
+      expectedSha256: createHash("sha256").update(bytes).digest("hex"),
+    });
+    appendFileSync(ep, appended);
+    capture.finishOpenCodeV1Append(sourcePath, sessionID, maxId);
+    durable = maxId;
+  } else if (maxId > since) {
+    capture.advanceOpenCodeV1Progress(sourcePath, sessionID, maxId);
+    durable = maxId;
+  }
+  if (existsSync(ep) && (!progressExists || (durable ?? since) > (progress?.lastMessageId ?? ""))) {
+    writeFileSync(
+      mp,
+      JSON.stringify({
+        kind: "opencode-progress-v1",
+        exportKey: key,
+        sessionID,
+        sourcePath,
+        lastMessageId: durable ?? since,
+      }),
+      { mode: 0o600 },
+    );
+  }
+  if (!existsSync(ep)) return { path: ep, lines: 0 };
+  try {
+    reassertPrivateModes(root);
+    const exportLines = readFileSync(ep, "utf-8").split("\n").filter(Boolean).length;
+    // Same long-session rule as the next branch, counted from this session's own projection.
+    return { path: ep, lines: Math.max(exportLines, countRows(db, "message", sessionID) + 1) };
   } catch {
     return { path: ep, lines: 0 };
   }
@@ -609,15 +962,49 @@ export const opencodeSource: TranscriptSource = {
       const db = openRO(sourcePath);
       if (!db) return null;
       try {
-        const row = db
-          .query(
-            "SELECT data FROM session_message WHERE session_id = ? AND type = 'compaction' ORDER BY seq DESC LIMIT 1",
-          )
-          .get(meta.sessionID) as any;
-        if (row?.data) {
-          const data = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
-          const s = typeof data?.summary === "string" ? data.summary.trim() : "";
+        try {
+          const row = db
+            .query(
+              "SELECT data FROM session_message WHERE session_id = ? AND type = 'compaction' ORDER BY seq DESC LIMIT 1",
+            )
+            .get(meta.sessionID) as any;
+          if (row?.data) {
+            const data = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+            const s = typeof data?.summary === "string" ? data.summary.trim() : "";
+            if (s) return s.length > 4000 ? s.slice(0, 4000) : s;
+          }
+        } catch {
+          /* session_message drift/absent — fall through to the v1 shape */
+        }
+        // v1: the compaction summary is the newest assistant row with data.summary === true; its
+        // body is that row's text parts (the same shape MessageV2.filterCompacted keys on).
+        const rows = db
+          .query("SELECT id, data FROM message WHERE session_id = ? ORDER BY id DESC LIMIT 50")
+          .all(meta.sessionID) as any[];
+        for (const row of rows) {
+          let data: any;
+          try {
+            data = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          } catch {
+            continue;
+          }
+          if (data?.role !== "assistant" || data?.summary !== true) continue;
+          const parts = db
+            .query("SELECT id, data FROM part WHERE message_id = ? ORDER BY id ASC")
+            .all(row.id) as any[];
+          const texts: string[] = [];
+          for (const p of parts) {
+            let pd: any;
+            try {
+              pd = typeof p.data === "string" ? JSON.parse(p.data) : p.data;
+            } catch {
+              continue;
+            }
+            if (pd?.type === "text" && typeof pd.text === "string" && pd.text.trim()) texts.push(pd.text);
+          }
+          const s = texts.join(" ").trim();
           if (s) return s.length > 4000 ? s.slice(0, 4000) : s;
+          break; // newest summary row had no text — nothing older is fresher
         }
       } catch {
         /* schema drift / not found */

@@ -227,7 +227,7 @@ The wiki reports what's missing on its own; the human supplies only the judgment
 ```
 setup.sh       one-click onboarding (path-agnostic: doctor→daemon→hooks·commands→index)
 src/           TypeScript engine (Bun runtime, bun:sqlite built in — zero node_modules·build)
-  cli.ts       CLI dispatcher: init·index·reindex·refs·lint·search·update-*·skeleton·autoupdate·consolidate·topics·ingest·register-transcript·review·gaps·distill-verify·git-rules·overview·reconcile·doctor·context·digest·context-audit·config·conventions·migrate·quiz-*·capture-prune·bench·compare-arm·compare-verdict
+  cli.ts       CLI dispatcher: init·index·reindex·refs·lint·search·update-*·save-current·skeleton·autoupdate·consolidate·topics·ingest·register-transcript·review·gaps·distill-verify·git-rules·overview·reconcile·doctor·context·digest·context-audit·config·conventions·migrate·quiz-*·capture-prune·bench·compare-arm·compare-verdict
   engine/
     schema.sql   per-repo index schema (documents·chunks·FTS5·references)
     db.ts        WikiIndex: indexing(content_hash incremental)·search·graph·staleness
@@ -241,7 +241,7 @@ src/           TypeScript engine (Bun runtime, bun:sqlite built in — zero node
     autoupdate.ts  unattended fact update (write→secondary verification→lint gate)
     consolidate.ts log→topic encyclopedia (5_topic) consolidation (write→independent VERIFY(added claims)→grounding→lint, independent watermark)
     source.ts    transcript source abstraction (discover/probe/parse adapters — harness-agnostic)
-    sources/     claude.ts(claude-jsonl) · codex.ts(Codex rollout, incl. .zst) · opencode.ts(OpenCode SQLite→export) · plain.ts(arbitrary file drop)
+    sources/     claude.ts(claude-jsonl) · codex.ts(Codex rollout, incl. .zst) · opencode.ts(OpenCode SQLite→export; reads BOTH projections — legacy `message`+`part` and event-sourced `session_message` — per session, and never advances past an unfinished assistant turn) · plain.ts(arbitrary file drop)
     ingest.ts    condense a single file with no daemon (`llmwiki ingest` — drop a source)
     capture.ts   central capture queue (.state/capture.db, source_kind)   doctor.ts   wiring check
     config.ts    team conventions — llmwiki.config.toml + configs/*.toml per-repo resolver (applies_to prefix; zero-config = stock structure; single source prompts/rules render from)

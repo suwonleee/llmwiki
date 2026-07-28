@@ -87,6 +87,27 @@ CREATE TABLE IF NOT EXISTS opencode_append (
     started_at TEXT DEFAULT (datetime('now')),
     PRIMARY KEY (source_path, session_id)
 );
+CREATE TABLE IF NOT EXISTS opencode_v1_progress (
+    source_path TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    last_message_id TEXT NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (source_path, session_id)
+);
+CREATE TABLE IF NOT EXISTS opencode_v1_append (
+    source_path TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    export_path TEXT NOT NULL,
+    base_size INTEGER NOT NULL,
+    from_message_id TEXT NOT NULL,
+    through_message_id TEXT NOT NULL,
+    expected_bytes INTEGER NOT NULL,
+    expected_sha256 TEXT NOT NULL,
+    owner_pid INTEGER NOT NULL,
+    owner_token TEXT NOT NULL,
+    started_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (source_path, session_id)
+);
 `;
 
 export interface CaptureRow {
@@ -343,6 +364,143 @@ export function finishOpenCodeAppend(sourcePath: string, sessionId: string, last
   db.close();
 }
 
+// ---- OpenCode v1 (legacy `message`+`part`) watermark + append journal ------------------
+//
+// Installed OpenCode (1.18.4) still projects every ordinary session through the v1 event
+// family into `message`/`part`; `session_message` stays empty until the `session.next.*`
+// event-sourced path ships. The v1 cursor is the last fully-exported MESSAGE ID: OpenCode's
+// own code (`MessageV2.latest`, cursor pagination) relies on message ids being
+// lexicographically ascending, and a real installed DB agrees (across every legacy row, none
+// orders differently from time_created). A TEXT id needs its own tables — the seq machinery
+// above is INTEGER.
+
+/** Durable, non-body v1 watermark: the last fully-exported message id (lexicographic max). */
+export function getOpenCodeV1Progress(sourcePath: string, sessionId: string): string | null {
+  const db = connect();
+  const row = db
+    .query("SELECT last_message_id FROM opencode_v1_progress WHERE source_path = ? AND session_id = ?")
+    .get(sourcePath, sessionId) as { last_message_id: string } | null;
+  db.close();
+  return row && typeof row.last_message_id === "string" && row.last_message_id ? row.last_message_id : null;
+}
+
+export function advanceOpenCodeV1Progress(sourcePath: string, sessionId: string, lastMessageId: string): void {
+  if (!lastMessageId) return;
+  const db = connect();
+  db.run(
+    "INSERT INTO opencode_v1_progress (source_path, session_id, last_message_id) VALUES (?, ?, ?) " +
+      "ON CONFLICT(source_path, session_id) DO UPDATE SET " +
+      "last_message_id = MAX(opencode_v1_progress.last_message_id, excluded.last_message_id), " +
+      "updated_at = datetime('now')",
+    [sourcePath, sessionId, lastMessageId],
+  );
+  db.close();
+}
+
+export interface OpenCodeV1AppendJournal {
+  readonly exportPath: string;
+  readonly baseSize: number;
+  readonly fromMessageId: string;
+  readonly throughMessageId: string;
+  readonly expectedBytes: number;
+  readonly expectedSha256: string;
+  readonly ownerPid: number;
+  readonly ownerToken: string;
+}
+
+export function beginOpenCodeV1Append(
+  sourcePath: string,
+  sessionId: string,
+  journal: Omit<OpenCodeV1AppendJournal, "ownerPid" | "ownerToken">,
+  owner: OpenCodeOwner = openCodeOwner(),
+): void {
+  const db = connect();
+  db.run(
+    "INSERT INTO opencode_v1_append " +
+      "(source_path, session_id, export_path, base_size, from_message_id, through_message_id, expected_bytes, expected_sha256, owner_pid, owner_token) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [
+      sourcePath,
+      sessionId,
+      journal.exportPath,
+      journal.baseSize,
+      journal.fromMessageId,
+      journal.throughMessageId,
+      journal.expectedBytes,
+      journal.expectedSha256,
+      owner.pid,
+      owner.token,
+    ],
+  );
+  db.close();
+}
+
+export function getOpenCodeV1Append(sourcePath: string, sessionId: string): OpenCodeV1AppendJournal | null {
+  const db = connect();
+  const row = db
+    .query(
+      "SELECT export_path, base_size, from_message_id, through_message_id, expected_bytes, expected_sha256, owner_pid, owner_token " +
+        "FROM opencode_v1_append WHERE source_path = ? AND session_id = ?",
+    )
+    .get(sourcePath, sessionId) as {
+      export_path: string;
+      base_size: number;
+      from_message_id: string;
+      through_message_id: string;
+      expected_bytes: number;
+      expected_sha256: string;
+      owner_pid: number;
+      owner_token: string;
+    } | null;
+  db.close();
+  return row
+    ? {
+        exportPath: row.export_path,
+        baseSize: row.base_size,
+        fromMessageId: row.from_message_id,
+        throughMessageId: row.through_message_id,
+        expectedBytes: row.expected_bytes,
+        expectedSha256: row.expected_sha256,
+        ownerPid: row.owner_pid,
+        ownerToken: row.owner_token,
+      }
+    : null;
+}
+
+/** Atomically claim a dead/legacy v1 journal. Exactly one contender can match the prior owner. */
+export function claimOpenCodeV1Append(
+  sourcePath: string,
+  sessionId: string,
+  expected: OpenCodeOwner,
+  next: OpenCodeOwner = openCodeOwner(),
+): boolean {
+  const db = connect();
+  const result = db.run(
+    "UPDATE opencode_v1_append SET owner_pid = ?, owner_token = ? " +
+      "WHERE source_path = ? AND session_id = ? AND owner_pid = ? AND owner_token = ?",
+    [next.pid, next.token, sourcePath, sessionId, expected.pid, expected.token],
+  );
+  db.close();
+  return Number(result.changes ?? 0) === 1;
+}
+
+/** Commit the v1 watermark and remove the v1 append journal in one SQLite transaction. */
+export function finishOpenCodeV1Append(sourcePath: string, sessionId: string, lastMessageId: string): void {
+  const db = connect();
+  const finish = db.transaction(() => {
+    db.run(
+      "INSERT INTO opencode_v1_progress (source_path, session_id, last_message_id) VALUES (?, ?, ?) " +
+        "ON CONFLICT(source_path, session_id) DO UPDATE SET " +
+        "last_message_id = MAX(opencode_v1_progress.last_message_id, excluded.last_message_id), " +
+        "updated_at = datetime('now')",
+      [sourcePath, sessionId, lastMessageId],
+    );
+    db.run("DELETE FROM opencode_v1_append WHERE source_path = ? AND session_id = ?", [sourcePath, sessionId]);
+  });
+  finish();
+  db.close();
+}
+
 function sizeOf(path: string): number {
   return existsSync(path) ? statSync(path).size : 0;
 }
@@ -578,6 +736,46 @@ export function recordRouteHint(
   }
 }
 
+/**
+ * Every transcript a harness explicitly attributed to this SESSION ID (SessionStart hooks write
+ * the mapping). This is the manual `save-current` lookup: an exact identity match, never recency.
+ */
+export function routeHintsForSession(
+  sessionId: string,
+): { transcriptPath: string; repo: string; sourceKind: string | null }[] {
+  syncStatePaths();
+  if (!sessionId || !existsSync(DB_PATH)) return [];
+  let db: Database | null = null;
+  try {
+    db = new Database(DB_PATH, { readonly: true });
+    const rows = db
+      .query("SELECT transcript_path, repo, source_kind FROM route_hint WHERE session_id = ? ORDER BY seen_at")
+      .all(sessionId) as { transcript_path: string; repo: string; source_kind: string | null }[];
+    return rows.map((r) => ({ transcriptPath: r.transcript_path, repo: r.repo, sourceKind: r.source_kind }));
+  } catch {
+    return [];
+  } finally {
+    db?.close();
+  }
+}
+
+/** Queue rows already recorded for this session id (any status) — the second exact-match source. */
+export function queueRowsForSession(sessionId: string): CaptureRow[] {
+  syncStatePaths();
+  if (!sessionId || !existsSync(DB_PATH)) return [];
+  let db: Database | null = null;
+  try {
+    db = new Database(DB_PATH, { readonly: true });
+    return db
+      .query("SELECT * FROM capture_queue WHERE session_id = ? ORDER BY first_seen")
+      .all(sessionId) as CaptureRow[];
+  } catch {
+    return [];
+  } finally {
+    db?.close();
+  }
+}
+
 /** The harness-supplied repository for a transcript, or null when we were never told. */
 export function routeHintFor(transcriptPath: string): { repo: string; sessionId: string | null } | null {
   syncStatePaths();
@@ -770,6 +968,7 @@ export function pruneExports(ttlDays = EXPORT_TTL_DAYS, now = Date.now()): { pai
       // that body-free journal too; if the session returns, the durable watermark safely
       // re-materializes the uncommitted range.
       db.run("DELETE FROM opencode_append WHERE export_path = ?", [pair.exportPath]);
+      db.run("DELETE FROM opencode_v1_append WHERE export_path = ?", [pair.exportPath]);
       for (const row of pending) {
         if (!isOwnedExportPath(row.transcript_path)) continue;
         let same = row.transcript_path === pair.exportPath;
