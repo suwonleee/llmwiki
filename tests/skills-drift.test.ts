@@ -1,11 +1,16 @@
 // Skill-command drift — guards a silent-failure class, not a crash.
 //
-// Three places must agree on "which /wiki-* commands exist": the repo's skill/ dir (the files
-// themselves), wire.ts SKILLS (what setup installs into every profile), and doctor.ts COMMANDS
-// (what doctor checks and --fix re-installs). Drift is silent in one direction each way:
-// a skill missing from SKILLS is never installed for new users, and one missing from COMMANDS
-// is installed but its loss is never detected or repaired. Observed 2026-07-21: wire installed
-// /wiki-quiz but doctor didn't check it — a deleted quiz command would have stayed gone.
+// Three places once had to agree on "which /wiki-* commands exist": the repo's skill/ dir (the
+// files themselves), wire.ts SKILLS (what setup installs into every profile), and doctor.ts
+// COMMANDS (what doctor checks and --fix re-installs). Drift was silent in one direction each
+// way: a skill missing from SKILLS was never installed for new users, and one missing from
+// COMMANDS was installed but its loss never detected or repaired. Observed 2026-07-21: wire
+// installed /wiki-quiz but doctor didn't check it — a deleted quiz command would have stayed gone.
+//
+// Two of those three lists are now ONE: engine/claude-commands.ts owns the command list (and the
+// bytes both installers write). So the remaining invariants are that the single list still tracks
+// the skill/ directory, and that nobody re-introduces a private copy of it — which is what
+// re-opened the drift in the first place.
 //
 // Like tests/cli-flags.test.ts, this is deliberately a SOURCE test: the bug is drift between
 // hand-maintained lists, and only reading the sources catches an entry someone adds tomorrow.
@@ -13,31 +18,30 @@ import { test, expect, describe } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-const ROOT = join(import.meta.dir, "..");
+import { CLAUDE_COMMANDS } from "../src/engine/claude-commands.ts";
 
-function listFrom(srcPath: string, constName: string): Set<string> {
-  const src = readFileSync(join(ROOT, srcPath), "utf8");
-  const block = src.match(new RegExp(`const ${constName} = \\[([\\s\\S]*?)\\]`));
-  if (!block) throw new Error(`${constName} list not found in ${srcPath} — did it change shape?`);
-  return new Set(Array.from(block[1]!.matchAll(/"([a-z-]+\.md)"/g), (m) => m[1]!));
-}
+const ROOT = join(import.meta.dir, "..");
+const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
 
 describe("skill command lists stay in sync", () => {
   const skillFiles = new Set(readdirSync(join(ROOT, "skill")).filter((f) => f.endsWith(".md")));
-  const wireSkills = listFrom("src/daemon/wire.ts", "SKILLS");
-  const doctorCommands = listFrom("src/engine/doctor.ts", "COMMANDS");
 
-  test("wire installs every skill file (a file missing here is never installed)", () => {
-    expect([...wireSkills].sort()).toEqual([...skillFiles].sort());
+  test("the shared list covers every skill file (a file missing here is never installed)", () => {
+    const installed: string[] = [...CLAUDE_COMMANDS];
+    expect(installed.sort()).toEqual([...skillFiles].sort());
   });
 
-  test("doctor checks every installed skill (one missing here is lost silently)", () => {
-    expect([...doctorCommands].sort()).toEqual([...wireSkills].sort());
+  test("both installers use the shared list rather than a private copy", () => {
+    for (const src of ["src/daemon/wire.ts", "src/engine/doctor.ts"]) {
+      const text = read(src);
+      expect(text).toContain("claude-commands.ts");
+      // a re-introduced literal list is exactly the drift this file exists to prevent
+      expect(text).not.toMatch(/=\s*\[[^\]]*"wiki-save\.md"/);
+    }
   });
 
   test("doctor's CORE file-sanity list covers every skill source file (a missing source is repairable only if checked)", () => {
-    const src = readFileSync(join(ROOT, "src/engine/doctor.ts"), "utf8");
-    const core = src.match(/const CORE = \[([\s\S]*?)\]/)?.[1] ?? "";
+    const core = read("src/engine/doctor.ts").match(/const CORE = \[([\s\S]*?)\]/)?.[1] ?? "";
     for (const f of skillFiles) expect(core).toContain(`"skill/${f}"`);
   });
 });

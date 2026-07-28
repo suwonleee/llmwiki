@@ -224,7 +224,7 @@ export function accumulate(
 // A term is "specific" (worth 2 of the 2 points the confidence gate needs) once it is long
 // enough to be unlikely by chance. Non-ASCII scripts carry more meaning per character than
 // English, so they reach that point sooner — one crude threshold rather than per-language tuning.
-function termWeight(t: string): number {
+export function termWeight(t: string): number {
   const dense = /[^\x00-\x7F]/.test(t);
   return ([...t].length >= (dense ? 5 : 8)) ? 2 : 1;
 }

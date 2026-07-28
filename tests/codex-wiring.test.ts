@@ -62,6 +62,14 @@ describe("Codex wiring", () => {
       expect(commands.filter((command: string) => command.includes(marker))).toHaveLength(1);
       expect(commands[0]).toContain(ROOT);
     }
+    // Codex spills hook output above ~2,500 approx tokens to a truncated preview — the
+    // SessionStart handler must opt out (0 = no spill); turn-context never gets near the limit.
+    const handlerFor = (event: string, marker: string) =>
+      hooks.hooks[event]
+        .flatMap((group: any) => group.hooks)
+        .find((hook: any) => String(hook.command).includes(marker));
+    expect(handlerFor("SessionStart", "sessionstart-inject.sh").additionalContextLimit).toBe(0);
+    expect(handlerFor("UserPromptSubmit", "userpromptsubmit-inject.sh").additionalContextLimit).toBeUndefined();
 
     for (const name of ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"]) {
       const skill = readFileSync(join(home, ".agents", "skills", name, "SKILL.md"), "utf8");

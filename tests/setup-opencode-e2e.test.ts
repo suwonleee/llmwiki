@@ -78,9 +78,18 @@ describe("fresh OpenCode setup", () => {
     }
     const savePath = join(opencodeRoot, "commands", "wiki-save.md");
     const deepPath = join(opencodeRoot, "commands", "wiki-deep.md");
+    const doctorPath = join(opencodeRoot, "commands", "wiki-doctor.md");
     expect(readFileSync(savePath, "utf8")).toContain("llmwiki db-health <repo> --notice");
     expect(readFileSync(deepPath, "utf8")).toContain("llmwiki compact <repo> --commit");
     expect(readFileSync(deepPath, "utf8")).not.toContain("llmwiki wiki-clean <repo> --commit");
+    const doctorCommand = readFileSync(doctorPath, "utf8");
+    expect(doctorCommand).toContain("llmwiki doctor --harness opencode");
+    expect(doctorCommand).toContain(`bun ${ROOT}/src/daemon/wire-opencode.ts`);
+    expect(doctorCommand).toContain("llmwiki wiki-doctor <repo> --fix");
+    expect(doctorCommand).not.toContain("~/llmwiki");
+    expect(doctorCommand.indexOf("llmwiki doctor --harness opencode")).toBeLessThan(
+      doctorCommand.indexOf("llmwiki wiki-doctor <repo> --fix"),
+    );
     const firstSaveCommand = readFileSync(savePath, "utf8");
     const firstDeepCommand = readFileSync(deepPath, "utf8");
 

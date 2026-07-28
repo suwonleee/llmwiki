@@ -238,7 +238,20 @@ function addHooks(file: HooksFile): void {
   file.hooks.UserPromptSubmit ??= [];
   file.hooks.SessionStart.push({
     matcher: "",
-    hooks: [{ type: "command", command: SESSION_CMD, timeout: 20, statusMessage: "llmwiki cold-start context" }],
+    hooks: [
+      {
+        type: "command",
+        command: SESSION_CMD,
+        timeout: 20,
+        statusMessage: "llmwiki cold-start context",
+        // Codex spills hook stdout above ~2,500 approx tokens (bytes/4 → 10,000 bytes) to a tmp
+        // file and injects only a head/tail preview (codex-rs output_spill.rs). A healthy wiki's
+        // cold start crosses that quietly — the engine already owns its context budget, so spilling
+        // is disabled here. 0 = "no spill" since 0.145.0 (#34393); older parsers ignore the
+        // unknown field (handler variants never had deny_unknown_fields) and keep the default.
+        additionalContextLimit: 0,
+      },
+    ],
   });
   file.hooks.UserPromptSubmit.push({
     matcher: "",

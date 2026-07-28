@@ -12,10 +12,9 @@ import { spawnSync } from "node:child_process";
 import { inspectEnrollment, isEnrolled } from "./enrollment.ts";
 import { wikiRootFor } from "./wiki-root.ts";
 import { readRepoDir, readRepoFile, repoDirExists, repoFileMtime } from "./repo-write.ts";
-import { EXPIRY_WARN_DAYS, expiringWithin, pending } from "./capture.ts";
+import { pending } from "./capture.ts";
 import { uncitedPending } from "./reconcile.ts";
 import { sourceForKind } from "./source.ts";
-import { claudeRetentionDays } from "./sources/claude.ts";
 import { buildSpine, topicGaps } from "./synthesis.ts";
 import { auditNudge } from "./context-audit.ts";
 import { parseQueue } from "./gaps.ts";
@@ -68,10 +67,7 @@ const makeT = (lang: "ko" | "en", cfg: WikiConfig) =>
     ],
     indexHead: "----- [llmwiki index] recent pages in this repo's wiki (Read as needed) -----",
     spineHead: "----- [llmwiki synthesis] conceptual spine — most-referenced pages (the wiki's hubs; full view: llmwiki digest) -----",
-    pending: (n: number) =>
-      `[llmwiki] ${n} un-updated session(s) in this repo → drain the backlog with the deep pass:  /wiki-deep  (transcripts rotate per the agent's own retention — unfiled sessions eventually age out)`,
-    pendingExpiring: (n: number, days: number) =>
-      `[llmwiki] ${n} of them pass the harness's retention window within ${days} day(s) — /wiki-deep if any of them is worth keeping`,
+    pending: (n: number) => `[llmwiki] ${n} un-updated session(s) in this repo`,
     quizDue: (n: number) => `[llmwiki quiz] ${n} review(s) due (day-granular forgetting curve) → reinforce YOUR memory with  /wiki-quiz`,
     updateAvail: (l: string, r: string) =>
       `[llmwiki] engine update available: v${l} → v${r} — apply when you choose:  cd ${CLONE_ROOT} && git pull && ./setup.sh  (the engine never updates itself)`,
@@ -100,10 +96,7 @@ const makeT = (lang: "ko" | "en", cfg: WikiConfig) =>
     ],
     indexHead: "----- [llmwiki 인덱스] 이 레포 위키 최근 페이지 (필요 시 Read) -----",
     spineHead: "----- [llmwiki 종합] 개념 spine — 가장 많이 참조된 페이지(위키 허브; 전체: llmwiki digest) -----",
-    pending: (n: number) =>
-      `[llmwiki] 이 레포 미update 세션 ${n}건 → deep 패스로 백로그 소진 권장:  /wiki-deep  (transcript 는 에이전트 보존정책대로 회전 — 마감 없이 두면 결국 소멸)`,
-    pendingExpiring: (n: number, days: number) =>
-      `[llmwiki] 그중 ${n}건은 ${days}일 내 하네스 보존기한이 끝난다 — 남길 것이 있으면 /wiki-deep`,
+    pending: (n: number) => `[llmwiki] 이 레포 미update 세션 ${n}건`,
     quizDue: (n: number) => `[llmwiki quiz] 복습 due ${n}건 (망각곡선·일 단위) → /wiki-quiz 로 '사람 기억' 강화`,
     updateAvail: (l: string, r: string) =>
       `[llmwiki] 엔진 업데이트 있음: v${l} → v${r} — 원할 때 적용:  cd ${CLONE_ROOT} && git pull && ./setup.sh  (엔진이 스스로를 갱신하는 일은 없다)`,
@@ -370,19 +363,13 @@ export function buildContext(repo: string): string {
     }
   }
   if (pendRows.length > 0) {
+    // A bare count, no recommendation and no deadline (2026-07-28, human decision). The
+    // imminent-retention line ("N of them expire within 7d" — device 3 of the 2026-07-22
+    // retention decision) was retracted: for someone who works daily the imminent band is
+    // perpetually non-empty, so the threshold line degenerated into a permanent banner — the
+    // exact countdown UX that decision had rejected. Un-filed sessions are self-selection,
+    // not debt; the deadline detail stays on PULL only (`llmwiki doctor`).
     L.push(T.pending(pendRows.length));
-    // Device 3 of the 2026-07-22 retention decision: a threshold line, only when something is
-    // actually within the window, detail on pull via `doctor`. Deliberately NOT a countdown and
-    // NOT an imperative — an un-filed session is usually a session the human judged not worth
-    // keeping (self-selection; the measurement behind that decision found all 54 expired sessions
-    // uncited). What is missing without this line is not urgency, it is the DATE: the reader
-    // cannot apply their own judgment to a deadline they cannot see.
-    try {
-      const expiring = expiringWithin(pendRows, claudeRetentionDays().days);
-      if (expiring > 0) L.push(T.pendingExpiring(expiring, EXPIRY_WARN_DAYS));
-    } catch {
-      /* the deadline is an extra: never let it break the backlog line itself */
-    }
     try {
       // pending() is first_seen ASC → the last rows are the most recent sessions.
       for (const row of pendRows.slice(-3).reverse()) {

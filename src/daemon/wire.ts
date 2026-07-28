@@ -19,6 +19,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import {
+  CLAUDE_COMMANDS,
+  OWNED_MARK,
+  commandFileState,
+  commandRootState,
+  writeOwnedCommand,
+} from "../engine/claude-commands.ts";
 import { RETIRED_CLAUDE_COMMANDS } from "../engine/install-history.ts";
 import { CLONE_ROOT } from "../engine/paths.ts";
 import { claudeConfigDirs } from "../engine/sources/claude.ts";
@@ -35,15 +42,13 @@ function shellQuote(value: string): string {
 const INJECT = `bash ${shellQuote(`${ROOT}/hooks/sessionstart-inject.sh`)}`;
 const TURN_INJECT = `bash ${shellQuote(`${ROOT}/hooks/userpromptsubmit-inject.sh`)}`;
 
-// Stamped into every command file this installer COPIES, so uninstall can recognize its own
-// work without depending on backup chronology (which is wrong after a reinstall) or on the
-// clone still sitting where it was.
-const OWNED_MARK = "<!-- installed by llmwiki (owned; removed by uninstall) -->";
-const SKILLS = ["wiki-save.md", "wiki-ask.md", "wiki-deep.md", "wiki-quiz.md", "wiki-doctor.md"];
+// The ownership mark and the command list live in engine/claude-commands.ts — doctor's `--fix`
+// installs the same files, and a second copy of either would let the two installers drift.
 // Commands are marker-bearing copies even for ~/llmwiki. A generic symlink target is not a
 // trustworthy ownership proof; copies make conflict/uninstall decisions exact and local.
-// stable filename key — present regardless of clone path, so re-running from a new
-// location detects & re-points the old hook instead of leaving a stale duplicate.
+//
+// Hook marks below are a stable filename key — present regardless of clone path, so re-running
+// from a new location detects & re-points the old hook instead of leaving a stale duplicate.
 const NEW_MARK = "hooks/sessionstart-inject.sh";
 const TURN_MARK = "hooks/userpromptsubmit-inject.sh";
 const OLD_MARKS = ["wiki-distill-check.sh", "wiki-distill-enqueue.py"];
@@ -118,7 +123,16 @@ function commandConflicts(profs: readonly string[]): string[] {
   const conflicts: string[] = [];
   for (const prof of profs) {
     const commandDir = join(prof, "commands");
-    for (const file of [...SKILLS, ...RETIRED_CLAUDE_COMMANDS]) {
+    if (commandRootState(prof) === "unsafe") {
+      conflicts.push(commandDir);
+      continue;
+    }
+    for (const file of CLAUDE_COMMANDS) {
+      const path = join(commandDir, file);
+      const state = commandFileState(prof, file);
+      if (state === "unsafe" || (state === "regular" && !isOwnedCommandFile(path))) conflicts.push(path);
+    }
+    for (const file of RETIRED_CLAUDE_COMMANDS) {
       const path = join(commandDir, file);
       if (pathExists(path) && !isOwnedCommandFile(path)) conflicts.push(path);
     }
@@ -185,24 +199,21 @@ function apply(dryRun = false): number {
     JSON.parse(text); // validate
     writeFileSync(sp, text, "utf-8");
 
-    // install slash commands → <profile>/commands/. The skill files reference the
-    // engine via `~/llmwiki` (canonical placeholder); rewrite to THIS clone's path.
+    // install slash commands → <profile>/commands/ (engine/claude-commands.ts owns the bytes:
+    // `~/llmwiki` placeholder → THIS clone's path, plus the ownership mark).
     mkdirSync(join(prof, "commands"), { recursive: true });
     // prune retired commands before re-installing so renamed skills leave no broken command
     for (const stale of RETIRED_CLAUDE_COMMANDS) {
       const path = join(prof, "commands", stale);
       if (isOwnedCommandFile(path)) rmSync(path, { force: true });
     }
-    for (const skill of SKILLS) {
-      const src = join(ROOT, "skill", skill);
+    for (const skill of CLAUDE_COMMANDS) {
       const dst = join(prof, "commands", skill);
       if (isOwnedCommandFile(dst)) rmSync(dst, { force: true }); // prior llmwiki copy/symlink
-      let body = readFileSync(src, "utf-8");
-      body = body.split("~/llmwiki").join(ROOT).split("$HOME/llmwiki").join(ROOT);
-      writeFileSync(dst, `${body.replace(/\n*$/, "\n")}\n${OWNED_MARK}\n`, "utf-8");
+      writeOwnedCommand(prof, skill, ROOT);
     }
 
-    const cmds = SKILLS.map((s) => "/" + s.slice(0, -3)).join(", ");
+    const cmds = CLAUDE_COMMANDS.map((s) => "/" + s.slice(0, -3)).join(", ");
     console.log(
       `  [${name}] ✅ old removed: ${removed}, re-pointed: ${repointed}, ` +
         `SessionStart+UserPromptSubmit → ${ROOT.split("/").pop()}, installed (owned copy): ${cmds}`,
@@ -285,7 +296,7 @@ function revert(): number {
     }
     // installed commands: marker-bearing copies, plus exact legacy links into THIS clone.
     const cmdDir = join(prof, "commands");
-    for (const file of [...SKILLS, ...RETIRED_CLAUDE_COMMANDS]) {
+    for (const file of [...CLAUDE_COMMANDS, ...RETIRED_CLAUDE_COMMANDS]) {
       const path = join(cmdDir, file);
       if (!isOwnedCommandFile(path)) continue;
       try {

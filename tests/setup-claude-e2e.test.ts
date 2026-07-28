@@ -103,6 +103,13 @@ describe("fresh Claude Code setup", () => {
     expect(installed["wiki-save"]).toContain("`## 1. <label>`"); // the installed skill carries the structure contract
     expect(installed["wiki-save"]).toContain("supporting detail at `    -`");
     expect(installed["wiki-save"]).toContain("noun phrases or telegraphic endings");
+    expect(installed["wiki-doctor"]).toContain(
+      `bun ${ROOT}/src/cli.ts doctor --harness claude --fix`,
+    );
+    expect(installed["wiki-doctor"]).toContain(`bun ${ROOT}/src/daemon/wire.ts`);
+    expect(installed["wiki-doctor"].indexOf("doctor --harness claude --fix")).toBeLessThan(
+      installed["wiki-doctor"].indexOf("llmwiki wiki-doctor <repo> --fix"),
+    );
 
     const rerun = runSetup();
     expect(rerun.exitCode).toBe(0);

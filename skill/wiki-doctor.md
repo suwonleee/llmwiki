@@ -1,12 +1,13 @@
 ---
-description: Diagnose and repair this repository's llmwiki — deterministic derived-state recovery first, then evidence-aware page repair and semantic health triage
+description: Diagnose and repair the active llmwiki installation and this repository's wiki — owned wiring first, then deterministic state and evidence-aware page repair
 ---
 
-# /wiki-doctor — diagnose and repair this repository's wiki
+# /wiki-doctor — repair the active installation and this repository's wiki
 
-Make the current repository's `docs/wiki/` operational and trustworthy. This command combines
-the deterministic engine health check with an evidence-aware agent repair pass. It is different
-from `llmwiki doctor`, which checks the llmwiki installation, daemon, hooks, and installed skills.
+Make the active llmwiki wiring and the current repository's `docs/wiki/` operational and
+trustworthy. This workflow runs two distinct checks in order: `llmwiki doctor` for the
+machine-level installation, then `llmwiki wiki-doctor` plus an evidence-aware agent repair pass for
+the current project.
 
 $ARGUMENTS
 
@@ -19,12 +20,68 @@ $ARGUMENTS
   contradiction, or choose project direction merely to make the report green.
 - Preserve unrelated dirty-worktree changes. Do not commit or push unless the human explicitly
   asks.
+- Installation repair is limited to llmwiki-owned hooks, skills, commands, launchers, and daemon
+  wiring. Never overwrite a conflicting user-owned file.
 - Human judgment is required only for direction shifts and genuinely unresolved contradictions.
   Ordinary lint repair, source lookup, cross-linking, and filing are the agent's work.
 
 ## Procedure
 
-1. Set REPO to the current project root (`$CLAUDE_PROJECT_DIR` when available, otherwise cwd).
+1. Identify the harness running this workflow. Check only that harness's installation; do not infer
+   the scope from every CLI installed on the machine. Never run the installation doctor without an
+   explicit `--harness`.
+
+   - Codex:
+
+     ```sh
+     llmwiki doctor --harness codex
+     ```
+
+   - Claude Code:
+
+     ```sh
+     bun ~/llmwiki/src/cli.ts doctor --harness claude --fix
+     ```
+
+   - OpenCode:
+
+     ```sh
+     llmwiki doctor --harness opencode
+     ```
+
+   The installation doctor can exit 1 for operational findings outside the selected harness, such
+   as unenrolled repositories or capture backlog. A nonzero exit alone does not mean the active
+   harness wiring is broken. Read the named findings: continue to the project check when the
+   selected harness's llmwiki-owned files are current, and carry trust, enrollment, and backlog
+   warnings into the final report.
+
+   Claude's scoped `--fix` restores missing owned hooks and command files. If the report instead
+   shows a wrong-clone hook, or Codex/OpenCode reports missing or stale owned wiring, run only the
+   matching clone-pinned repair:
+
+   - Claude Code:
+
+     ```sh
+     bun ~/llmwiki/src/daemon/wire.ts
+     ```
+
+   - Codex:
+
+     ```sh
+     bun ~/llmwiki/src/daemon/wire-codex.ts
+     ```
+
+   - OpenCode:
+
+     ```sh
+     bun ~/llmwiki/src/daemon/wire-opencode.ts
+     ```
+
+   Re-run the same scoped installation doctor after a repair. Stop at an unrelated-file conflict
+   instead of overwriting it. Codex hook trust remains a user-owned `/hooks` action; report it
+   explicitly and do not claim the hooks are active before that verdict.
+
+2. Set REPO to the current project root (`$CLAUDE_PROJECT_DIR` when available, otherwise cwd).
    Run:
 
    ```sh
@@ -34,7 +91,7 @@ $ARGUMENTS
    Continue even when it exits 1: that means deterministic repair completed but one or more
    evidence-bearing problems still need this agent's judgment. Read the entire report.
 
-2. Repair every blocking lint error without weakening the underlying knowledge:
+3. Repair every blocking lint error without weakening the underlying knowledge:
 
    - `page-secret`: remove only the credential or private value. Preserve the useful statement and
      its citation.
@@ -57,7 +114,7 @@ $ARGUMENTS
    llmwiki lint <repo> --path '<path under docs/wiki>' --errors-only
    ```
 
-3. Triage warnings by meaning, not by count:
+4. Triage warnings by meaning, not by count:
 
    - `missing-excerpt`: add an excerpt only from the cited source via `llmwiki excerpt`; never
      synthesize a quotation.
@@ -74,7 +131,7 @@ $ARGUMENTS
    - advisory no-citation warnings on navigation or direction pages may remain when they contain
      no factual claim.
 
-4. If the report says semantic review is due, run:
+5. If the report says semantic review is due, run:
 
    ```sh
    llmwiki review <repo> --commit --if-due
@@ -86,11 +143,12 @@ $ARGUMENTS
    Apply grounded stale-claim and cross-link findings. Put only unresolved contradictions or
    direction choices into `docs/wiki/0_review/`; never auto-resolve them.
 
-5. Re-run `llmwiki wiki-doctor <repo> --fix`. Repeat the blocking repair pass at most three times.
+6. Re-run `llmwiki wiki-doctor <repo> --fix`. Repeat the blocking repair pass at most three times.
    Stop once there are zero blocking problem groups. Do not loop just to erase advisory warnings.
 
 ## Report
 
-Return: deterministic repairs applied; page files changed and why; blocking problems remaining;
-warning groups intentionally deferred; semantic review/gap status; final `wiki-doctor` verdict.
-If a blocker remains, name the exact page, evidence needed, and why guessing would be unsafe.
+Return: installation doctor verdict and owned wiring repairs; deterministic project repairs applied;
+page files changed and why; blocking problems remaining; warning groups intentionally deferred;
+semantic review/gap status; final project `wiki-doctor` verdict. If a blocker remains, name the
+exact installation surface or page, evidence needed, and why guessing would be unsafe.

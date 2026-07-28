@@ -25,7 +25,7 @@ function commandOffset(commands: string, command: string, start = 0): number {
   return commands.indexOf(command, start);
 }
 
-function sourceSkill(name: "wiki-save" | "wiki-deep"): string {
+function sourceSkill(name: "wiki-save" | "wiki-deep" | "wiki-doctor"): string {
   return readFileSync(join(ROOT, "skill", `${name}.md`), "utf8");
 }
 
@@ -63,5 +63,27 @@ describe("maintenance skill command contracts", () => {
     expect(rechecked).toBeGreaterThan(compacted);
     expect(cleanupRecommendation).toBeGreaterThan(rechecked);
     expect(commands).not.toContain("llmwiki wiki-clean <repo> --commit");
+  });
+
+  test("checks and repairs the active harness installation before the project wiki", () => {
+    const skill = sourceSkill("wiki-doctor");
+    const commands = commandBlocks(skill);
+
+    const codexDoctor = commandOffset(commands, "llmwiki doctor --harness codex");
+    const claudeDoctor = commandOffset(commands, "bun ~/llmwiki/src/cli.ts doctor --harness claude --fix");
+    const openCodeDoctor = commandOffset(commands, "llmwiki doctor --harness opencode");
+    const projectDoctor = commandOffset(commands, "llmwiki wiki-doctor <repo> --fix");
+
+    expect(codexDoctor).toBeGreaterThanOrEqual(0);
+    expect(claudeDoctor).toBeGreaterThanOrEqual(0);
+    expect(openCodeDoctor).toBeGreaterThanOrEqual(0);
+    expect(projectDoctor).toBeGreaterThan(codexDoctor);
+    expect(projectDoctor).toBeGreaterThan(claudeDoctor);
+    expect(projectDoctor).toBeGreaterThan(openCodeDoctor);
+    expect(skill).toMatch(/Never run the installation doctor without an\s+explicit `--harness`/);
+    expect(skill).toMatch(/A nonzero exit alone does not mean the active\s+harness wiring is broken\./);
+    expect(skill).toMatch(
+      /continue to the project check when the\s+selected harness's llmwiki-owned files are current/,
+    );
   });
 });

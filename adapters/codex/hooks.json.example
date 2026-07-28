@@ -9,7 +9,8 @@
             "type": "command",
             "command": "bash '__LLMWIKI_ROOT__/hooks/sessionstart-inject.sh'",
             "timeout": 20,
-            "statusMessage": "llmwiki cold-start context"
+            "statusMessage": "llmwiki cold-start context",
+            "additionalContextLimit": 0
           }
         ]
       }

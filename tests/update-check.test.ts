@@ -36,6 +36,10 @@ function sh(args: string[], cwd: string): void {
 function mkOrigin(version: string): string {
   const d = tmp("llmwiki-upd-origin-");
   sh(["git", "init", "-q", "-b", "main"], d);
+  // Isolate from the developer's global hooks: this project installs a commit-message hook via a
+  // machine-level `core.hooksPath`, and it would reject these fixture commits (tests/support/git-repo.ts
+  // does the same).
+  sh(["git", "config", "core.hooksPath", "/dev/null"], d);
   writeFileSync(join(d, "package.json"), JSON.stringify({ name: "llmwiki", version }));
   sh(["git", "add", "-A"], d);
   sh(["git", "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-qm", "init"], d);

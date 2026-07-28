@@ -95,6 +95,11 @@ test("purge is skipped when the supervised daemon cannot be confirmed stopped", 
     env: {
       ...process.env,
       HOME: home,
+      // Sandboxing HOME is not enough: `$CLAUDE_CONFIG_DIR` is an ADDITIONAL profile root, so an
+      // inherited one survives the sandbox — and uninstall reverts every harness regardless of
+      // flags. A suite run from inside a Claude session would strip the developer's own hooks and
+      // delete their /wiki-* commands. Pin it into the scratch dir.
+      CLAUDE_CONFIG_DIR: join(scratch, "claude"),
       CODEX_HOME: join(scratch, "codex"),
       XDG_CONFIG_HOME: join(scratch, "config"),
       XDG_DATA_HOME: join(scratch, "data"),
@@ -135,6 +140,7 @@ test("a definitionless loaded launchd job blocks purge when it cannot be stopped
     env: {
       ...process.env,
       HOME: home,
+      CLAUDE_CONFIG_DIR: join(scratch, "claude"), // an inherited profile root survives HOME sandboxing — see above
       CODEX_HOME: join(scratch, "codex"),
       XDG_CONFIG_HOME: join(scratch, "config"),
       XDG_DATA_HOME: join(scratch, "data"),

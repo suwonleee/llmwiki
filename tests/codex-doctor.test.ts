@@ -50,6 +50,42 @@ describe("Codex doctor status", () => {
 
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
+  test("a pre-guard install is detected: no additionalContextLimit on SessionStart", () => {
+    const status = inspectCodexInstall(codexHome, home);
+
+    expect(status.sessionHook).toBe(true);
+    expect(status.sessionSpillGuard).toBe(false); // fixture hooks.json predates the spill guard
+  });
+
+  test("a guarded install reports sessionSpillGuard", () => {
+    writeFileSync(
+      hooksPath,
+      JSON.stringify({
+        hooks: {
+          SessionStart: [
+            {
+              matcher: "",
+              hooks: [
+                {
+                  type: "command",
+                  command: `bash '${ROOT}/hooks/sessionstart-inject.sh'`,
+                  additionalContextLimit: 0,
+                },
+              ],
+            },
+          ],
+          UserPromptSubmit: [
+            { matcher: "", hooks: [{ type: "command", command: `bash '${ROOT}/hooks/userpromptsubmit-inject.sh'` }] },
+          ],
+        },
+      }),
+    );
+
+    const status = inspectCodexInstall(codexHome, home);
+
+    expect(status.sessionSpillGuard).toBe(true);
+  });
+
   test("an unrelated hook trust record is not accepted", () => {
     writeFileSync(join(codexHome, "config.toml"), '[hooks.state."unrelated-hook"]\ntrusted_hash="x"\n');
 

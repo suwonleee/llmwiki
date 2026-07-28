@@ -42,6 +42,12 @@ The example [`hooks.json.example`](hooks.json.example) remains for users who
 want repo-local/manual wiring. Replace `__LLMWIKI_ROOT__` with the clone's
 absolute path, then review it in `/hooks`.
 
+`additionalContextLimit: 0` on the SessionStart handler matters: Codex spills
+hook output above ~2,500 approx tokens (10,000 bytes) to a temp file and
+injects only a truncated preview, which silently cuts a healthy wiki's cold
+start. `0` disables that spill (supported since 0.145.0; older versions ignore
+the field and keep the 2,500-token default).
+
 ## Coexistence with OMX
 
 The installer removes and re-points only commands containing llmwiki's two hook

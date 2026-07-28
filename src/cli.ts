@@ -27,6 +27,7 @@ import { auditContext, formatAudit } from "./engine/context-audit.ts";
 import { ingest } from "./engine/ingest.ts";
 import * as capture from "./engine/capture.ts";
 import * as consolidate from "./engine/consolidate.ts";
+import * as related from "./engine/related.ts";
 import { reconcileReflected } from "./engine/reconcile.ts";
 import * as quiz from "./engine/quiz.ts";
 import { runBench, writeResults } from "./engine/bench.ts";
@@ -215,6 +216,27 @@ function cmdUpdateStatus(p: Parsed) {
   console.log(`${rows.length} transcript(s) pending update:`);
   for (const r of rows) {
     console.log(`  • sess ${(r.session_id || "?").slice(0, 8)} @offset ${r.byte_offset} | ${r.transcript_path}`);
+  }
+}
+
+// Same-topic pending sessions, anchored on this session's transcript (close-out step 2b).
+// Candidates only — deterministic, human-utterance matching, never a recommendation.
+function cmdRelated(p: Parsed) {
+  const ws = p.positionals[0] ?? die("related <workspace> <transcript> required");
+  const transcript = p.positionals[1] ?? die("related <workspace> <transcript> required");
+  const cands = related.relatedPending(ws, transcript);
+  if (!cands.length) {
+    console.log(ko ? "✓ 같은 주제의 미저장 세션 없음." : "✓ No pending sessions on this session's topic.");
+    return;
+  }
+  console.log(
+    ko
+      ? `같은 주제의 미저장 세션 ${cands.length}건 — 후보일 뿐, 엮을지는 지금 쓰는 페이지에 보탬이 될 때만:`
+      : `${cands.length} pending session(s) on this session's topic — candidates only; weave one in only if it enriches a page being written now:`,
+  );
+  for (const c of cands) {
+    console.log(`  • sess ${(c.sessionId ?? "?").slice(0, 8)} score=${c.score} | ${c.recap ?? c.path}`);
+    console.log(`      ${ko ? "엮으려면" : "to weave in"}: ${related.renderUpdateNextCommand(ws, c.path)}`);
   }
 }
 
@@ -524,6 +546,12 @@ async function cmdTurnContext(p: Parsed) {
   if (!prompt && !process.stdin.isTTY) {
     try {
       const payload = JSON.parse(await Bun.stdin.text());
+      // Codex fires UserPromptSubmit for SUBAGENT threads too, and says so in the payload
+      // (agent_id/agent_type — null on the main thread; Claude Code sends neither). A subagent's
+      // "prompt" is the orchestrator's instruction, not the human's — wiki pointers there would
+      // steer a narrow delegated task with unrelated context, so subagent turns stay silent.
+      // Same principle as LLMWIKI_ENGINE_SUBPROCESS, provided by the harness instead of by us.
+      if (String(payload.agent_type ?? "").trim() || String(payload.agent_id ?? "").trim()) return;
       prompt = String(payload.prompt ?? "");
       sessionId ||= String(payload.session_id ?? "");
       // Same precedence as the cold start: in hook mode the harness's cwd beats the positional,
@@ -1010,6 +1038,7 @@ const HANDLERS: Record<string, (p: Parsed) => void | Promise<void>> = {
   search: cmdSearch,
   "update-status": cmdUpdateStatus,
   "update-next": cmdUpdateNext,
+  related: cmdRelated,
   "update-done": cmdUpdateDone,
   "update-enqueue": cmdUpdateEnqueue,
   skeleton: cmdSkeleton,

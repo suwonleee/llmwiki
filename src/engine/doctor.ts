@@ -4,10 +4,16 @@
 // per-profile SessionStart hook + slash-command checks, and a --fix path that
 // safely re-registers the SessionStart inject hook (timestamped backup → parse →
 // append → re-parse validation → write).
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import {
+  CLAUDE_COMMANDS,
+  commandFileState,
+  commandRootState,
+  writeOwnedCommand,
+} from "./claude-commands.ts";
 import { RETIRED_CODEX_SKILLS } from "./install-history.ts";
 import { CLONE_ROOT } from "./paths.ts";
 import { claudeConfigDirs, claudeRetentionDays } from "./sources/claude.ts";
@@ -51,7 +57,7 @@ const CORE = [
 // Must stay in sync with wire.ts SKILLS and the repo's skill/ dir — tests/skills-drift.test.ts
 // enforces all three (drift here is silent: wire installs a command doctor never checks, so its
 // loss is invisible — the same success-looking-failure class as the CLI value-flag allowlist).
-const COMMANDS = ["wiki-save.md", "wiki-ask.md", "wiki-deep.md", "wiki-quiz.md", "wiki-doctor.md"] as const;
+const COMMANDS = CLAUDE_COMMANDS;
 const PLIST = join(HOME, "Library", "LaunchAgents", "com.llmwiki.daemon.plist");
 const LABEL = "com.llmwiki.daemon";
 // canonical SessionStart read-injection hook — what --fix re-registers if a profile lost it
@@ -85,6 +91,9 @@ export interface CodexInstallStatus {
   hooksValid: boolean;
   sessionHook: boolean;
   turnHook: boolean;
+  /** SessionStart handler carries additionalContextLimit — without it Codex truncates a cold
+   *  start above ~2,500 approx tokens (10,000 bytes) to a spilled-file preview. */
+  sessionSpillGuard: boolean;
   reviewRecords: boolean;
   missingSkills: string[];
   staleSkills: string[];
@@ -133,6 +142,7 @@ export function inspectCodexInstall(
     hooksValid: false,
     sessionHook: false,
     turnHook: false,
+    sessionSpillGuard: false,
     reviewRecords: false,
     missingSkills: [],
     staleSkills: [],
@@ -151,6 +161,10 @@ export function inspectCodexInstall(
   const turn = commandLocation(parsed?.hooks, "UserPromptSubmit", TURNCTX_CMD);
   result.sessionHook = session !== null;
   result.turnHook = turn !== null;
+  if (session) {
+    const handler = parsed?.hooks?.SessionStart?.[session.group]?.hooks?.[session.hook];
+    result.sessionSpillGuard = handler?.additionalContextLimit !== undefined;
+  }
   if (session && turn) {
     try {
       const config = readFileSync(join(codexHome, "config.toml"), "utf8");
@@ -605,16 +619,37 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
     }
 
     // slash commands present in this profile? (commands/ files survive OMC settings.json regen)
-    const missing = COMMANDS.filter((c) => !existsSync(join(prof, "commands", c)));
     const slashList = (cs: readonly string[]) => cs.map((c) => "/" + c.slice(0, -3)).join(", ");
-    if (missing.length === 0) {
+    const commandRoot = commandRootState(prof);
+    if (commandRoot === "unsafe") {
+      console.log(`  [${name}] 🔴 unsafe command directory: ${join(prof, "commands")} — left untouched`);
+      issues += 1;
+      continue;
+    }
+    const unsafe = COMMANDS.filter((c) => commandFileState(prof, c) === "unsafe");
+    for (const c of unsafe) {
+      console.log(`  [${name}] 🔴 unsafe command destination: ${join(prof, "commands", c)} — left untouched`);
+      issues += 1;
+    }
+    const missing = COMMANDS.filter((c) => commandFileState(prof, c) === "missing");
+    if (missing.length === 0 && unsafe.length === 0) {
       console.log(`  [${name}] ✅ commands present: ${slashList(COMMANDS)}`);
     } else if (fix) {
-      mkdirSync(join(prof, "commands"), { recursive: true });
+      // Must produce exactly what wire.ts writes. A plain copy of the skill file is NOT the same
+      // file: it carries no ownership mark (so uninstall can never remove it, and setup's
+      // preflight reads it as a user file and refuses to wire ANY profile) and it keeps the
+      // `~/llmwiki` placeholder (so the command points at a path this clone may not occupy).
+      const installed: string[] = [];
       for (const c of missing) {
-        copyFileSync(join(CLONE_ROOT, "skill", c), join(prof, "commands", c));
+        try {
+          writeOwnedCommand(prof, c, CLONE_ROOT);
+          installed.push(c);
+        } catch (error) {
+          console.log(`  [${name}] 🔴 ${error instanceof Error ? error.message : String(error)} — left untouched`);
+          issues += 1;
+        }
       }
-      console.log(`  [${name}] 🔧 installed missing command(s): ${slashList(missing)}`);
+      if (installed.length) console.log(`  [${name}] 🔧 installed missing command(s): ${slashList(installed)}`);
     } else {
       console.log(`  [${name}] ⚠️ missing command(s): ${slashList(missing)} (run \`doctor --fix\`)`);
       issues += 1;
@@ -645,6 +680,15 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
         } else {
           console.log("  [codex] ✅ hooks installed; review records present");
           console.log("  [codex] ⚠️ confirm the current hook hashes in `/hooks` after install or re-pointing");
+          actions += 1;
+        }
+        if (status.sessionHook && !status.sessionSpillGuard) {
+          // Pre-guard install: Codex truncates cold starts above ~2,500 approx tokens (10,000
+          // bytes) to a spilled-file preview. Re-wiring adds additionalContextLimit: 0.
+          console.log(
+            `  [codex] ⚠️ cold-start spill guard missing (large wikis get truncated) — ` +
+              `re-run \`${WIRE_CODEX_CMD}\`, then re-review in \`/hooks\``,
+          );
           actions += 1;
         }
 

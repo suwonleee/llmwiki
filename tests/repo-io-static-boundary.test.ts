@@ -39,6 +39,7 @@ const ALLOWED_MUTATORS: Record<string, string> = {
   "engine/update-check.ts": "records the daily origin check in the machine-local state root; reads the engine clone's own package.json — never repository content",
   "engine/claude.ts": "creates and removes the throwaway cwd for a generative subprocess",
   "engine/doctor.ts": "repairs HARNESS configuration (~/.claude, ~/.codex), never a repository",
+  "engine/claude-commands.ts": "writes the /wiki-* command files into a Claude profile (harness config), reading only this clone's own skill/ sources",
   "engine/bench.ts": "engine-development benchmark writing its own report next to the corpus",
   "engine/compare.ts": "engine-development A/B harness building disposable temp workspaces",
   "daemon/wire.ts": "installs/removes Claude Code hooks and commands in the user's harness config",
@@ -166,6 +167,28 @@ describe("tests cannot reach the developer's supervisor", () => {
       const neutralized = src.includes("inertSupervisorBin") || src.includes("launchctl");
       if (!neutralized) offenders.push(file);
     }
+    expect(offenders).toEqual([]);
+  });
+
+  test("every test that runs the unified uninstall pins every harness and state root", () => {
+    const dir = join(import.meta.dir);
+    const required = [
+      "HOME",
+      "CLAUDE_CONFIG_DIR",
+      "CODEX_HOME",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_HOME",
+      "LLMWIKI_STATE_DIR",
+    ];
+    const offenders: string[] = [];
+
+    for (const file of readdirSync(dir).filter((f) => f.endsWith(".test.ts"))) {
+      const src = readFileSync(join(dir, file), "utf-8");
+      if (!src.includes('"setup.sh"') || !src.includes('"--uninstall"')) continue;
+      const missing = required.filter((name) => !src.includes(name));
+      if (missing.length) offenders.push(`${file}: ${missing.join(", ")}`);
+    }
+
     expect(offenders).toEqual([]);
   });
 });

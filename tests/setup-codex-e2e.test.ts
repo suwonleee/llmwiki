@@ -80,8 +80,15 @@ describe("fresh Codex setup", () => {
     expect(readFileSync(savePath, "utf8")).toContain("llmwiki db-health <repo> --notice");
     expect(readFileSync(deepPath, "utf8")).toContain("llmwiki compact <repo> --commit");
     expect(readFileSync(deepPath, "utf8")).not.toContain("llmwiki wiki-clean <repo> --commit");
-    expect(readFileSync(doctorPath, "utf8")).toContain("name: wiki-doctor");
-    expect(readFileSync(doctorPath, "utf8")).toContain("llmwiki wiki-doctor <repo> --fix");
+    const doctorSkill = readFileSync(doctorPath, "utf8");
+    expect(doctorSkill).toContain("name: wiki-doctor");
+    expect(doctorSkill).toContain("llmwiki doctor --harness codex");
+    expect(doctorSkill).toContain(`bun ${ROOT}/src/daemon/wire-codex.ts`);
+    expect(doctorSkill).toContain("llmwiki wiki-doctor <repo> --fix");
+    expect(doctorSkill).not.toContain("~/llmwiki");
+    expect(doctorSkill.indexOf("llmwiki doctor --harness codex")).toBeLessThan(
+      doctorSkill.indexOf("llmwiki wiki-doctor <repo> --fix"),
+    );
     const firstSaveSkill = readFileSync(savePath, "utf8");
     const firstDeepSkill = readFileSync(deepPath, "utf8");
 
