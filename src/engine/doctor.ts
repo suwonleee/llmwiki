@@ -678,9 +678,23 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
   // Codex is a first-class setup target. The hook file, both lifecycle events, all skills,
   // and the launcher must all point at this clone. Hook trust itself is owned by Codex's
   // current-hash review UI; config records are only a conservative "review happened" signal.
-  if (harness === "all" || harness === "codex") {
+  //
+  // Under `all`, presence means the CLI — the same rule the Claude branch above already uses,
+  // and for the same reason. A leftover $CODEX_HOME on a machine that no longer has Codex was
+  // counting as required issues, so `./setup.sh --harness auto` (which had SKIPPED Codex for
+  // exactly that reason) ended a perfectly good Claude+OpenCode install with "setup incomplete,
+  // exits 1" and a repair command for a harness the person does not run. A red line over a fine
+  // install is the same defect as a green line over a dead one. The directory is still reported
+  // — as information, not as a defect of this install.
+  const codexHomeDir = process.env.CODEX_HOME?.trim() || join(HOME, ".codex");
+  const inspectCodex = harness === "codex" || (harness === "all" && Bun.which("codex") !== null);
+  if (harness === "all" && !inspectCodex && existsSync(codexHomeDir)) {
+    console.log(`  [codex] • ${codexHomeDir} exists but the Codex CLI is not on PATH — not inspected`);
+    console.log(`  [codex]    (if you do use Codex, wire it with \`${WIRE_CODEX_CMD}\`)`);
+  }
+  if (inspectCodex) {
     try {
-      const codexHome = process.env.CODEX_HOME?.trim() || join(HOME, ".codex");
+      const codexHome = codexHomeDir;
       if (existsSync(codexHome)) {
         const status = inspectCodexInstall(codexHome, HOME);
         if (!status.hooksValid || !status.sessionHook || !status.turnHook) {
@@ -759,13 +773,19 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
     }
   }
 
-  // OpenCode is a first-class target when selected, and is auto-inspected under `all`
-  // only when the CLI or an existing global config is present.
+  // OpenCode is a first-class target when selected, and is auto-inspected under `all` only when
+  // the CLI is present — same presence rule as Claude and Codex above. A leftover global config
+  // without the CLI is reported as information; failing on it would red-flag an install that is
+  // correct for the harnesses this machine actually runs.
   if (harness === "all" || harness === "opencode") {
     const configRoot = process.env.XDG_CONFIG_HOME?.trim() || join(HOME, ".config");
     const opencodeRoot = join(configRoot, "opencode");
     const status = inspectOpenCodeInstall(configRoot, HOME);
-    if (harness === "opencode" || status.installed || existsSync(opencodeRoot)) {
+    if (harness === "all" && !status.installed && existsSync(opencodeRoot)) {
+      console.log(`  [opencode] • ${opencodeRoot} exists but the OpenCode CLI is not on PATH — not inspected`);
+      console.log(`  [opencode]    (if you do use OpenCode, wire it with \`${WIRE_OPENCODE_CMD}\`)`);
+    }
+    if (harness === "opencode" || status.installed) {
       if (!status.installed) {
         console.log("  [opencode] ⚠️ OpenCode CLI not found on PATH");
         issues += 1;
