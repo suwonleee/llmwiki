@@ -145,13 +145,18 @@ const CLAUDE_MODEL_RE = /"model"\s*:\s*"(claude-[A-Za-z0-9._-]+)"/g;
 /**
  * The shape a model id may have before it becomes a `--model` argument.
  *
- * The Claude pattern above already constrains what it captures; Codex and OpenCode read theirs
- * out of JSON fields, so the same bound is applied to all three rather than to whichever path
- * happened to have it. Nothing here is shell-parsed (the subprocess is spawned from an argv
- * array), so this is not an injection fix — it keeps a malformed or hostile record from turning
- * into a flag-shaped argument that makes the generative pass fail in a confusing way.
+ * Nothing here is shell-parsed (the subprocess is spawned from an argv array), so this is not an
+ * injection fix — the work is done by the leading alphanumeric anchor, which keeps a malformed or
+ * hostile record from becoming a FLAG-shaped argument, and by the length bound.
+ *
+ * The character set has to be generous, because being too strict fails in the exact direction
+ * this file exists to prevent: a rejected id is silently indistinguishable from "nothing
+ * observed", so the pass falls back to a constant — the stale-hardcoded-id failure coming back
+ * through another door. `:` is in real ids from more than one ecosystem (Ollama's
+ * `llama3.1:8b`, Bedrock's `…-v2:0`), and OpenCode is multi-provider by design, so leaving it
+ * out would have quietly downgraded those users.
  */
-const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._\/-]{0,127}$/;
+const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,127}$/;
 
 function asModelId(value: unknown): string | null {
   const s = typeof value === "string" ? value.trim() : "";
@@ -256,7 +261,10 @@ function opencodeDbModel(dbPath: string, sessionID?: string): string | null {
 export function observedModel(repo: string, harness: Harness): string | null {
   if (harness === "claude") {
     for (const path of transcriptsFor(repo, "claude-jsonl").slice(0, 5)) {
-      const model = pickMatch(readSlice(path, "tail"), CLAUDE_MODEL_RE, "last");
+      // The family prefix already narrows this one, but it carries no length bound — so the
+      // same guard runs here too, and "all three paths" is true of the code and not just the
+      // sentence describing it.
+      const model = asModelId(pickMatch(readSlice(path, "tail"), CLAUDE_MODEL_RE, "last"));
       if (model) return model;
     }
     return null;

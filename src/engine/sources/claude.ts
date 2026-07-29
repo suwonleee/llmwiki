@@ -325,7 +325,10 @@ export const CLAUDE_DEFAULT_RETENTION_DAYS = 30;
 
 export function claudeRetentionDays(): { days: number; configured: boolean } {
   let shortest: number | null = null;
-  for (const dir of claudeConfigDirs()) {
+  // Reading a setting is a read, so this covers connected locations too. The shortest retention
+  // across every profile capture reads from is the honest deadline — leaving a connected profile
+  // out would make the warning optimistic about transcripts that expire sooner than it says.
+  for (const dir of claudeCaptureDirs()) {
     let raw: string;
     try {
       raw = readFileSync(join(dir, "settings.json"), "utf-8");

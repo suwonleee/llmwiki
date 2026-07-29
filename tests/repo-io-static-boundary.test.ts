@@ -174,6 +174,22 @@ describe("tests cannot reach the developer's supervisor", () => {
     expect(offenders).toEqual([]);
   });
 
+  // `llmwiki connect <harness> <path>` declares where transcripts may be READ. Wiring — the
+  // settings.json and commands/ that wire.ts installs — belongs only to a profile this machine
+  // owns, and it reaches its targets through claudeConfigDirs(). A behavioural test can only
+  // assert this through that function as a proxy, so swapping wire.ts over to the capture-side
+  // list would silently re-open the gap while every test still passed. Naming the import here
+  // makes that swap a review decision.
+  //
+  // doctor.ts is deliberately not covered: it imports persistedClaudeDirs legitimately, to
+  // re-verify each persisted location read-only.
+  test("wire.ts wires owned profiles only — never a connected read location", () => {
+    const src = readFileSync(join(SRC, "daemon", "wire.ts"), "utf-8");
+    const offenders = ["claudeCaptureDirs", "persistedClaudeDirs"].filter((name) => src.includes(name));
+    expect(offenders).toEqual([]);
+    expect(src).toContain("claudeConfigDirs");
+  });
+
   test("every test that runs the unified uninstall pins every harness and state root", () => {
     const dir = join(import.meta.dir);
     const required = [

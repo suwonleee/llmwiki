@@ -61,7 +61,12 @@ function opencodeExport(exportPath: string, dbPath: string, sessionID: string, m
       time_updated INTEGER, data TEXT);
   `);
   db.prepare("INSERT INTO session VALUES (?,?,?,?,?)").run(sessionID, repo, "t", 1, null);
-  const [providerID, modelID] = model.split("/");
+  // Only the FIRST slash separates provider from model, and plenty of ids carry none at all
+  // (Ollama's `llama3.1:8b`, Bedrock's `…-v2:0`). Splitting on every slash would rewrite the
+  // fixture into something no provider emits.
+  const slash = model.indexOf("/");
+  const providerID = slash === -1 ? "" : model.slice(0, slash);
+  const modelID = slash === -1 ? model : model.slice(slash + 1);
   db.prepare("INSERT INTO message VALUES (?,?,?,?,?)").run(
     "msg_0001", sessionID, 1, 1,
     JSON.stringify({ role: "assistant", providerID, modelID, time: { created: 1, completed: 2 } }),
@@ -118,6 +123,23 @@ describe("observing the session's model", () => {
     opencodeExport(exp, db, "ses_1", "anthropic/claude-opus-5");
     capture.enqueue(exp, "ses_1", repo, 1, "opencode");
     expect(observedModel(repo, "opencode")).toBe("anthropic/claude-opus-5");
+  });
+
+  // The guard has to be generous where real ids are: rejecting one is indistinguishable from
+  // observing nothing, so an over-strict pattern drops a user onto a constant — the stale
+  // hardcoded id returning through another door. OpenCode is multi-provider by design.
+  test.each([
+    ["ollama", "llama3.1:8b"],
+    ["ollama tagged", "qwen2.5-coder:7b"],
+    ["bedrock", "anthropic.claude-3-5-sonnet-20241022-v2:0"],
+    ["bedrock with a region prefix", "us.anthropic.claude-sonnet-4-20250514-v1:0"],
+    ["openrouter", "google/gemini-2.5-pro"],
+  ])("an id from a real provider survives the guard: %s", (name, model) => {
+    const slug = name.replace(/\W/g, "");
+    const exp = join(dir, "exports", `${slug}.jsonl`);
+    opencodeExport(exp, join(dir, `oc-${slug}.db`), `ses_${slug}`, model);
+    capture.enqueue(exp, `ses_${slug}`, repo, 1, "opencode");
+    expect(observedModel(repo, "opencode")).toBe(model);
   });
 
   // A recorded id becomes a `--model` argument, so every harness path bounds its shape the way
