@@ -15,6 +15,7 @@ import { UNAVAILABLE, llm, llmAvailable, screenOutbound } from "./claude.ts";
 import { WikiIndex, type DocRow } from "./db.ts";
 import { appendLog } from "./update.ts";
 import { MODEL_HEAVY } from "./models.ts";
+import { generativeModel } from "./session-model.ts";
 import { ensureRepoDir, readRepoFile, repoFileExists, writeRepoFile } from "./repo-write.ts";
 
 // review is the JUDGMENT half (semantic lint + grounding adjudication). It is the place
@@ -314,9 +315,9 @@ export async function review(ws: string, opts: ReviewOpts): Promise<Record<strin
   const { commit = false, minPages = 2, maxPages = MAX_REVIEW_PAGES, force = false, ifDue = false, date } = opts;
   const root = resolve(ws);
   const name = basename(root);
-  // Heavy tier for the judgment pass: explicit opts.model wins, else config-resolved
-  // (env LLMWIKI_MODEL_HEAVY > toml [models].heavy > builtin).
-  const model = opts.model ?? getConfig(root).models.heavy;
+  // Heavy tier for the judgment pass: explicit opts.model wins, else env > toml > the model this
+  // repo's sessions actually run on > harness fallback (engine/session-model.ts). No builtin id.
+  const model = opts.model ?? generativeModel(root, "heavy", getConfig(root).models.heavy);
 
   // Backgrounded runs fail silently by construction (no terminal to error into) — surface a
   // prior launch that never committed on EVERY exit path, so whichever call the next close-out

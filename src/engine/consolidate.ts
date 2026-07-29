@@ -32,6 +32,7 @@ import { appendLog, ensureSkeleton } from "./update.ts";
 import { effectiveKo, getConfig, isRepoKorean, renderBodyStyleRule, type WikiConfig } from "./config.ts";
 import { Linter, type LintIssue, type WikiIndexLike } from "./lint.ts";
 import { MODEL_HEAVY, MODEL_LIGHT } from "./models.ts";
+import { generativeModel } from "./session-model.ts";
 import { ensureRepoDir, readRepoFile, removeRepoFile, repoPathAllowed, writeRepoFile } from "./repo-write.ts";
 
 // WRITE drafts the merged page (cheap tier); VERIFY adjudicates the added claims (heavy tier,
@@ -256,11 +257,14 @@ export async function consolidateOne(
   ws: string,
   transcriptPath: string,
   commit: boolean,
-  writeModel: string = WRITE_MODEL,
-  verifyModel: string = VERIFY_MODEL,
+  writeModel?: string | null,
+  verifyModel?: string | null,
 ): Promise<Record<string, any>> {
   const root = resolve(ws);
   const cfg = getConfig(root); // per-repo conventions (configs/ → root file → defaults)
+  // Unpinned tiers resolve to the model this repo's sessions actually run on (session-model.ts).
+  const wm = writeModel ?? generativeModel(root, "light", cfg.models.light);
+  const vm = verifyModel ?? generativeModel(root, "heavy", cfg.models.heavy);
   const ko = effectiveKo(cfg);
   const fn = basename(transcriptPath);
   const st = loadState(root);
@@ -295,7 +299,7 @@ export async function consolidateOne(
       extract: writeBlocks.extract!,
       transcript_filename: fn,
     }),
-    writeModel,
+    wm,
   );
   if (raw.startsWith(UNAVAILABLE)) {
     return { transcript: fn, verdict: "skipped-no-provider", reason: raw.slice(UNAVAILABLE.length + 1, 240) };
@@ -353,7 +357,7 @@ export async function consolidateOne(
   }
   const verdict = await llm(
     fill(VERIFY_TOPIC_PROMPT, { extract: verifyBlocks.extract!, added: verifyBlocks.added! }),
-    verifyModel,
+    vm,
   );
   if (verdict.startsWith(UNAVAILABLE)) {
     return { transcript: fn, verdict: "skipped-no-provider", reason: verdict.slice(UNAVAILABLE.length + 1, 240) };
@@ -444,13 +448,19 @@ export async function run(
   ws: string,
   commit = false,
   limit = 0,
-  writeModel: string = WRITE_MODEL,
-  verifyModel: string = VERIFY_MODEL,
+  writeModel?: string | null,
+  verifyModel?: string | null,
 ): Promise<Record<string, any>[]> {
   const root = resolve(ws);
   const ko = isRepoKorean(root);
   ensureSkeleton(root); // guarantees docs/wiki/ + topic dir exist (per-repo config)
-  if (writeModel === verifyModel) {
+  const cfg0 = getConfig(root);
+  const wm0 = writeModel ?? generativeModel(root, "light", cfg0.models.light);
+  const vm0 = verifyModel ?? generativeModel(root, "heavy", cfg0.models.heavy);
+  // Unpinned, both tiers resolve to the SAME session model — that is expected now, and the
+  // independence the gate cares about comes from the separate context the verify pass runs in.
+  // Warn only when the two were pinned to one model on purpose, where a tier split was intended.
+  if (writeModel != null && writeModel === verifyModel) {
     process.stderr.write(
       (ko
         ? `⚠️  WRITE·VERIFY 모델 동일(${writeModel}) — 병합 2차검증이 자기 채점이 됨(독립성 상실).\n`
@@ -461,7 +471,7 @@ export async function run(
   if (limit) pend = pend.slice(0, limit);
   const out: Record<string, any>[] = [];
   for (const t of pend) {
-    out.push(await consolidateOne(root, t.path, commit, writeModel, verifyModel));
+    out.push(await consolidateOne(root, t.path, commit, wm0, vm0));
   }
   return out;
 }

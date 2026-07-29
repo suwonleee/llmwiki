@@ -67,6 +67,8 @@ const ALLOWED_READERS: Record<string, string> = {
   "engine/sources/codex.ts": "reads machine-local Codex rollouts",
   "engine/sources/plain.ts": "reads the file an explicit `ingest` names",
   "engine/sources/routing.ts": "bounded routing reads over machine-local transcripts",
+  "engine/session-model.ts":
+    "bounded tail reads of machine-local transcripts to learn which model the session ran on — a model id, never message content",
 };
 
 function sourceFiles(dir: string, out: string[] = []): string[] {

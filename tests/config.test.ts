@@ -172,11 +172,14 @@ function withModelEnv(light: string | undefined, heavy: string | undefined, fn: 
   }
 }
 
-test("models: builtin defaults when no env and no toml [models]", () => {
+// No env, no toml → UNPINNED. The engine ships no model id: a hardcoded one ages into a pass that
+// breaks for a user who changed nothing (it had already aged — the old default named Opus 4.8 after
+// Opus 5 shipped). Unpinned means the generative pass uses the model the session actually runs on.
+test("models: unpinned when no env and no toml [models]", () => {
   withModelEnv(undefined, undefined, () => {
     const c = defaults();
-    expect(c.models.light).toBe("claude-sonnet-5");
-    expect(c.models.heavy).toBe("claude-opus-4-8");
+    expect(c.models.light).toBeNull();
+    expect(c.models.heavy).toBeNull();
   });
 });
 
@@ -195,7 +198,7 @@ heavy = "my-heavy-model"
   });
 });
 
-test("models: partial toml [models] falls back to builtin for the unset tier", () => {
+test("models: partial toml [models] leaves the unset tier unpinned", () => {
   withModelEnv(undefined, undefined, () => {
     const p = tmpToml(`
 [models]
@@ -203,11 +206,11 @@ light = "only-light"
 `);
     const c = loadFrom(p);
     expect(c.models.light).toBe("only-light");
-    expect(c.models.heavy).toBe("claude-opus-4-8"); // unset → builtin
+    expect(c.models.heavy).toBeNull(); // unset → unpinned, resolved from the session
   });
 });
 
-test("models: env overrides toml [models] (env > toml > builtin)", () => {
+test("models: env overrides toml [models] (env > toml > unpinned)", () => {
   withModelEnv("env-light", "env-heavy", () => {
     const p = tmpToml(`
 [models]

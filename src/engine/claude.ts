@@ -100,7 +100,36 @@ export function llmAvailable(): boolean {
   return tmpl !== null && !!tmpl[0] && !!resolveBin(tmpl[0]!);
 }
 
-export async function llm(prompt: string, model: string): Promise<string> {
+/**
+ * Drop the `--model <value>` pair from an argv template.
+ *
+ * Used when no model could be determined: rather than substituting a guess, the flag comes out
+ * entirely and the harness CLI applies its own default — which is by definition a model that
+ * machine can run today. Handles both spellings, `--model {model}` (two tokens) and
+ * `--model={model}` (one), and leaves a bare `{model}` token — a template that interpolates the id
+ * somewhere other than a flag — as an empty string rather than mangling its neighbours.
+ */
+export function dropModelFlag(template: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < template.length; i++) {
+    const tok = template[i]!;
+    if (!tok.includes("{model}")) {
+      out.push(tok);
+      continue;
+    }
+    if (tok === "{model}") {
+      // `--model {model}` — the flag is the token we already pushed; take it back out.
+      const prev = out[out.length - 1];
+      if (prev !== undefined && prev.startsWith("-")) out.pop();
+      continue;
+    }
+    if (/^-[^=]*=\{model\}$/.test(tok)) continue; // `--model={model}`
+    out.push(tok.replace("{model}", "")); // interpolated elsewhere — leave the rest intact
+  }
+  return out;
+}
+
+export async function llm(prompt: string, model: string | null): Promise<string> {
   const tmpl = llmTemplate();
   if (tmpl === null) {
     // No command configured → no subprocess, no network, no error. The deterministic half of the
@@ -118,8 +147,9 @@ export async function llm(prompt: string, model: string): Promise<string> {
     return `__ERROR__ ${LLM_CMD_ENV} names '${bin ?? ""}', which is not executable or not on PATH.`;
   }
   const usesPromptArg = tmpl.some((t) => t.includes("{prompt}"));
-  const argv = tmpl.map((t) =>
-    t.includes("{") ? t.replace("{model}", model).replace("{prompt}", prompt) : t,
+  const base = model === null ? dropModelFlag(tmpl) : tmpl;
+  const argv = base.map((t) =>
+    t.includes("{") ? t.replace("{model}", model ?? "").replace("{prompt}", prompt) : t,
   );
   const scratch = mkdtempSync(join(tmpdir(), "llmwiki-llm-"));
   try {

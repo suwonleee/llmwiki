@@ -59,6 +59,7 @@ import {
   type WikiIndexLike,
 } from "./lint.ts";
 import { MODEL_HEAVY, MODEL_LIGHT } from "./models.ts";
+import { generativeModel } from "./session-model.ts";
 import { ensureRepoDir, removeRepoFile, writeRepoFile } from "./repo-write.ts";
 
 // WRITE = light tier (cheap, high-volume drafting). VERIFY = heavy tier — the adversarial
@@ -274,15 +275,15 @@ export async function updateOne(
   ws: string,
   transcriptPath: string,
   commit: boolean,
-  writeModel?: string,
-  verifyModel?: string,
+  writeModel?: string | null,
+  verifyModel?: string | null,
 ): Promise<Record<string, any>> {
   const root = resolve(ws);
   const cfg = getConfig(root); // per-repo conventions (configs/ → root file → defaults)
   // An explicitly-passed model wins; otherwise fall back to the config-resolved tier
   // (env > toml [models] > builtin). Keeps default behavior byte-identical.
-  const wm = writeModel ?? cfg.models.light;
-  const vm = verifyModel ?? cfg.models.heavy;
+  const wm = writeModel ?? generativeModel(root, "light", cfg.models.light);
+  const vm = verifyModel ?? generativeModel(root, "heavy", cfg.models.heavy);
   const ko = effectiveKo(cfg);
   const name = basename(root);
   const fn = basename(transcriptPath);
@@ -530,20 +531,20 @@ export async function run(
   ws: string,
   commit = false,
   limit = 0,
-  writeModel?: string,
-  verifyModel?: string,
+  writeModel?: string | null,
+  verifyModel?: string | null,
 ): Promise<Record<string, any>[]> {
   const cfg = getConfig(ws);
   const ko = effectiveKo(cfg);
-  // An explicitly-passed model wins; otherwise use the config-resolved tier
-  // (env > toml [models] > builtin).
-  const wm = writeModel ?? cfg.models.light;
-  const vm = verifyModel ?? cfg.models.heavy;
+  // An explicitly-passed model wins; otherwise env > toml > the model this repo's sessions
+  // actually run on > harness fallback (session-model.ts). No builtin id.
+  const wm = writeModel ?? generativeModel(ws, "light", cfg.models.light);
+  const vm = verifyModel ?? generativeModel(ws, "heavy", cfg.models.heavy);
   // The adversarial gate's whole premise is that VERIFY is an *independent* second model.
   // If both tiers resolve to the same model, WRITE is grading its own work and
   // the gate adds no independent check. We don't hard-fail (a single capable model is a legitimate budget
   // setup), but we surface it so the operator knows the independence guarantee is void.
-  if (wm === vm) {
+  if (writeModel != null && writeModel === verifyModel) {
     process.stderr.write(
       (ko
         ? `⚠️  WRITE·VERIFY 모델이 동일(${wm}) — 2차검증이 자기 채점이 됨(독립성 상실). ` +

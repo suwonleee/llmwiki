@@ -40,7 +40,10 @@ export interface WikiConfig {
   quizDir: string; // human memory loop (quiz ledger + session records) — never indexed/searched
   quizQuestions: number; // default questions per /wiki-quiz session (argument can raise it; engine caps at QUIZ_MAX_QUESTIONS)
   privateDirs: string[]; // additional LOCAL-ONLY wiki dirs — indexed/searched/quizzed like any page, auto-gitignored, never committed
-  models: { light: string; heavy: string }; // LLM tier per pass — env LLMWIKI_MODEL_LIGHT/HEAVY overrides this
+  // LLM tier PINS for the generative passes — env LLMWIKI_MODEL_LIGHT/HEAVY > toml [models] > null.
+  // null means unpinned, the normal state: the pass then uses the model the session is actually
+  // running on (engine/session-model.ts). There is no built-in model id.
+  models: { light: string | null; heavy: string | null };
   files: { l0: string; overview: string; log: string };
   legacyDirs: string[]; // old flat category names still scanned for staleness/index
   bannedTerms: [string, string][]; // [banned, preferred]
