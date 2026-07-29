@@ -120,6 +120,24 @@ describe("observing the session's model", () => {
     expect(observedModel(repo, "opencode")).toBe("anthropic/claude-opus-5");
   });
 
+  // A recorded id becomes a `--model` argument, so every harness path bounds its shape the way
+  // the Claude pattern always did. Nothing is shell-parsed (argv array), so this is about a
+  // malformed record producing a flag-shaped argument, not about injection.
+  test("a malformed model id is ignored, and the pass falls back", () => {
+    const cx = join(dir, "home", ".codex", "sessions", "rollout-x-01bad.jsonl");
+    mkdirSync(join(cx, ".."), { recursive: true });
+    writeFileSync(
+      cx,
+      JSON.stringify({ type: "session_meta", payload: { id: "01bad", cwd: repo } }) + "\n" +
+        JSON.stringify({ type: "turn_context", payload: { cwd: repo, model: "--dangerously-skip x" } }) + "\n",
+    );
+    capture.enqueue(cx, "01bad", repo, 2, "codex");
+    expect(observedModel(repo, "codex")).toBeNull();
+    expect(
+      resolveGenerativeModel({ repo, tier: "heavy", pinned: null, template: ["codex", "--model", "{model}"] }),
+    ).toBe(HARNESS_FALLBACK.codex);
+  });
+
   // A session that reads a config file full of model ids must not be mistaken for a session
   // running those models. Codex's model is taken from a `turn_context` RECORD, never from a bare
   // `"model"` key; Claude's per-record `message.model` is additionally family-prefixed.

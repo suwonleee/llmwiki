@@ -142,6 +142,22 @@ function transcriptsFor(repo: string, kind: string): string[] {
 //             the head, and we require the record TYPE rather than trusting a bare `"model"` key.
 const CLAUDE_MODEL_RE = /"model"\s*:\s*"(claude-[A-Za-z0-9._-]+)"/g;
 
+/**
+ * The shape a model id may have before it becomes a `--model` argument.
+ *
+ * The Claude pattern above already constrains what it captures; Codex and OpenCode read theirs
+ * out of JSON fields, so the same bound is applied to all three rather than to whichever path
+ * happened to have it. Nothing here is shell-parsed (the subprocess is spawned from an argv
+ * array), so this is not an injection fix — it keeps a malformed or hostile record from turning
+ * into a flag-shaped argument that makes the generative pass fail in a confusing way.
+ */
+const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._\/-]{0,127}$/;
+
+function asModelId(value: unknown): string | null {
+  const s = typeof value === "string" ? value.trim() : "";
+  return MODEL_ID_RE.test(s) ? s : null;
+}
+
 function pickMatch(text: string, re: RegExp, which: "first" | "last"): string | null {
   let found: string | null = null;
   re.lastIndex = 0;
@@ -164,9 +180,9 @@ function codexModelIn(text: string, which: "first" | "last"): string | null {
       continue; // truncated at a slice boundary
     }
     if (o?.type !== "turn_context") continue;
-    const model = o.payload?.model ?? o.model;
-    if (typeof model === "string" && model.trim()) {
-      found = model.trim();
+    const model = asModelId(o.payload?.model ?? o.model);
+    if (model) {
+      found = model;
       if (which === "first") return found;
     }
   }
@@ -215,8 +231,8 @@ function opencodeDbModel(dbPath: string, sessionID?: string): string | null {
           const d = JSON.parse(String(row.data ?? "{}"));
           const info = d.info ?? d; // session_message wraps the message under `info`
           if (info?.role !== "assistant") continue;
-          const provider = String(info.providerID ?? "").trim();
-          const model = String(info.modelID ?? "").trim();
+          const provider = asModelId(info.providerID);
+          const model = asModelId(info.modelID);
           if (model) return provider ? `${provider}/${model}` : model;
         } catch {
           /* skip malformed row */

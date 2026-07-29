@@ -65,6 +65,9 @@ type Settings = { hooks?: Record<string, HookBlock[]>; [k: string]: unknown };
 
 function profiles(): string[] {
   // ~/.claude* plus an explicit $CLAUDE_CONFIG_DIR (shared discovery — engine/sources/claude.ts).
+  // Deliberately NOT the dirs `llmwiki connect claude` persisted: those say where to READ
+  // transcripts, and wiring writes (settings.json, commands/) belong only to a profile this
+  // machine owns.
   return claudeConfigDirs();
 }
 

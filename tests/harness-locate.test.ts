@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setExportDir, opencodeDbPaths } from "../src/engine/sources/opencode.ts";
 import { codexHome } from "../src/engine/sources/codex.ts";
-import { claudeConfigDirs } from "../src/engine/sources/claude.ts";
+import { claudeCaptureDirs, claudeConfigDirs } from "../src/engine/sources/claude.ts";
 import {
   connectHarnessPath,
   forgetHarnessPath,
@@ -231,11 +231,45 @@ describe("sources honor the persisted override (env still wins)", () => {
     expect(codexHome()).toBe(join(dir, "env-codex"));
   });
 
-  test("claudeConfigDirs: a persisted nonstandard dir joins the scan", () => {
+  test("claudeCaptureDirs: a persisted nonstandard dir joins the scan", () => {
     const cfg = join(dir, "weird-claude-location");
     mkdirSync(join(cfg, "projects", "p"), { recursive: true });
     writeFileSync(join(cfg, "projects", "p", "s.jsonl"), "{}\n");
     connectHarnessPath("claude", cfg);
-    expect(claudeConfigDirs()).toContain(cfg);
+    expect(claudeCaptureDirs()).toContain(cfg);
+  });
+
+  // `connect` says where to READ. Wiring (wire.ts settings.json + commands/, and the daemon's
+  // hook re-assertion) goes only to profiles this machine owns, and both reach them through
+  // claudeConfigDirs — so a connected dir appearing there would silently turn a read
+  // declaration into a write target.
+  test("claudeConfigDirs: a persisted dir is NOT a wiring target", () => {
+    const cfg = join(dir, "read-only-location");
+    mkdirSync(join(cfg, "projects", "p"), { recursive: true });
+    writeFileSync(join(cfg, "projects", "p", "s.jsonl"), "{}\n");
+    connectHarnessPath("claude", cfg);
+    expect(claudeCaptureDirs()).toContain(cfg);
+    expect(claudeConfigDirs()).not.toContain(cfg);
+  });
+
+  test("connect refuses a relative path, verified or not", () => {
+    const cfg = join(dir, "relative-candidate");
+    mkdirSync(join(cfg, "projects", "p"), { recursive: true });
+    writeFileSync(join(cfg, "projects", "p", "s.jsonl"), "{}\n");
+    const before = existsSync(join(dir, "state", "harness-paths.json"));
+    const v = connectHarnessPath("claude", "relative-candidate");
+    expect(v.ok).toBe(false);
+    expect(v.saved).toBeUndefined();
+    expect(existsSync(join(dir, "state", "harness-paths.json"))).toBe(before);
+  });
+
+  test("a relative entry in the file reads as absent, never as a cwd-relative path", () => {
+    const cfg = join(dir, "abs-location");
+    mkdirSync(join(cfg, "projects", "p"), { recursive: true });
+    writeFileSync(join(cfg, "projects", "p", "s.jsonl"), "{}\n");
+    const saved = connectHarnessPath("claude", cfg).saved!;
+    writeFileSync(saved, JSON.stringify({ version: 1, claudeConfigDirs: ["./sneaky", cfg] }, null, 2) + "\n");
+    expect(claudeCaptureDirs()).toContain(cfg);
+    expect(claudeCaptureDirs().some((d) => d.includes("sneaky"))).toBe(false);
   });
 });

@@ -14,9 +14,22 @@
 // visible to the CLI, the doctor, and the daemon alike (they share this state root). Env
 // vars still win over a persisted path so a shell override remains the strongest word.
 import { Database } from "bun:sqlite";
-import { readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { effectiveStateRoot, bootstrapStateRoot } from "./state-dir.ts";
+
+/**
+ * A persisted location is only ever an absolute path.
+ *
+ * Both ends of the file are guarded, not just the write: a relative entry that reached the file
+ * some other way would be resolved against whatever cwd the reader happens to have — the CLI's,
+ * the daemon's — so the same recorded string would name different directories to different
+ * processes. Rejecting it on read means a hand-edited or half-written file degrades to "no
+ * persisted location" (discovery falls back to env and defaults) instead of to an ambiguous one.
+ */
+function absolutePath(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "" && isAbsolute(value);
+}
 
 export type Harness = "claude" | "codex" | "opencode";
 export const HARNESSES: readonly Harness[] = ["claude", "codex", "opencode"];
@@ -51,10 +64,10 @@ export function readHarnessPaths(): HarnessPathsFile {
     if (raw && typeof raw === "object" && raw.version === 1) {
       value = {
         version: 1,
-        ...(typeof raw.opencodeDb === "string" ? { opencodeDb: raw.opencodeDb } : {}),
-        ...(typeof raw.codexHome === "string" ? { codexHome: raw.codexHome } : {}),
+        ...(absolutePath(raw.opencodeDb) ? { opencodeDb: raw.opencodeDb } : {}),
+        ...(absolutePath(raw.codexHome) ? { codexHome: raw.codexHome } : {}),
         ...(Array.isArray(raw.claudeConfigDirs)
-          ? { claudeConfigDirs: raw.claudeConfigDirs.filter((d: unknown) => typeof d === "string") }
+          ? { claudeConfigDirs: raw.claudeConfigDirs.filter(absolutePath) }
           : {}),
       };
     }
@@ -219,11 +232,14 @@ function writePathsFile(value: HarnessPathsFile): string {
   bootstrapStateRoot(); // 0700 state root; refuses one llmwiki did not create
   const path = pathsFile();
   writeFileSync(path, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
+  chmodSync(path, 0o600); // `mode` applies to creation only — an existing file keeps its old bits
   _cache = null;
   return path;
 }
 
 export function connectHarnessPath(harness: Harness, path: string): Verdict & { saved?: string } {
+  if (!absolutePath(path))
+    return { ok: false, detail: "not an absolute path — a persisted location must not depend on a cwd" };
   const verdict = verifyHarnessPath(harness, path);
   if (!verdict.ok) return verdict; // fail-closed: an unverified path is never recorded
   const current = readHarnessPaths();

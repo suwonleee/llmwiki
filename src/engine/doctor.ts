@@ -356,7 +356,8 @@ function repairHook(sp: string, event = "SessionStart", cmd = SESSIONSTART_CMD):
   return `🔧 re-registered (backup: ${basename(bak)})`;
 }
 
-// ~/.claude* directories plus $CLAUDE_CONFIG_DIR (shared discovery — sources/claude.ts)
+// ~/.claude* directories plus $CLAUDE_CONFIG_DIR (shared discovery — sources/claude.ts).
+// Connected read-only locations are not profiles: they are re-verified separately, further down.
 function claudeProfiles(): string[] {
   return claudeConfigDirs();
 }

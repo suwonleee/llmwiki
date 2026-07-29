@@ -57,8 +57,11 @@ human explicitly requests multiple harnesses.
       the machine yourself (locate prints per-harness hints on what the location must contain),
       verify a candidate read-only with `llmwiki locate <harness> <path>`, then persist it with
       `llmwiki connect <harness> <path>`
-    - `connect` records only a path that passes the engine's schema-signature verification
-      (fail-closed) — never bypass it by editing state files by hand, and never persist a guess
+    - `connect` records only an absolute path that passes the engine's schema-signature
+      verification (fail-closed) — never bypass it by editing state files by hand, and never
+      persist a guess
+    - A connected location is read-only: capture reads transcripts from it and the engine never
+      writes into it (hook wiring stays in the profiles this machine owns)
     - After a successful `connect`, restart the capture daemon and re-run the harness doctor
     - Details and per-harness signatures: `reference/INSTALLATION_FLOW.md` § Harness data locations
 - Enroll the project (the one project-level trust decision)

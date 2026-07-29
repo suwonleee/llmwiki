@@ -21,23 +21,15 @@ function home(): string {
   return process.env.HOME?.trim() || homedir();
 }
 
-// Every Claude config dir: ~/.claude* plus an explicit $CLAUDE_CONFIG_DIR override
-// (which may live outside $HOME or not match the .claude* naming). Without the env
+// Every Claude config dir this machine OWNS: ~/.claude* plus an explicit $CLAUDE_CONFIG_DIR
+// override (which may live outside $HOME or not match the .claude* naming). Without the env
 // check, such a setup was misread as "no Claude here" — wire skipped the hooks
 // silently and capture discovered no transcripts. Shared by wire.ts and doctor.ts.
-export function claudeConfigDirs(root: string = home()): string[] {
-  let entries: string[];
-  try {
-    entries = readdirSync(root);
-  } catch {
-    entries = [];
-  }
-  const candidates = entries.filter((d) => d.startsWith(".claude")).map((d) => join(root, d));
-  const cfg = process.env.CLAUDE_CONFIG_DIR?.trim().replace(/[\\/]+$/, "");
-  if (cfg) candidates.push(cfg.startsWith("~/") ? join(root, cfg.slice(2)) : cfg);
-  // Persisted dirs (`llmwiki connect claude <dir>`, verified at connect time) — nonstandard
-  // locals where the config dir matches neither ~/.claude* nor $CLAUDE_CONFIG_DIR.
-  candidates.push(...persistedClaudeDirs());
+//
+// This is the WRITE side: wire.ts creates settings.json and commands/ here, and the daemon's
+// hook re-assertion rewrites settings.json here. A location the person merely POINTED AT with
+// `llmwiki connect` is therefore deliberately absent — see claudeCaptureDirs().
+function dirsThatExist(candidates: readonly string[]): string[] {
   const out: string[] = [];
   for (const p of candidates) {
     if (out.includes(p)) continue;
@@ -50,10 +42,39 @@ export function claudeConfigDirs(root: string = home()): string[] {
   return out.sort();
 }
 
-// Every Claude profile dir (~/.claude, ~/.claude-foo, $CLAUDE_CONFIG_DIR) that has a projects/ subtree.
+export function claudeConfigDirs(root: string = home()): string[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(root);
+  } catch {
+    entries = [];
+  }
+  const candidates = entries.filter((d) => d.startsWith(".claude")).map((d) => join(root, d));
+  const cfg = process.env.CLAUDE_CONFIG_DIR?.trim().replace(/[\\/]+$/, "");
+  if (cfg) candidates.push(cfg.startsWith("~/") ? join(root, cfg.slice(2)) : cfg);
+  return dirsThatExist(candidates);
+}
+
+// Every dir capture may READ Claude transcripts from: the owned config dirs plus the ones
+// `llmwiki connect claude <dir>` verified and persisted (a nonstandard local matching neither
+// ~/.claude* nor $CLAUDE_CONFIG_DIR).
+//
+// Read and write are separated on purpose. `connect` declares "the data is over there", and a
+// declaration about where to READ must never become a target to WRITE: wire.ts would otherwise
+// create settings.json and commands/ inside whatever directory got connected, and the daemon's
+// re-assertion would rewrite a settings.json found there — following a symlink out of it. The
+// persisted list is reachable through an install-time agent search (setup_text.md), which is the
+// weakest link in the chain and so gets the narrowest capability: read the transcripts, nothing
+// else. Persisted locations are still health-checked — doctor re-verifies each one directly.
+export function claudeCaptureDirs(): string[] {
+  return dirsThatExist([...claudeConfigDirs(), ...persistedClaudeDirs()]);
+}
+
+// Every Claude profile dir (~/.claude, ~/.claude-foo, $CLAUDE_CONFIG_DIR, a connected dir) that
+// has a projects/ subtree.
 export function claudeProjectDirs(): string[] {
   const dirs: string[] = [];
-  for (const cfg of claudeConfigDirs()) {
+  for (const cfg of claudeCaptureDirs()) {
     const proj = join(cfg, "projects");
     try {
       if (statSync(proj).isDirectory()) dirs.push(proj);

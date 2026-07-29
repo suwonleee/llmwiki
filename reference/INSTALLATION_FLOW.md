@@ -150,7 +150,12 @@ you are the fallback searcher; the engine stays the gate on what gets recorded.
     - Search the machine for the real location; never persist a guess from memory
     - Verify read-only: `llmwiki locate <harness> <path>`
     - Persist: `llmwiki connect <harness> <path>` — the engine refuses any path that fails
-      tier-2 verification (fail-closed, the same contract as enrollment)
+      tier-2 verification (fail-closed, the same contract as enrollment), and any path that is
+      not absolute
+    - A connected location is READ-ONLY to the engine: capture reads transcripts there, and
+      nothing is ever written into it. Wiring (a Claude profile's `settings.json` and
+      `commands/`) goes only to a profile this machine owns — `~/.claude*` or
+      `$CLAUDE_CONFIG_DIR`
     - Never edit the persisted `harness-paths.json` by hand
 - Precedence and lifecycle
     - Env vars always win over a persisted path, so a shell override stays the strongest word
