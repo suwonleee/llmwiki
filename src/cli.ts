@@ -13,7 +13,19 @@ import { effectiveKo, getConfig, isRepoKorean, CONFIG_BASENAME, CONFIGS_DIR } fr
 import { Linter, formatReport } from "./engine/lint.ts";
 import * as update from "./engine/update.ts";
 import { countLines, sourceForPath } from "./engine/source.ts";
-import { opencodeSource } from "./engine/sources/opencode.ts";
+import { opencodeSource, opencodeDbPaths } from "./engine/sources/opencode.ts";
+import { claudeConfigDirs } from "./engine/sources/claude.ts";
+import { codexHome } from "./engine/sources/codex.ts";
+import {
+  HARNESSES,
+  connectHarnessPath,
+  forgetHarnessPath,
+  persistedClaudeDirs,
+  persistedCodexHome,
+  persistedOpencodeDb,
+  verifyHarnessPath,
+  type Harness,
+} from "./engine/harness-locate.ts";
 import * as autoupdate from "./engine/autoupdate.ts";
 import { review } from "./engine/review.ts";
 import { buildContext } from "./engine/context.ts";
@@ -1122,6 +1134,98 @@ function cmdQuizRecord(p: Parsed) {
   }
 }
 
+// ---- harness data-location discovery (locate/connect) -------------------------------------
+// Installer-facing (the agent following setup_text.md), so the output stays English by design.
+// 3-tier contract: deterministic resolution → schema-signature verification → LLM fallback
+// that may PROPOSE a path but can only persist one the engine has verified (fail-closed).
+
+function asHarness(value: string | undefined): Harness | null {
+  return value && (HARNESSES as readonly string[]).includes(value) ? (value as Harness) : null;
+}
+
+// One line per candidate with the tier that produced it; a harness with no verified
+// candidate prints the search→verify→persist fallback contract instead of silence.
+function locateReport(harness: Harness): void {
+  const line = (mark: string, origin: string, path: string, detail: string) =>
+    console.log(`  [${harness}] ${mark} ${path} (${origin}) — ${detail}`);
+  const candidates: { origin: string; path: string }[] = [];
+  if (harness === "claude") {
+    const env = process.env.CLAUDE_CONFIG_DIR?.trim();
+    if (env) candidates.push({ origin: "env CLAUDE_CONFIG_DIR", path: env });
+    for (const dir of persistedClaudeDirs()) candidates.push({ origin: "persisted", path: dir });
+    for (const dir of claudeConfigDirs())
+      if (!candidates.some((c) => c.path === dir)) candidates.push({ origin: "default scan", path: dir });
+  } else if (harness === "codex") {
+    const env = process.env.CODEX_HOME?.trim();
+    const persisted = persistedCodexHome();
+    if (env) candidates.push({ origin: "env CODEX_HOME", path: env });
+    else if (persisted) candidates.push({ origin: "persisted", path: persisted });
+    else candidates.push({ origin: "default", path: codexHome() });
+  } else {
+    const env = process.env.OPENCODE_DB?.trim();
+    const persisted = persistedOpencodeDb();
+    if (env) candidates.push({ origin: "env OPENCODE_DB", path: env });
+    else if (persisted) candidates.push({ origin: "persisted", path: persisted });
+    else for (const db of opencodeDbPaths()) candidates.push({ origin: "XDG scan", path: db });
+  }
+  let verified = 0;
+  for (const c of candidates) {
+    const v = verifyHarnessPath(harness, c.path);
+    if (v.ok) verified += 1;
+    line(v.ok ? "✅" : "⚠️", c.origin, c.path, v.detail);
+  }
+  if (verified === 0) {
+    const what =
+      harness === "claude"
+        ? "its config dir (holds projects/ with *.jsonl transcripts; default ~/.claude*, env $CLAUDE_CONFIG_DIR)"
+        : harness === "codex"
+          ? "its home (holds sessions/ or state_*.sqlite; default ~/.codex, env $CODEX_HOME)"
+          : "its database (opencode*.db; default $XDG_DATA_HOME/opencode/, env $OPENCODE_DB)";
+    console.log(`  [${harness}] ⚠️ no verified data location — if this harness IS installed here, its data lives at a nonstandard path:`);
+    console.log(`  [${harness}]    1) find ${what}`);
+    console.log(`  [${harness}]    2) verify:  llmwiki locate ${harness} <path>   (read-only)`);
+    console.log(`  [${harness}]    3) persist: llmwiki connect ${harness} <path>  (refused unless verification passes)`);
+  }
+}
+
+function cmdLocate(p: Parsed) {
+  const first = p.positionals[0];
+  const harness = asHarness(first);
+  if (first && !harness) die(`locate [${HARNESSES.join("|")}] [path] — unknown harness: ${first}`);
+  const candidate = p.positionals[1];
+  if (candidate) {
+    const v = verifyHarnessPath(harness!, candidate);
+    console.log(`  [${harness}] ${v.ok ? "✅" : "❌"} ${candidate} — ${v.detail}`);
+    if (v.ok) console.log(`  [${harness}] persist it with: llmwiki connect ${harness} ${JSON.stringify(candidate)}`);
+    else process.exit(1);
+    return;
+  }
+  console.log("=== llmwiki locate (harness data locations: deterministic → verified → fallback) ===");
+  for (const h of harness ? [harness] : HARNESSES) locateReport(h);
+}
+
+function cmdConnect(p: Parsed) {
+  const harness = asHarness(p.positionals[0]);
+  if (!harness) die(`connect <${HARNESSES.join("|")}> <path> | connect <harness> --forget`);
+  if (p.flags["--forget"]) {
+    console.log(
+      forgetHarnessPath(harness)
+        ? `✓ removed the persisted ${harness} data location — deterministic resolution is back in charge`
+        : `• nothing persisted for ${harness}`,
+    );
+    return;
+  }
+  const path = p.positionals[1] ?? die(`connect ${harness} <absolute-path> required`);
+  const r = connectHarnessPath(harness, resolve(path));
+  if (!r.ok) {
+    // Fail-closed: the engine records only what its own signature check accepted.
+    die(`refused: ${r.detail}\n  (nothing was persisted — verify a candidate first: llmwiki locate ${harness} <path>)`);
+  }
+  console.log(`✓ ${harness} data location persisted (${r.saved}) — ${r.detail}`);
+  console.log("  restart the capture daemon so the running sweep sees it (re-run ./setup.sh, or on macOS:");
+  console.log("  launchctl kickstart -k gui/$UID/com.llmwiki.daemon)");
+}
+
 // Commands the HARNESS runs automatically on every session/turn. They resolve the repository
 // themselves and check enrollment before touching per-repo config, so an unenrolled repository
 // never reaches config resolution (which reads repository files) at all.
@@ -1167,6 +1271,8 @@ const HANDLERS: Record<string, (p: Parsed) => void | Promise<void>> = {
   overview: MAINTENANCE_HANDLERS.overview,
   gaps: MAINTENANCE_HANDLERS.gaps,
   "git-rules": cmdGitRules,
+  locate: cmdLocate,
+  connect: cmdConnect,
   doctor: MAINTENANCE_HANDLERS.doctor,
   context: cmdContext,
   "turn-context": cmdTurnContext,

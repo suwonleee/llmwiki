@@ -21,6 +21,7 @@ import { EXPIRY_WARN_DAYS, healthReadOnly, pendingPastRetentionReadOnly } from "
 import { effectiveStateRoot, probeStateRoot } from "./state-dir.ts";
 import { inspectEnrollment } from "./enrollment.ts";
 import { liveEngineVersion, readUpdateCheck, updateAvailable } from "./update-check.ts";
+import { persistedClaudeDirs, persistedCodexHome, persistedOpencodeDb, verifyHarnessPath, type Harness } from "./harness-locate.ts";
 
 const HOME = process.env.HOME?.trim() || homedir();
 const CORE = [
@@ -416,6 +417,24 @@ export function reportCaptureHealth(): number {
     console.log(`  [capture] ❌ state root unusable: ${root}`);
     console.log(`  [capture]    ${state.detail} — capture cannot write; nothing is being recorded`);
     issues += 1;
+  }
+
+  // Persisted data-location overrides (`llmwiki connect …`) — verified once at connect time,
+  // re-verified here so a path that later vanished or changed shape is a visible defect, not a
+  // silently dead capture source.
+  const overrides: [Harness, string][] = [
+    ...persistedClaudeDirs().map((dir): [Harness, string] => ["claude", dir]),
+    ...(persistedCodexHome() ? ([["codex", persistedCodexHome()!]] as [Harness, string][]) : []),
+    ...(persistedOpencodeDb() ? ([["opencode", persistedOpencodeDb()!]] as [Harness, string][]) : []),
+  ];
+  for (const [harness, path] of overrides) {
+    const v = verifyHarnessPath(harness, path);
+    if (v.ok) console.log(`  [capture] ✅ ${harness} data location (persisted): ${path} — ${v.detail}`);
+    else {
+      console.log(`  [capture] ⚠️ ${harness} data location (persisted) fails verification: ${path} — ${v.detail}`);
+      console.log(`  [capture]    re-verify with \`llmwiki locate ${harness} <path>\` or drop it: \`llmwiki connect ${harness} --forget\``);
+      issues += 1;
+    }
   }
 
   const health = healthReadOnly();

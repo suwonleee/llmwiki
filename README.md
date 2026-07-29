@@ -49,6 +49,10 @@ health checks, `PATH` handling, hook trust, OS notes, and recovery rules live in
 agent contract [`setup_text.md`](setup_text.md) and its
 [installation-flow reference](reference/INSTALLATION_FLOW.md).
 
+Machines differ: if your coding agent keeps its data somewhere unusual, `llmwiki locate <harness>`
+shows what discovery found (and how to verify and persist the real location with
+`llmwiki connect`) — the setup agent runs this flow for you as part of `setup_text.md`.
+
 ### Then turn it on for a project — once
 
 Installation is machine-level, but it stays **inert everywhere until you enroll a repository**:

@@ -10,6 +10,7 @@ import { join } from "node:path";
 import type { DiscoveredRoute, DiscoveredSession, ParseOpts, TranscriptSource } from "../source.ts";
 import { countLines, discoverViaRoutes, scanIdentity, type IdentitySpec } from "./routing.ts";
 import { extractIncrement, type Increment } from "../extract.ts";
+import { persistedClaudeDirs } from "../harness-locate.ts";
 
 // Respect an explicitly isolated HOME (fresh-install tests, containers, CI). On macOS
 // os.homedir() can resolve the account database home even when HOME was overridden,
@@ -34,6 +35,9 @@ export function claudeConfigDirs(root: string = home()): string[] {
   const candidates = entries.filter((d) => d.startsWith(".claude")).map((d) => join(root, d));
   const cfg = process.env.CLAUDE_CONFIG_DIR?.trim().replace(/[\\/]+$/, "");
   if (cfg) candidates.push(cfg.startsWith("~/") ? join(root, cfg.slice(2)) : cfg);
+  // Persisted dirs (`llmwiki connect claude <dir>`, verified at connect time) — nonstandard
+  // locals where the config dir matches neither ~/.claude* nor $CLAUDE_CONFIG_DIR.
+  candidates.push(...persistedClaudeDirs());
   const out: string[] = [];
   for (const p of candidates) {
     if (out.includes(p)) continue;
@@ -147,6 +151,10 @@ function isClaudeTranscript(path: string): boolean {
   if (cfg) {
     const cfgN = (cfg.startsWith("~/") ? join(home(), cfg.slice(2)) : cfg).replace(/\\/g, "/");
     if (p.startsWith(cfgN + "/projects/")) return true;
+  }
+  // Persisted config dirs: accept <dir>/projects/** exactly like the env override above.
+  for (const dir of persistedClaudeDirs()) {
+    if (p.startsWith(dir.replace(/\\/g, "/") + "/projects/")) return true;
   }
   return false;
 }

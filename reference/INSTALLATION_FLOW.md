@@ -11,6 +11,7 @@ the current source of truth.
 - [Claude Code](#claude-code)
 - [Codex](#codex)
 - [OpenCode](#opencode)
+- [Harness data locations (nonstandard locals)](#harness-data-locations-nonstandard-locals)
 - [OS and generative-pass boundaries](#os-and-generative-pass-boundaries)
 - [Recovery rules](#recovery-rules)
 - [Successful handoff format](#successful-handoff-format)
@@ -129,6 +130,36 @@ the current source of truth.
 - Environment handling
     - Preserve `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, and `OPENCODE_DB`
 
+## Harness data locations (nonstandard locals)
+
+Every machine differs. Discovery is 3-tier: the engine resolves and verifies deterministically;
+you are the fallback searcher; the engine stays the gate on what gets recorded.
+
+- Tier 1 — deterministic resolution (engine)
+    - Claude Code: `~/.claude*` scan plus `$CLAUDE_CONFIG_DIR`
+    - Codex: `$CODEX_HOME`, default `~/.codex`
+    - OpenCode: `$OPENCODE_DB`, default `$XDG_DATA_HOME/opencode/opencode*.db`
+- Tier 2 — schema-signature verification (engine, read-only)
+    - A candidate is judged by what is inside it, never by mere existence
+    - Claude Code: a `projects/` subtree holding `*.jsonl` transcripts
+    - Codex: `sessions/` rollouts or `state_*.sqlite` thread index
+    - OpenCode: a SQLite database with a `session` table plus `message`/`session_message`
+- Tier 3 — agent fallback (you), engine-gated
+    - Trigger: `llmwiki locate <harness>` reports no verified location while the human confirms
+      the harness is installed and used on this machine
+    - Search the machine for the real location; never persist a guess from memory
+    - Verify read-only: `llmwiki locate <harness> <path>`
+    - Persist: `llmwiki connect <harness> <path>` — the engine refuses any path that fails
+      tier-2 verification (fail-closed, the same contract as enrollment)
+    - Never edit the persisted `harness-paths.json` by hand
+- Precedence and lifecycle
+    - Env vars always win over a persisted path, so a shell override stays the strongest word
+    - `llmwiki connect <harness> --forget` removes a persisted location
+    - After a successful `connect`, restart the capture daemon (re-run `./setup.sh`, or
+      `launchctl kickstart -k gui/$UID/com.llmwiki.daemon` on macOS)
+    - `llmwiki doctor` re-verifies every persisted location on each run and flags one that
+      vanished or changed shape
+
 ## OS and generative-pass boundaries
 
 - macOS
@@ -164,6 +195,10 @@ the current source of truth.
     - Apply the exact printed `PATH` command
     - Open a new shell when required
     - Re-run the harness-scoped doctor
+- Harness installed but nothing captured from it
+    - Run `llmwiki locate <harness>` and read the verdict lines
+    - No verified location → follow the search→verify→persist steps in
+      [Harness data locations](#harness-data-locations-nonstandard-locals)
 - Read injection absent in a fresh initialized project
     - Confirm `docs/wiki/` exists
     - Restart the harness

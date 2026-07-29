@@ -21,6 +21,7 @@ import type { DiscoveredRoute, DiscoveredSession, ParseOpts, TranscriptSource } 
 import { countLines, discoverViaRoutes, scanIdentity, type IdentitySpec } from "./routing.ts";
 import { readTail, type Increment, type Turn } from "../extract.ts";
 import { canonicalWorktree } from "../enrollment.ts";
+import { persistedCodexHome } from "../harness-locate.ts";
 
 // Codex honors $CODEX_HOME (falling back to ~/.codex) for its state dir — mirror that so a
 // user who relocates CODEX_HOME is still captured. (openai/codex utils/home-dir.)
@@ -31,8 +32,9 @@ import { canonicalWorktree } from "../enrollment.ts";
 function home(): string {
   return process.env.HOME?.trim() || homedir();
 }
-function codexHome(): string {
-  return process.env.CODEX_HOME?.trim() || join(home(), ".codex");
+export function codexHome(): string {
+  // env > persisted (`llmwiki connect codex <dir>`, verified at connect time) > ~/.codex.
+  return process.env.CODEX_HOME?.trim() || persistedCodexHome() || join(home(), ".codex");
 }
 function sessionsRoot(): string {
   return join(codexHome(), "sessions");

@@ -38,6 +38,7 @@ import {
   reassertPrivateModes,
   setEffectiveStateRoot,
 } from "../state-dir.ts";
+import { persistedOpencodeDb } from "../harness-locate.ts";
 
 const HOME = homedir();
 // ---- locations -----------------------------------------------------------------
@@ -45,7 +46,8 @@ const HOME = homedir();
 // OpenCode data root is XDG-based; the DB may be channel-suffixed (opencode-<channel>.db)
 // and $OPENCODE_DB overrides everything (database.ts:44-55). Lazy so tests can redirect.
 export function opencodeDbPaths(): string[] {
-  const override = process.env.OPENCODE_DB?.trim();
+  // env > persisted (`llmwiki connect opencode <db>`, verified at connect time) > XDG scan.
+  const override = process.env.OPENCODE_DB?.trim() || persistedOpencodeDb() || "";
   if (override) {
     try {
       return existsSync(override) ? [realpathSync(override)] : [];

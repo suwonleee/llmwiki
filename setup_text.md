@@ -50,6 +50,17 @@ human explicitly requests multiple harnesses.
     - Codex: `llmwiki doctor --harness codex`
     - OpenCode: `llmwiki doctor --harness opencode`
     - Claude-only: `bun <absolute-clone-path>/src/cli.ts doctor --harness claude`
+- Confirm the harness data location (3-tier discovery)
+    - Run `llmwiki locate <harness>` (Claude-only: `bun <absolute-clone-path>/src/cli.ts locate claude`)
+    - A ✅ line means deterministic discovery verified the location — nothing more to do
+    - No verified location while the harness IS installed here → this local is nonstandard: search
+      the machine yourself (locate prints per-harness hints on what the location must contain),
+      verify a candidate read-only with `llmwiki locate <harness> <path>`, then persist it with
+      `llmwiki connect <harness> <path>`
+    - `connect` records only a path that passes the engine's schema-signature verification
+      (fail-closed) — never bypass it by editing state files by hand, and never persist a guess
+    - After a successful `connect`, restart the capture daemon and re-run the harness doctor
+    - Details and per-harness signatures: `reference/INSTALLATION_FLOW.md` § Harness data locations
 - Enroll the project (the one project-level trust decision)
     - Machine-level installation is INERT until a repository is enrolled: no cold-start context,
       no per-turn injection, no captured sessions
