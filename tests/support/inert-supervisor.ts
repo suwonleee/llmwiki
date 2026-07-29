@@ -10,6 +10,18 @@
 //
 // So every test that runs setup.sh or daemon/install.sh installs these inert shims first, and
 // overrides only the one tool whose behavior it is actually asserting on.
+//
+// ONE TRAP, for whoever writes the next such test. The base `launchctl` shim prints nothing, so
+// `launchctl list | grep LABEL` finds no job and daemon/install.sh correctly concludes launchd
+// refused it — then falls through to its supervisor-less path and `nohup`s a REAL watch.ts. The
+// `ps`/`pgrep` shims are inert too, so its "is one already running?" guard sees an empty process
+// table and starts another every run. The test then deletes its temp dir, leaving a daemon
+// polling a state root that no longer exists. This is the same silent-leak family the shims
+// exist to prevent, and it bit the nonstandard-local E2E for llmwiki locate (seven strays).
+// A test whose setup.sh run is EXPECTED TO SUCCEED must therefore override launchctl to report
+// the label, exactly as tests/setup-lifecycle-e2e.test.ts does:
+//   launchctl: "#!/bin/sh\nif [ \"${1:-}\" = list ]; then printf '0\\t0\\tcom.llmwiki.daemon\\n'; fi\nexit 0\n"
+// Tests that assert setup FAILS before the daemon step need no override — install.sh never runs.
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
