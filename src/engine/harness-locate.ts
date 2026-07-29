@@ -14,7 +14,7 @@
 // visible to the CLI, the doctor, and the daemon alike (they share this state root). Env
 // vars still win over a persisted path so a shell override remains the strongest word.
 import { Database } from "bun:sqlite";
-import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { effectiveStateRoot, bootstrapStateRoot } from "./state-dir.ts";
 
@@ -81,6 +81,38 @@ export interface Verdict {
 }
 
 // ---- ② schema-signature verification (read-only, fail-closed) ----------------------------
+//
+// How strong a signature has to be depends on what carries it. A SQL schema is unique enough to
+// identify a harness on its own: nothing but OpenCode creates a `session` table alongside
+// `message`/`session_message`, so an empty-but-well-formed database still IS that harness's store.
+// A DIRECTORY NAME carries no such uniqueness — `projects/` and `sessions/` are among the most
+// common folder names there are, and the first E2E on a nonstandard local duly verified a plain
+// home directory as a Claude profile because it happened to contain `projects/`. So the two
+// name-based checks require the data itself (a transcript, a rollout) as their evidence, not the
+// folder that would hold it. The cost is that a never-used profile fails verification — correct:
+// `connect` exists to reach data that EXISTS, and persisting an empty guess is the false
+// confidence this whole tier is here to prevent.
+const FILE_SCAN_CAP = 2000;
+
+/** Bounded recursive count of matching files — evidence that data is there, not an inventory. */
+function countFiles(root: string, match: (name: string) => boolean): number {
+  let n = 0;
+  const walk = (dir: string): void => {
+    let list;
+    try {
+      list = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of list) {
+      if (n >= FILE_SCAN_CAP) return;
+      if (e.isDirectory()) walk(join(dir, e.name));
+      else if (e.isFile() && match(e.name)) n += 1;
+    }
+  };
+  walk(root);
+  return n;
+}
 
 function verifyOpencodeDb(path: string): Verdict {
   let st;
@@ -129,22 +161,18 @@ function verifyCodexHome(path: string): Verdict {
   } catch {
     return { ok: false, detail: "directory is not readable" };
   }
-  const hasSessions = (() => {
-    try {
-      return statSync(join(path, "sessions")).isDirectory();
-    } catch {
-      return false;
-    }
-  })();
   const stateDbs = entries.filter((e) => /^state_.*\.sqlite$/.test(e));
-  if (!hasSessions && stateDbs.length === 0)
+  const rollouts = countFiles(join(path, "sessions"), (name) => name.startsWith("rollout-") && name.includes(".jsonl"));
+  if (rollouts === 0 && stateDbs.length === 0)
     return {
       ok: false,
-      detail: "no sessions/ dir and no state_*.sqlite — not a Codex home (note: a never-used Codex creates sessions/ on the first message)",
+      detail:
+        "no rollout-*.jsonl under sessions/ and no state_*.sqlite — no Codex data here " +
+        "(a directory merely named sessions/ is not evidence; an unused Codex has nothing to capture yet)",
     };
   return {
     ok: true,
-    detail: `${hasSessions ? "sessions/ present" : "sessions/ absent"} · ${stateDbs.length} state_*.sqlite`,
+    detail: `${rollouts >= FILE_SCAN_CAP ? `${FILE_SCAN_CAP}+` : rollouts} rollout(s) · ${stateDbs.length} state_*.sqlite`,
   };
 }
 
@@ -163,24 +191,15 @@ function verifyClaudeConfigDir(path: string): Verdict {
   } catch {
     return { ok: false, detail: "no projects/ subtree — not a Claude config dir (transcripts live under projects/)" };
   }
-  // Bounded transcript count: evidence, not an inventory.
-  let n = 0;
-  const CAP = 2000;
-  const walk = (dir: string): void => {
-    let list;
-    try {
-      list = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const e of list) {
-      if (n >= CAP) return;
-      if (e.isDirectory()) walk(join(dir, e.name));
-      else if (e.isFile() && e.name.endsWith(".jsonl")) n += 1;
-    }
-  };
-  walk(proj);
-  return { ok: true, detail: `projects/ present · ${n >= CAP ? `${CAP}+` : n} transcript(s)` };
+  const n = countFiles(proj, (name) => name.endsWith(".jsonl"));
+  if (n === 0)
+    return {
+      ok: false,
+      detail:
+        "projects/ holds no *.jsonl transcript — no Claude data here " +
+        "(any folder can contain a projects/ dir; an unused profile has nothing to capture yet)",
+    };
+  return { ok: true, detail: `projects/ present · ${n >= FILE_SCAN_CAP ? `${FILE_SCAN_CAP}+` : n} transcript(s)` };
 }
 
 export function verifyHarnessPath(harness: Harness, path: string): Verdict {
@@ -228,6 +247,15 @@ export function forgetHarnessPath(harness: Harness): boolean {
   if (harness === "opencode") delete current.opencodeDb;
   else if (harness === "codex") delete current.codexHome;
   else delete current.claudeConfigDirs;
-  writePathsFile(current);
+  // Nothing left to say → say nothing. A `{version:1}` husk in the state root reads like a
+  // setting someone made, and the state root is a place other code inspects for ownership.
+  if (Object.keys(current).length === 1) {
+    try {
+      unlinkSync(pathsFile());
+    } catch {
+      /* already gone */
+    }
+    _cache = null;
+  } else writePathsFile(current);
   return true;
 }

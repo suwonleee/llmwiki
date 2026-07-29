@@ -17,6 +17,7 @@ import {
   persistedOpencodeDb,
   verifyHarnessPath,
 } from "../src/engine/harness-locate.ts";
+import { OWNED_FILES } from "../src/engine/state-dir.ts";
 
 let dir: string;
 const savedEnv: Record<string, string | undefined> = {};
@@ -83,16 +84,24 @@ describe("schema-signature verification (tier ②)", () => {
     expect(v.detail).toContain("session");
   });
 
-  test("codex: a home with sessions/ verifies; an unrelated dir is refused", () => {
+  test("codex: a home holding a rollout verifies; an unrelated dir is refused", () => {
     const home = join(dir, "codex-home");
-    mkdirSync(join(home, "sessions"), { recursive: true });
+    mkdirSync(join(home, "sessions", "2026", "07", "29"), { recursive: true });
+    writeFileSync(join(home, "sessions", "2026", "07", "29", "rollout-x-abc.jsonl"), "{}\n");
     expect(verifyHarnessPath("codex", home).ok).toBe(true);
     const empty = join(dir, "empty");
     mkdirSync(empty);
     expect(verifyHarnessPath("codex", empty).ok).toBe(false);
   });
 
-  test("claude: a config dir with projects/ verifies; one without is refused", () => {
+  test("codex: a state_*.sqlite alone is evidence (compressed-rollout machines)", () => {
+    const home = join(dir, "codex-state-only");
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "state_5.sqlite"), "");
+    expect(verifyHarnessPath("codex", home).ok).toBe(true);
+  });
+
+  test("claude: a config dir holding a transcript verifies; one without is refused", () => {
     const cfg = join(dir, ".claude-x");
     mkdirSync(join(cfg, "projects", "p"), { recursive: true });
     writeFileSync(join(cfg, "projects", "p", "a.jsonl"), "{}\n");
@@ -102,6 +111,40 @@ describe("schema-signature verification (tier ②)", () => {
     const bare = join(dir, ".claude-bare");
     mkdirSync(bare);
     expect(verifyHarnessPath("claude", bare).ok).toBe(false);
+  });
+
+  // A folder NAME is not a signature. The first nonstandard-local E2E verified a plain home
+  // directory as a Claude profile purely because it contained a `projects/` folder — the exact
+  // "existence, not content" failure tier 2 exists to prevent. Both name-based checks now
+  // require the data itself; the schema-based OpenCode check does not, because a SQL schema
+  // identifies its owner on its own.
+  test("claude: a folder that merely CONTAINS projects/ is not a Claude profile", () => {
+    const home = join(dir, "someones-home");
+    mkdirSync(join(home, "projects", "payments-api"), { recursive: true });
+    writeFileSync(join(home, "projects", "payments-api", "README.md"), "# not a transcript\n");
+    const v = verifyHarnessPath("claude", home);
+    expect(v.ok).toBe(false);
+    expect(v.detail).toContain("no *.jsonl transcript");
+  });
+
+  test("codex: a folder that merely CONTAINS an empty sessions/ is not a Codex home", () => {
+    const decoy = join(dir, "decoy");
+    mkdirSync(join(decoy, "sessions"), { recursive: true });
+    const v = verifyHarnessPath("codex", decoy);
+    expect(v.ok).toBe(false);
+    expect(v.detail).toContain("no rollout-*.jsonl");
+  });
+
+  test("opencode: a well-formed but empty store still verifies (schema is its own evidence)", () => {
+    const db = join(dir, "fresh.db");
+    makeOpencodeDb(db); // schema only, zero conversation rows
+    expect(verifyHarnessPath("opencode", db).ok).toBe(true);
+  });
+
+  test("opencode: the file NAME is never the signature", () => {
+    const oddly = join(dir, "oc-store.sqlite"); // matches no opencode*.db convention
+    makeOpencodeDb(oddly, { legacy: 2 });
+    expect(verifyHarnessPath("opencode", oddly).ok).toBe(true);
   });
 });
 
@@ -124,10 +167,26 @@ describe("connect (tier ③ persistence, fail-closed)", () => {
   test("forget removes the override; forgetting twice reports nothing to do", () => {
     const db = join(dir, "opencode.db");
     makeOpencodeDb(db, { legacy: 1 });
-    connectHarnessPath("opencode", db);
+    const saved = connectHarnessPath("opencode", db).saved!;
     expect(forgetHarnessPath("opencode")).toBe(true);
     expect(persistedOpencodeDb()).toBeNull();
+    // The last forget takes the file with it — an empty husk reads like a setting someone made.
+    expect(existsSync(saved)).toBe(false);
     expect(forgetHarnessPath("opencode")).toBe(false);
+  });
+
+  test("forgetting one harness keeps the others", () => {
+    const db = join(dir, "opencode.db");
+    makeOpencodeDb(db, { legacy: 1 });
+    const cfg = join(dir, "claude-cfg");
+    mkdirSync(join(cfg, "projects", "p"), { recursive: true });
+    writeFileSync(join(cfg, "projects", "p", "s.jsonl"), "{}\n");
+    connectHarnessPath("opencode", db);
+    const saved = connectHarnessPath("claude", cfg).saved!;
+    forgetHarnessPath("opencode");
+    expect(existsSync(saved)).toBe(true);
+    expect(persistedOpencodeDb()).toBeNull();
+    expect(JSON.parse(readFileSync(saved, "utf-8")).claudeConfigDirs).toEqual([cfg]);
   });
 
   test("the persisted file is machine-local state, not repo content", () => {
@@ -137,6 +196,14 @@ describe("connect (tier ③ persistence, fail-closed)", () => {
     expect(r.saved).toBe(join(dir, "state", "harness-paths.json"));
     expect(existsSync(r.saved!)).toBe(true);
     expect(JSON.parse(readFileSync(r.saved!, "utf-8")).version).toBe(1);
+  });
+
+  // The state root's allowlist is both "what purge deletes" and "what adoption accepts". The
+  // first E2E on a nonstandard local caught this file in neither: `--uninstall --purge-data`
+  // left it behind, and the canonical default root would have counted it foreign — the same
+  // shape that once turned every sweep into enqueued=0 while doctor stayed green.
+  test("the persisted file is on the state root's owned-file allowlist", () => {
+    expect(OWNED_FILES as readonly string[]).toContain("harness-paths.json");
   });
 });
 
@@ -157,6 +224,7 @@ describe("sources honor the persisted override (env still wins)", () => {
   test("codexHome: persisted home is used; $CODEX_HOME overrides it", () => {
     const persisted = join(dir, "codex-home");
     mkdirSync(join(persisted, "sessions"), { recursive: true });
+    writeFileSync(join(persisted, "sessions", "rollout-x-abc.jsonl"), "{}\n");
     connectHarnessPath("codex", persisted);
     expect(codexHome()).toBe(persisted);
     process.env.CODEX_HOME = join(dir, "env-codex");
@@ -165,7 +233,8 @@ describe("sources honor the persisted override (env still wins)", () => {
 
   test("claudeConfigDirs: a persisted nonstandard dir joins the scan", () => {
     const cfg = join(dir, "weird-claude-location");
-    mkdirSync(join(cfg, "projects"), { recursive: true });
+    mkdirSync(join(cfg, "projects", "p"), { recursive: true });
+    writeFileSync(join(cfg, "projects", "p", "s.jsonl"), "{}\n");
     connectHarnessPath("claude", cfg);
     expect(claudeConfigDirs()).toContain(cfg);
   });

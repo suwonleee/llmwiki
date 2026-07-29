@@ -45,8 +45,21 @@ export const STATE_MARKER_MAX_BYTES = 4096;
 export const EXPORT_TTL_DAYS = 30;
 
 export const EXPORT_DIR_NAME = "opencode-export";
-/** Everything an llmwiki-owned state root may contain — the purge allowlist, and nothing else. */
-export const OWNED_FILES = ["capture.db", "capture.db-wal", "capture.db-shm", "daemon.log", "update-check.json"] as const;
+/**
+ * Everything an llmwiki-owned state root may contain — the purge allowlist, and nothing else.
+ * This list is BOTH halves of the contract: an engine-written file missing from it is left behind
+ * by `--purge-data` AND counts as a foreign entry when the canonical default root is adopted,
+ * which is the silent-capture-death shape described just below. Adding a file here is therefore
+ * part of adding a file to the state root, never a follow-up.
+ */
+export const OWNED_FILES = [
+  "capture.db",
+  "capture.db-wal",
+  "capture.db-shm",
+  "daemon.log",
+  "update-check.json",
+  "harness-paths.json", // verified harness data locations (engine/harness-locate.ts)
+] as const;
 /**
  * Logs earlier versions of THIS engine wrote into its own clone-local `.state` (autodistill runs,
  * dry-run scans, and whatever a future pass names its log). Adoption of the canonical default has
