@@ -1099,7 +1099,10 @@ function cmdQuizNext(p: Parsed) {
   sel.picks.forEach((pick, i) => {
     if (pick.kind === "new") {
       const c = pick.candidate!;
-      console.log(`${i + 1}. [new] docs/wiki/${c.page} — ${c.domain || c.dir}${c.date ? ` · ${c.date}` : ""} · "${c.title}"`);
+      // The hub marker tells the session WHY this page was chosen, so the question it authors
+      // can aim at the concept other pages were built on rather than the page's incidentals.
+      const hub = c.hub ? (ko ? ` · 허브(피인용 ${c.refs})` : ` · hub(${c.refs} inbound)`) : "";
+      console.log(`${i + 1}. [new] docs/wiki/${c.page} — ${c.domain || c.dir}${c.date ? ` · ${c.date}` : ""}${hub} · "${c.title}"`);
     } else {
       const e = pick.entry!;
       const lastQ = e.lastQ ? ` · last q: "${e.lastQ.slice(0, 80)}"` : "";

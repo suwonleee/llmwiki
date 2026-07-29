@@ -21,6 +21,7 @@ import {
   type QuizEntry,
 } from "../src/engine/quiz.ts";
 import { WikiIndex } from "../src/engine/db.ts";
+import { rebuildReferenceGraph } from "../src/engine/refs.ts";
 import { defaults, loadFrom, _resetForTests } from "../src/engine/config.ts";
 import { migrate } from "../src/engine/migrate.ts";
 import { citedTranscripts } from "../src/engine/reconcile.ts";
@@ -81,13 +82,15 @@ describe("quiz", () => {
     expect(() => normalizePage("3_decision/x.txt")).toThrow();
   });
 
-  test("weightFor ranks direction > decision > insight/topic > milestone", () => {
+  // The topic encyclopedia sits WITH decisions: a concept that outlived its session is the core
+  // of the work, and ranking it under one-off insights is what made the ritual feel like trivia.
+  test("weightFor ranks direction > decision·topic > insight > milestone", () => {
     const cfg = defaults();
     const w = (dir: string, domain: string) => weightFor(dir, domain, cfg);
     expect(w("1_direction", "direction")).toBe(4);
     expect(w("3_decision", "decision")).toBe(3);
+    expect(w("5_topic", "topic")).toBe(3);
     expect(w("4_insight", "insight")).toBe(2);
-    expect(w("5_topic", "topic")).toBe(2);
     expect(w("2_milestone", "milestone")).toBe(1);
   });
 
@@ -171,6 +174,48 @@ describe("quiz", () => {
       "2_milestone/mile-d.md", // weight 1
     ]);
     expect(sel.newCandidates).toBe(4);
+  });
+
+  // Category alone cannot tell a landmark decision from a passing one. Within a tier the wiki's
+  // own graph breaks the tie: a page other pages kept citing is what the work was built on, while
+  // one nobody linked is the incidental record that made the ritual feel like trivia. Recency
+  // stays the final key, so hub-ness orders first exposure without removing anything.
+  test("new candidates: hubs before non-hubs within a weight tier, recency after", () => {
+    // Same weight (decision), and the hub is the OLDER page — recency alone would rank it last.
+    writeFileSync(join(wiki, "3_decision", "dec-hub.md"), page({ title: "허브 결정", date: "2026-07-02", domain: "decision", status: "ready" }));
+    writeFileSync(join(wiki, "3_decision", "dec-lonely.md"), page({ title: "고립 결정", date: "2026-07-12", domain: "decision", status: "ready" }));
+    // Two pages cite the hub → inbound 2, the same threshold the cold-start spine calls a hub.
+    writeFileSync(
+      join(wiki, "2_milestone", "cites-1.md"),
+      page({ title: "인용 1", date: "2026-07-13", domain: "milestone", status: "ready" }, "기반: [[3_decision/dec-hub]]"),
+    );
+    writeFileSync(
+      join(wiki, "2_milestone", "cites-2.md"),
+      page({ title: "인용 2", date: "2026-07-13", domain: "milestone", status: "ready" }, "역시 [[3_decision/dec-hub]]"),
+    );
+    const w = new WikiIndex(root);
+    w.init();
+    w.indexAll();
+    rebuildReferenceGraph(w);
+
+    const cands = scanCandidates(root);
+    expect(cands.find((c) => c.page === "3_decision/dec-hub.md")?.hub).toBe(true);
+    expect(cands.find((c) => c.page === "3_decision/dec-lonely.md")?.hub).toBe(false);
+
+    const decisions = selectNext(root, { limit: 10, date: D0 })
+      .picks.map((p) => p.page)
+      .filter((p) => p.startsWith("3_decision/"));
+    expect(decisions).toEqual([
+      "3_decision/dec-hub.md", // referenced twice → asked first despite being the oldest (07-02)
+      "3_decision/dec-lonely.md", // unreferenced, newest (07-12) — recency still orders the rest
+      "3_decision/dec-b.md", // unreferenced, older (07-10)
+    ]);
+  });
+
+  test("new candidates: no index yet → selection still works, every page a non-hub", () => {
+    const cands = scanCandidates(root); // beforeEach never indexes
+    expect(cands.every((c) => c.refs === 0 && !c.hub)).toBe(true);
+    expect(selectNext(root, { limit: 10, date: D0 }).picks.length).toBe(4);
   });
 
   test("priority: wrong-due before review-due before new; asked-today excluded", () => {

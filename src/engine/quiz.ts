@@ -31,6 +31,7 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { resolveWikiLang, getConfig, isHumanReviewDir, logDirs, resolveLang, type LangCatalog, type WikiConfig, type WikiLang } from "./config.ts";
 import { parseFrontmatter } from "./lint.ts";
+import { WikiIndex } from "./db.ts";
 import { ensureRepoDir, readRepoDir, readRepoFile, renameRepoPath, repoFileExists, repoRelative, writeRepoFile } from "./repo-write.ts";
 import { addDays, today } from "./today.ts";
 
@@ -65,7 +66,16 @@ export interface QuizCandidate {
   title: string;
   date: string; // frontmatter updated ?? date ?? "" (newest-first sort key)
   weight: number;
+  refs: number; // inbound wiki references — the graph's own "this turned out to matter" signal
+  hub: boolean; // refs >= HUB_MIN_REFS: a conceptual center, by the cold start's own definition
 }
+
+/**
+ * Inbound-reference count at which a page counts as a conceptual center. Same threshold the
+ * cold-start spine uses (synthesis.buildSpine) — the human already reads those pages listed as
+ * "가장 많이 참조된 페이지 / most-referenced", so the quiz must not disagree with that word.
+ */
+export const HUB_MIN_REFS = 2;
 
 export type SelectionKind = "wrong-due" | "review-due" | "new";
 
@@ -258,11 +268,45 @@ function saveLedger(root: string, cfg: WikiConfig, entries: QuizEntry[], date: s
 // or nonstandard frontmatter `domain:` (else a domain-less milestone would outrank a real one).
 export function weightFor(dir: string, domain: string, cfg: WikiConfig): number {
   if (isHumanReviewDir(dir, cfg)) return 4;
-  if (dir === cfg.topicDir) return 2;
+  // The topic encyclopedia ranks WITH decisions, not with insights: 5_topic is where a concept
+  // lives once it has outlived the session that produced it, which is exactly "the core of the
+  // work" a person should still recognize months later. Quizzing it below one-off realizations
+  // was the shape behind "questions feel like trivia" — the durable layer went last.
+  if (dir === cfg.topicDir) return 3;
   const d = (cfg.categories.find((c) => c.dir === dir)?.domain ?? domain ?? "").toLowerCase();
   if (d.includes("decision") || d.includes("adr")) return 3;
   if (d.includes("milestone") || d.includes("progress")) return 1;
   return 2;
+}
+
+/**
+ * Inbound reference count per wiki page, read from the same graph the cold-start spine reads.
+ *
+ * Never fatal: a missing or stale index yields an empty map (every page scores 0), because a
+ * memory ritual must degrade to "ask by category and recency" rather than fail.
+ */
+function inboundCounts(root: string): Map<string, number> {
+  const out = new Map<string, number>();
+  try {
+    const w = new WikiIndex(root);
+    const db = w.connect();
+    try {
+      const rows = db
+        .query("SELECT id, relative_path FROM documents WHERE source_kind='wiki'")
+        .all() as { id: string; relative_path: string }[];
+      for (const row of rows) {
+        const rel = String(row.relative_path ?? "").replace(/\\/g, "/");
+        const at = rel.indexOf("docs/wiki/");
+        if (at < 0) continue;
+        out.set(rel.slice(at + "docs/wiki/".length), w.getBacklinks(db, String(row.id)).length);
+      }
+    } finally {
+      db.close();
+    }
+  } catch {
+    /* no index yet / unreadable — the quiz still runs, just without the hub signal */
+  }
+  return out;
 }
 
 // Scan the log layer + topic encyclopedia for quizzable pages. legacyDirs are deliberately
@@ -273,6 +317,7 @@ export function weightFor(dir: string, domain: string, cfg: WikiConfig): number 
 export function scanCandidates(ws: string): QuizCandidate[] {
   const root = resolve(ws);
   const cfg = getConfig(root);
+  const refsByPage = inboundCounts(root);
   const out: QuizCandidate[] = [];
   for (const dir of [...logDirs(cfg), cfg.topicDir]) {
     const relDir = join("docs", "wiki", dir);
@@ -290,13 +335,17 @@ export function scanCandidates(ws: string): QuizCandidate[] {
       const status = String(meta.status ?? "ready");
       if (status === "superseded" || status === "draft") continue;
       const domain = String(meta.domain ?? "");
+      const page = `${dir}/${f}`;
+      const refs = refsByPage.get(page) ?? 0;
       out.push({
-        page: `${dir}/${f}`,
+        page,
         dir,
         domain,
         title: String(meta.title ?? f.replace(/\.md$/, "")),
         date: String(meta.updated ?? meta.date ?? ""),
         weight: weightFor(dir, domain, cfg),
+        refs,
+        hub: refs >= HUB_MIN_REFS,
       });
     }
   }
@@ -320,8 +369,15 @@ function statusLive(root: string, page: string): boolean {
 //
 // ① wrong/skip items due (the answer the human couldn't give — highest value), oldest due first
 // ② correct items whose forgetting-curve review has arrived, oldest due first
-// ③ never-quizzed pages, weight desc (direction > decision > insight/topic > milestone),
-//    then newest first — recent work while it's still warm
+// ③ never-quizzed pages, weight desc (direction > decision·topic > insight > milestone), then
+//    HUBS FIRST, then newest first
+//
+// The hub step is what keeps the ritual about the core of the work. Category alone cannot tell a
+// landmark decision from a passing one, so within a tier the wiki's own graph breaks the tie: a
+// page other pages kept citing is a concept the work was built on, and one nobody ever linked is
+// most likely the incidental record that made these questions feel like trivia. Recency stays the
+// final key, so this session's work still surfaces while it is warm — hub-ness orders the first
+// exposure, it never removes anything from rotation.
 // Items asked today are excluded outright (day granularity: one exposure per day per item).
 
 export interface QuizSelection {
@@ -360,9 +416,12 @@ export function selectNext(ws: string, opts: { limit?: number; date?: string } =
   const inLedger = new Set(entries.map((e) => e.page));
   const news = scanCandidates(root)
     .filter((c) => !inLedger.has(c.page))
-    .sort((a, b) =>
-      a.weight !== b.weight ? b.weight - a.weight : a.date !== b.date ? (a.date > b.date ? -1 : 1) : a.page < b.page ? -1 : 1,
-    );
+    .sort((a, b) => {
+      if (a.weight !== b.weight) return b.weight - a.weight;
+      if (a.hub !== b.hub) return a.hub ? -1 : 1;
+      if (a.date !== b.date) return a.date > b.date ? -1 : 1;
+      return a.page < b.page ? -1 : 1;
+    });
 
   const picks: QuizPick[] = [
     ...wrongDue.map((e): QuizPick => ({ kind: "wrong-due", page: e.page, entry: e })),
