@@ -80,7 +80,7 @@ llmwiki init /absolute/path/to/my-project
 wikiが正しく積み上がっているか確認するときは、そのプロジェクトのエージェントに貼り付けます。
 
 ```text
-このプロジェクトのdocs/wikiに文書が正しく蓄積されているか確認してください。適切なllmwikiのヘルス・状態・lintチェックを実行し、正常な点と対応が必要な点を要約してください。
+このプロジェクトで /wiki-doctor を実行してください。安全な生成状態と根拠のあるページ問題を修復し、修正した内容とまだ注意が必要な点を要約してください。Codexでは $wiki-doctor を実行してください。
 ```
 
 ### 自分好みにするなら — ファイル一つ
@@ -218,7 +218,7 @@ wikiが何が欠けているかを自分で報告し、人間は埋める判断�
 ```
 setup.sh       ワンクリック導入（パス非依存: doctor→デーモン→フック·コマンド→インデックス）
 src/           TypeScriptエンジン（Bunランタイム、bun:sqlite内蔵 — node_modules·ビルド 0）
-  cli.ts       CLIディスパッチャ: init·index·reindex·refs·lint·search·update-*·skeleton·autoupdate·consolidate·topics·ingest·register-transcript·review·gaps·distill-verify·git-rules·overview·reconcile·doctor·context·digest·context-audit·config·conventions·migrate·quiz-*·capture-prune·bench·compare-arm·compare-verdict
+  cli.ts       CLIディスパッチャ — 40超のサブコマンド: init·status·disable·index·search·lint·doctor·wiki-doctor·db-health·wiki-clean·locate·connect·save-current·update-*·quiz-*·autoupdate·consolidate·review·gaps·overview·ingest·bench·…（全リスト: このファイル末尾のHANDLERS）
   engine/
     schema.sql   リポジトリ毎のインデックススキーマ（documents·chunks·FTS5·references）
     db.ts        WikiIndex: インデックス（content_hash増分）·検索·グラフ·staleness
@@ -271,6 +271,9 @@ cd ~/llmwiki
 移動・削除する前に、そのcloneから実行してください。`--purge-data` を付けない場合、ローカル状態は
 保持され、場所だけが表示されます。
 
+- `--purge-data` はllmwikiが作成した生成物だけを削除 — llmwikiが作っていないディレクトリやファイルには決して触れません
+- プロジェクト毎の登録マーカーは各リポジトリの `.git/llmwiki/` に残り、エンジンなしでは不活性。`llmwiki disable <repo>` で明示的に除去
+
 ## このマシンに保持されるデータ
 
 | 内容 | 場所 | 保持期間 |
@@ -293,7 +296,7 @@ cd ~/llmwiki
 
 ### ハーネス · OSノート（Claude Code / Codex / OpenCode / Windows）
 
-- **Claude Code** — `git clone … && ./setup.sh`、以上
+- **Claude Code** — `git clone … && ./setup.sh --harness claude`、以上
     - キャプチャ · 読み込み注入 · `/wiki-*` コマンドすべて自動配線
 - **Codex (OpenAI)** — `./setup.sh --harness codex`
     - ユーザーCLI + `$wiki-*` スキル5つを導入し、`$CODEX_HOME/hooks.json` にnative `SessionStart`/`UserPromptSubmit` フックをマージ
@@ -322,13 +325,14 @@ git clone https://github.com/suwonleee/llmwiki.git
 cd llmwiki
 
 # 1) ワンショット導入 — doctor → キャプチャデーモン（OS自動検出）→ ハーネス配線 → doctor
-./setup.sh --harness auto                # 一つに固定するなら: claude · codex · opencode
+./setup.sh --harness claude              # または: codex · opencode · auto（autoは検出された全ハーネスを配線）
 
 # 2) あとは働くだけ — どのフォルダ·ターミナルでもセッションが自動キャプチャ
 #    リポジトリ毎の手動コマンド: bun <clone>/src/cli.ts init|index|search|lint <repo>
 
 # 3) エージェントのプロンプトでセッションを締める
 /wiki-save                               # セッションの締め（Codex: $wiki-save）
+/wiki-ask                                # このプロジェクトのwikiに質問（Codex: $wiki-ask）
 /wiki-deep                               # deep定期パス（Codex: $wiki-deep）
 /wiki-doctor                             # このwikiを診断・修復（Codex: $wiki-doctor）
 /wiki-quiz                               # 人間の記憶ループ（Codex: $wiki-quiz）
@@ -337,6 +341,12 @@ cd llmwiki
 > 個別ステップ: `bun <clone>/src/cli.ts doctor` · `bash <clone>/daemon/install.sh` ·
 > `bun <clone>/src/daemon/wire.ts`（Claude）· `wire-codex.ts` / `wire-opencode.ts`（Codex/OpenCode）—
 > 各wireスクリプトは `--revert` で自分の変更だけを巻き戻し。
+
+### インストールdoctorとプロジェクトwiki doctor
+
+- `llmwiki doctor` — llmwikiインストール自体の点検: エンジンファイル·デーモン·フック·導入済みスキル·ユーザーCLI。`--fix` は配線を修復
+- `llmwiki wiki-doctor <repo>` — 1プロジェクトの `docs/wiki/` を既定で読み取り専用のまま診断: 構造·インデックス鮮度·SQLite整合性/容量·lint·キャプチャ連続性·gapキュー·セマンティックレビュー周期。`--fix` は安全な派生/生成状態のみ再構築
+- `/wiki-doctor`（Codex: `$wiki-doctor`）— 修復ワークフロー全体を実行。決定的なエンジン修復の後、エージェントが残りのlint/レビュー根拠を読み、出典を消さず·プロジェクトの方向を創作しない範囲でページ内容を修正
 
 ## 設定（環境変数）— プロバイダ · モデル · CLI 非依存
 
@@ -358,7 +368,7 @@ cd llmwiki
 | `LLMWIKI_REVIEW_MAX_PAGES` | `80` | `review` 1パスの入力上限。wikiがこれを超えると直近+タグ隣接ページのみレビュー（プロンプト溢れ防止）。 |
 | `LLMWIKI_REVIEW_INTERVAL_DAYS` | `7` | `review --if-due` の周期ゲート — 最後にコミットされたreviewからこの日数が経って初めて実行（それまでは約0.03秒で決定的にskip）。セッション締めのreviewコストを既定でゼロに。 |
 | `LLMWIKI_TOPIC_BUDGET` | `10000` | `5_topic` ページ肥大警告（`topic-oversize`、advisory）の文字予算 — 超過時はdeepパスが引用トランスクリプトから書き直し、`distill-verify`（引用セット縮小禁止）でゲート。 |
-| `LLMWIKI_OVERVIEW_BUDGET` | `8000` | `overview --normalize` が警告を出す overview.md の文字予算（エントリポイント肥大の監視）。 |
+| `LLMWIKI_OVERVIEW_BUDGET` | `8000` | `overview` が警告を出す overview.md の文字予算（エントリポイント肥大の監視; `--check` は書き込みなしのプレビュー）。 |
 | `LLMWIKI_L0_BUDGET` | `1600` | コールドスタートL0（current-state）の文字**基準**。注入は**切らない** — 基準超過ページも全量注入し超過通知1行を付加（次の締めにトリムを促す）; `oversized-l0` lintは1.25×から警告。 |
 
 - 各tierを「その時点の最上位モデル」へ上げるか、非Anthropicのモデル/エンドポイントへ差し替え可能
@@ -367,6 +377,12 @@ cd llmwiki
     - Claude Codeは両フックを自動配線 · 最近のCodexは同じフックスクリプトをネイティブ実行（`adapters/codex/`）· OpenCodeは1ファイルプラグインが注入（`adapters/opencode/`）
     - その他のハーネスはAGENTS.mdや起動プロンプトから同じコマンドを呼ぶだけ
     - ターン毎注入はprogressive enhancement — コールドスタート + `search` のベースラインはどこでも同一
+
+### インデックス保守のエスカレーション（上限つき · オプトイン）
+
+`/wiki-save` は `llmwiki db-health <repo> --notice` を呼ぶだけです: クールダウン付きの健全性シグナルを記録し `/wiki-deep` を勧めることはあっても、SQLiteのcompactやセマンティック整理は決して実行しません。`/wiki-deep` はまずインデックスとlintを更新し、healthコマンドが適格と示した場合のみcompactして再確認します。**compact後も**ライブインデックスが30 MiBを超えるときだけ、手動·既定dry-runの `llmwiki wiki-clean <repo>` を勧めます。compactで解消するfree-ratio単独の圧力は「整理アクションなし」と報告されます。
+
+既定値は意図的に保守的で、現在環境変数での上書きはありません: compactは**DB 30 MiB**·**free-page比率10%**·**free-page 1 MiBの下限**の三条件すべてを要求します。notice状態のクールダウンは**7日**（適格性の変化またはインデックス10%成長で解除）。可逆クリーンアップの分類器は**180日**を過ぎた古いページのみ候補とし、gapレポートは直近の解消**20件**を保持。`wiki-clean --date YYYY-MM-DD` は決定的なレビュー日付を与えるだけで — `wiki-clean --commit` も `wiki-clean-apply` もsave/deep自動化には含まれません。
 
 ## チーム利用（1プロジェクトのwiki共有）
 
@@ -385,7 +401,7 @@ cd llmwiki
     - クローンがoriginより遅れているとコールドスタートが1行で通知 — チームメイトがマージした文脈があり得るため、開始前にpull
 - **レビューの流れ**
     - wikiコミットはコードと同じブランチ·同じPR — **PRレビューこそがAI作成ページの人間ゲート**
-    - `gap-queue.md`/`overview.md` が衝突したら: どちらか一方を取り `llmwiki gaps` / `llmwiki overview --normalize` を再実行（収束する）— 生成された本文の手動マージは禁止
+    - `gap-queue.md`/`overview.md` が衝突したら: どちらか一方を取り `llmwiki gaps` / `llmwiki overview` を再実行（収束する）— 生成された本文の手動マージは禁止
 - **安全と確認済みの衝突2種**
     - `current-state.md`（L0）: どちらを取っても安全 — 次の `/wiki-save` がwiki状態からNow/Nextを再導出して収束 · ただし**Next**の箇条書きだけは両側の和集合を推奨（保留アクションを失わない）
     - 同じ `5_topic` ページへの同時追記: **両側の箇条書きを全部保持** — トピックページはフォーマット規則上追記専用（既存行は不変·マージは追加のみ）で、和集合が常に正しいマージ

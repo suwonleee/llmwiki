@@ -1,80 +1,93 @@
-# llmwiki 캡처 데몬
+# llmwiki capture daemon
 
-복리 사이클의 **캡처(write) 고리**. `src/daemon/watch.ts` 가 모든 Claude 프로필의 transcript
-디렉터리(`~/.claude*/projects/**/*.jsonl`)를 감시하다가, 새 세션이 끝나면 그 "업데이트 대기
-(pending update)"를 중앙 캡처 큐(`<clone>/.state/capture.db`)에 기록한다. **LLM은 호출하지
-않는다** — 단지 대기 목록만 적는다. 실제 업데이트는 `/wiki-save` 로 한다.
+The **capture (write) link** of the compounding loop. `src/daemon/watch.ts` sweeps every
+harness data source on this machine and, when a session settles, records its "pending update"
+in the central capture queue (`<clone>/.state/capture.db`). **No LLM is ever called** — the
+daemon only writes the waiting list. The actual wiki update happens at `/wiki-save`.
 
-어느 터미널(기본/tmux/iTerm2)·폴더에서 작업하든 transcript는 이 경로로 떨어지므로, 클라이언트별
-훅 없이도 캡처가 된다. 50줄 미만의 짧은 Q&A 세션은 작업량 신호로 보아 건너뛴다(`src/daemon/watch.ts`).
-`watch.ts --once` 요약은 `discovered`·`enqueued`·`skipped_short`를 각각 출력하므로,
-“발견하지 못함”과 “짧아서 제외됨”을 구분할 수 있다.
+What it watches, per harness:
 
-> **주의**: `~`(홈) 에서 시작한 세션은 프로젝트가 특정되지 않아 per-project 누적이 안 된다.
-> 누적을 원하면 **그 프로젝트 폴더 안에서** 세션을 시작하라.
+- **Claude Code** — transcript trees of every profile: `~/.claude*/projects/**/*.jsonl`,
+  plus `$CLAUDE_CONFIG_DIR` and any location persisted by `llmwiki connect claude <dir>`
+- **Codex** — rollouts under `$CODEX_HOME/sessions/**/*.jsonl[.zst]` (default `~/.codex`)
+- **OpenCode** — the SQLite store (`$XDG_DATA_HOME/opencode/opencode*.db` or `$OPENCODE_DB`);
+  settled sessions are materialized as export files inside the state root
 
-`./setup.sh` 가 OS를 감지해 아래 중 하나로 자동 설치한다. 수동으로는
-`bash <clone>/daemon/install.sh` / 제거는 `--uninstall`.
+Transcripts land on these paths whatever terminal (plain/tmux/iTerm2) or folder you work in, so
+capture needs no per-client hooks. Short Q&A sessions under 50 lines are skipped as a
+workload signal (`src/daemon/watch.ts`). The `watch.ts --once` summary prints `discovered`,
+`enqueued`, and `skipped_short` separately, so "not found" and "too short" stay distinguishable.
+
+> **Note**: a session started from `~` (home) has no specific project, so it does not accumulate
+> per-project. If you want accumulation, **start the session inside that project's folder.**
+
+`./setup.sh` detects the OS and installs one of the services below automatically. Manual:
+`bash <clone>/daemon/install.sh` / removal: `--uninstall`.
 
 ---
 
 ## macOS — launchd
 
-`install.sh` 가 `~/Library/LaunchAgents/com.llmwiki.daemon.plist` 를 생성하고
-`launchctl load` 한다. 해석된 `bun` 절대경로를 plist에 박아넣어 launchd의 최소 PATH
-문제를 피한다. 설치 시점의 `CODEX_HOME`·`CLAUDE_CONFIG_DIR`도 서비스 환경에 고정하므로
-기본 경로가 아닌 Codex/Claude 프로필의 transcript도 재부팅 후 계속 캡처된다.
+`install.sh` writes `~/Library/LaunchAgents/com.llmwiki.daemon.plist` and runs
+`launchctl load`. The resolved absolute `bun` path is pinned into the plist to avoid launchd's
+minimal-PATH problem. `CODEX_HOME` and `CLAUDE_CONFIG_DIR` at install time are also pinned into
+the service environment, so transcripts from non-default Codex/Claude profiles keep getting
+captured after a reboot.
 
 ```bash
-launchctl list | grep llmwiki          # 상태
-tail -f <clone>/.state/daemon.log      # 로그
+launchctl list | grep llmwiki          # status
+tail -f <clone>/.state/daemon.log      # log
 bash <clone>/daemon/install.sh --uninstall
 ```
 
-## Linux (systemd) — `systemd --user` 서비스
+## Linux (systemd) — `systemd --user` service
 
-`install.sh` 가 `~/.config/systemd/user/llmwiki-daemon.service` 를 생성하고
-`systemctl --user enable --now` 한다.
+`install.sh` writes `~/.config/systemd/user/llmwiki-daemon.service` and runs
+`systemctl --user enable --now`.
 
 ```bash
 systemctl --user status llmwiki-daemon.service
-journalctl --user -u llmwiki-daemon.service -f   # 또는 tail -f <clone>/.state/daemon.log
+journalctl --user -u llmwiki-daemon.service -f   # or tail -f <clone>/.state/daemon.log
 bash <clone>/daemon/install.sh --uninstall
 ```
 
-**헤드리스 지속성**: 로그인 세션이 없을 때도 캡처를 유지하려면 한 번 실행:
+**Headless persistence**: to keep capturing with no login session, run once:
 
 ```bash
 loginctl enable-linger "$USER"
 ```
 
-## Linux (systemd 없음, 예: WSL·미니 컨테이너) — cron + nohup
+## Linux without systemd (e.g. WSL, minimal containers) — cron + nohup
 
-`systemctl` 이 없으면 `install.sh` 가 `crontab` 에 `@reboot` 라인을 등록하고, 지금 부팅에서도
-캡처가 시작되도록 즉시 `nohup bun <clone>/src/daemon/watch.ts &` 로 백그라운드 실행한다.
+Without `systemctl`, `install.sh` registers an `@reboot` line in `crontab` and immediately
+starts `nohup bun <clone>/src/daemon/watch.ts &` in the background so capture begins in the
+current boot as well.
 
 ```bash
-pgrep -af watch.ts                     # 실행 확인
-crontab -l | grep llmwiki              # @reboot 라인 확인
-tail -f <clone>/.state/daemon.log      # 로그
+pgrep -af watch.ts                     # is it running
+crontab -l | grep llmwiki              # @reboot line present
+tail -f <clone>/.state/daemon.log      # log
 bash <clone>/daemon/install.sh --uninstall
 ```
 
-`systemctl` 도 `crontab` 도 없으면, 자동 재시작 없이 1회 실행만 된다. 부팅마다 `install.sh` 를
-다시 돌리거나, 직접 프로세스 매니저로 `bun <clone>/src/daemon/watch.ts` 를 올려라.
+With neither `systemctl` nor `crontab`, you get a one-shot run with no automatic restart.
+Re-run `install.sh` after each boot, or supervise `bun <clone>/src/daemon/watch.ts` with your
+own process manager.
 
 ---
 
-## 동작 점검 / 디버깅
+## Health check / debugging
 
 ```bash
-bun <clone>/src/cli.ts doctor          # 데몬·훅 배선 종합 점검
-bun <clone>/src/daemon/watch.ts --once # 1회 스윕(데몬 없이 즉시 캡처 + 큐 통계 출력)
+bun <clone>/src/cli.ts doctor          # daemon + hook wiring, all harnesses
+bun <clone>/src/daemon/watch.ts --once # one sweep (immediate capture, prints queue stats)
 ```
 
-- **캡처가 안 됨**: `watch.ts --once`의 `skipped_short`를 먼저 확인한다. ① 50줄 미만 세션은
-  의도적으로 제외 ② `~` 에서 시작한 세션은 `_home` 으로 라우팅(위 주의)
-  ③ `.state/daemon.log` 확인.
-- **launchd/cron의 최소 PATH**: 생성된 유닛/plist엔 `bun` 절대경로가 박혀 있으나, `claude`
-  CLI까지 쓰는 생성 패스(`autoupdate` 등)를 데몬 맥락에서 돌릴 일이 있으면 PATH 주입이 필요할 수
-  있다. 캡처 자체는 LLM을 안 쓰므로 영향 없음.
+- **Nothing captured**: check `skipped_short` in `watch.ts --once` first. ① sessions under
+  50 lines are skipped on purpose ② sessions started from `~` route to `_home` (see the note
+  above) ③ check `.state/daemon.log` ④ if the harness IS used here but discovery finds no
+  data, its location is nonstandard — run `bun <clone>/src/cli.ts locate <harness>` and follow
+  the verify→connect steps it prints.
+- **launchd/cron minimal PATH**: the generated unit/plist pins the absolute `bun` path. If you
+  ever run a generative pass (`autoupdate` etc.) in the daemon's context, the harness CLI may
+  need PATH injection — capture itself uses no LLM, so it is unaffected.

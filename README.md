@@ -59,6 +59,7 @@ Installation is machine-level, but it stays **inert everywhere until you enroll 
 
 ```bash
 llmwiki init /absolute/path/to/my-project     # one project-level activation step
+# Claude-only install has no `llmwiki` launcher — use: bun <clone>/src/cli.ts init <path>
 ```
 
 `init` scaffolds the wiki and records a marker under that worktree's `.git/` directory. Until it
@@ -231,7 +232,7 @@ The wiki reports what's missing on its own; the human supplies only the judgment
 ```
 setup.sh       one-click onboarding (path-agnostic: doctor→daemon→hooks·commands→index)
 src/           TypeScript engine (Bun runtime, bun:sqlite built in — zero node_modules·build)
-  cli.ts       CLI dispatcher: init·index·reindex·refs·lint·search·update-*·save-current·skeleton·autoupdate·consolidate·topics·ingest·register-transcript·review·gaps·distill-verify·git-rules·overview·reconcile·doctor·context·digest·context-audit·config·conventions·migrate·quiz-*·capture-prune·bench·compare-arm·compare-verdict
+  cli.ts       CLI dispatcher — 40+ subcommands: init·status·disable·index·search·lint·doctor·wiki-doctor·db-health·wiki-clean·locate·connect·save-current·update-*·quiz-*·autoupdate·consolidate·review·gaps·overview·ingest·bench·… (full registry: HANDLERS at the bottom of this file)
   engine/
     schema.sql   per-repo index schema (documents·chunks·FTS5·references)
     db.ts        WikiIndex: indexing(content_hash incremental)·search·graph·staleness
@@ -312,7 +313,7 @@ transcripts are read in place from the harness's own store — llmwiki makes no 
 
 ### Harness · OS notes (Claude Code / Codex / OpenCode / Windows)
 
-- **Claude Code** — `git clone … && ./setup.sh`, done
+- **Claude Code** — `git clone … && ./setup.sh --harness claude`, done
     - capture · read-injection · `/wiki-*` commands all wired automatically
 - **Codex (OpenAI)** — `./setup.sh --harness codex`
     - installs the user CLI + five `$wiki-*` skills, and merges native `SessionStart`/`UserPromptSubmit` hooks into `$CODEX_HOME/hooks.json`
@@ -341,13 +342,14 @@ git clone https://github.com/suwonleee/llmwiki.git
 cd llmwiki
 
 # 1) one-shot install — doctor → capture daemon (OS auto-detect) → harness wiring → doctor
-./setup.sh --harness auto                # or pin one: claude · codex · opencode
+./setup.sh --harness claude              # or: codex · opencode · auto (auto wires EVERY detected harness)
 
 # 2) just work — sessions are captured automatically in any folder/terminal
 #    manual per-repo commands: bun <clone>/src/cli.ts init|index|search|lint <repo>
 
 # 3) close out the session in your agent's prompt
 /wiki-save                               # close out this session (Codex: $wiki-save)
+/wiki-ask                                # ask this project's wiki (Codex: $wiki-ask)
 /wiki-deep                               # periodic DEEP pass (Codex: $wiki-deep)
 /wiki-doctor                             # diagnose + repair this wiki (Codex: $wiki-doctor)
 /wiki-quiz                               # human memory loop (Codex: $wiki-quiz)
@@ -390,7 +392,7 @@ screens down to nothing cancels the call instead of sending the remainder.
 | `LLMWIKI_REVIEW_MAX_PAGES` | `80` | Input cap for a single `review` pass. If the wiki exceeds this, only recent+tag-neighbor pages are reviewed (to avoid prompt overflow). |
 | `LLMWIKI_REVIEW_INTERVAL_DAYS` | `7` | Cadence gate for `review --if-due` — it runs only when this many days have passed since the last committed review (before that it skips deterministically in ~0.03s). Makes the per-session close-out's review cost zero by default. |
 | `LLMWIKI_TOPIC_BUDGET` | `10000` | Character budget for the `topic-oversize` advisory warning on `5_topic` pages — over budget, the deep pass rewrites the page from its cited transcripts, gated by `distill-verify` (the citation set must not shrink). |
-| `LLMWIKI_OVERVIEW_BUDGET` | `8000` | Character budget for overview.md at which `overview --normalize` warns (watches for entry-point bloat). |
+| `LLMWIKI_OVERVIEW_BUDGET` | `8000` | Character budget for overview.md at which `overview` warns (watches for entry-point bloat; `--check` previews without writing). |
 | `LLMWIKI_L0_BUDGET` | `1600` | Character **standard** for the cold-start L0 (current-state). Injection **never cuts**: an over-standard page is injected whole with a one-line notice appended (nudging the next close-out to trim); the `oversized-l0` lint warns from 1.25×. |
 
 - bump each tier to whatever top-tier model just shipped, or swap in a non-Anthropic model/endpoint
@@ -423,7 +425,7 @@ Solo is the default and needs none of this — everything below is additive and 
     - cold-start prints one line when your clone is behind origin — a teammate may have merged context; pull before starting
 - **Review flow**
     - wiki commits ride the same branch and PR as code — the PR review *is* the human gate for AI-written pages
-    - `gap-queue.md` / `overview.md` conflicts: take either side, re-run `llmwiki gaps` / `llmwiki overview --normalize` (they converge) — never hand-merge their generated bodies
+    - `gap-queue.md` / `overview.md` conflicts: take either side, re-run `llmwiki gaps` / `llmwiki overview` (they converge) — never hand-merge their generated bodies
 - **Known-safe conflicts**
     - `current-state.md` (L0): either side is safe — the next `/wiki-save` re-derives Now/Next from the wiki state; prefer the union of both sides' **Next** bullets (never lose a pending action)
     - same `5_topic` page, concurrent appends: keep **both sides' bullets** — topic pages are additive by format rule (existing lines immutable, merges only add), so the union is always the correct merge
@@ -444,7 +446,7 @@ guide = "Quarterly goals; changes need human sign-off."
     - the WRITE prompts, cold-start operating rules, and `llmwiki conventions <repo>` (which the `/wiki-*` skills defer to) all render from this file — no prose duplicates to drift
 - **Per-repo configs** (optional)
     - multiple `*.toml` files under `<clone>/configs/` — a file with `applies_to = ["<folder>", …]` governs those folders and everything under them (segment-safe prefix, most-specific match wins, `~` expands)
-    - a file without `applies_to` = the default for all repos (canonical: `configs/default.toml`)
+    - a file without `applies_to` = the default for all repos (canonical: `configs/default.toml`, shipped as `configs/default.toml.example` — copy it to activate)
     - precedence: named match → `configs/` default → root `llmwiki.config.toml` → built-in defaults; matching uses the path the session hook passes (`CLAUDE_PROJECT_DIR`/cwd)
 - **Check** — `llmwiki config [workspace]`
     - shows which file was selected and why (with validation); an invalid or unreadable file falls back safely with a warning — never breaks a session

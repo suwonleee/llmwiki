@@ -76,7 +76,7 @@ setup正常完成后，在同一个安装会话中告诉智能体：
 要检查wiki是否正在正确积累，请在目标项目的智能体会话中粘贴：
 
 ```text
-请检查这个项目的docs/wiki是否正在正确积累文档。运行合适的llmwiki健康、状态和lint检查，然后概括哪些正常、哪些需要处理。
+请为这个项目运行 /wiki-doctor。修复安全的生成状态和有证据支撑的页面问题，然后总结修复了什么、还有什么需要关注。在 Codex 中运行 $wiki-doctor。
 ```
 
 ### 想按自己的方式来？只需一个文件
@@ -214,7 +214,7 @@ wiki 自己报告缺了什么，人只提供补上它的判断。
 ```
 setup.sh       一键上手（路径无关: doctor→守护进程→钩子·命令→索引）
 src/           TypeScript 引擎（Bun 运行时，内置 bun:sqlite — 零 node_modules·构建）
-  cli.ts       CLI 调度器: init·index·reindex·refs·lint·search·update-*·skeleton·autoupdate·consolidate·topics·ingest·register-transcript·review·gaps·distill-verify·git-rules·overview·reconcile·doctor·context·digest·context-audit·config·conventions·migrate·quiz-*·capture-prune·bench·compare-arm·compare-verdict
+  cli.ts       CLI 调度器 — 40 余个子命令: init·status·disable·index·search·lint·doctor·wiki-doctor·db-health·wiki-clean·locate·connect·save-current·update-*·quiz-*·autoupdate·consolidate·review·gaps·overview·ingest·bench·…（完整清单: 本文件底部的 HANDLERS）
   engine/
     schema.sql   按仓库的索引 schema（documents·chunks·FTS5·references）
     db.ts        WikiIndex: 索引（content_hash 增量）·搜索·图·staleness
@@ -266,6 +266,9 @@ cd ~/llmwiki
 `docs/wiki/` 保持不变。移动或删除安装用clone之前，应先从该clone运行卸载。不加
 `--purge-data` 时会保留本地状态并报告其位置。
 
+- `--purge-data` 只删除 llmwiki 自己创建的产物 — 绝不触碰任何不是它创建的目录或文件
+- 每个项目的注册标记留在该仓库的 `.git/llmwiki/` 中，没有引擎时完全惰性；用 `llmwiki disable <repo>` 显式移除
+
 ## 本机保留的数据
 
 | 内容 | 位置 | 保留期 |
@@ -288,7 +291,7 @@ cd ~/llmwiki
 
 ### Harness · OS 备注（Claude Code / Codex / OpenCode / Windows）
 
-- **Claude Code** — `git clone … && ./setup.sh`，完事
+- **Claude Code** — `git clone … && ./setup.sh --harness claude`，完事
     - 捕获 · 读取注入 · `/wiki-*` 命令全部自动接线
 - **Codex (OpenAI)** — `./setup.sh --harness codex`
     - 安装用户 CLI + 5 个 `$wiki-*` 技能，并把原生 `SessionStart`/`UserPromptSubmit` 钩子合并进 `$CODEX_HOME/hooks.json`
@@ -317,13 +320,14 @@ git clone https://github.com/suwonleee/llmwiki.git
 cd llmwiki
 
 # 1) 一步安装 — doctor → 捕获守护进程（OS 自动检测）→ harness 接线 → doctor
-./setup.sh --harness auto                # 只钉一个则: claude · codex · opencode
+./setup.sh --harness claude              # 或: codex · opencode · auto（auto 会接线检测到的所有 harness）
 
 # 2) 该干嘛干嘛 — 任何文件夹·终端里的会话都会被自动捕获
 #    按仓库手动命令: bun <clone>/src/cli.ts init|index|search|lint <repo>
 
 # 3) 在智能体输入框里收尾会话
 /wiki-save                               # 会话收尾（Codex: $wiki-save）
+/wiki-ask                                # 向这个项目的 wiki 提问（Codex: $wiki-ask）
 /wiki-deep                               # 周期深度整理（Codex: $wiki-deep）
 /wiki-doctor                             # 诊断并修复此 wiki（Codex: $wiki-doctor）
 /wiki-quiz                               # 人的记忆循环（Codex: $wiki-quiz）
@@ -332,6 +336,12 @@ cd llmwiki
 > 单步执行: `bun <clone>/src/cli.ts doctor` · `bash <clone>/daemon/install.sh` ·
 > `bun <clone>/src/daemon/wire.ts`（Claude）· `wire-codex.ts` / `wire-opencode.ts`（Codex/OpenCode）—
 > 每个 wire 脚本都带 `--revert`，只回滚它自己的改动。
+
+### 安装 doctor 与项目 wiki doctor
+
+- `llmwiki doctor` — 检查 llmwiki 安装本身: 引擎文件·守护进程·钩子·已装技能·用户 CLI。`--fix` 修复接线
+- `llmwiki wiki-doctor <repo>` — 默认只读地诊断单个项目的 `docs/wiki/`: 结构·索引新鲜度·SQLite 完整性/存储·lint·捕获连续性·gap 队列·语义评审节奏。`--fix` 只重建安全的派生/生成状态
+- `/wiki-doctor`（Codex: `$wiki-doctor`）— 运行完整修复工作流。确定性引擎修复之后，智能体阅读剩余的 lint/评审证据并修正页面内容，不删除出处，也不虚构项目方向
 
 ## 配置（环境变量）— 供应商 · 模型 · CLI 无关
 
@@ -352,7 +362,7 @@ cd llmwiki
 | `LLMWIKI_REVIEW_MAX_PAGES` | `80` | 单次 `review` 的输入上限。wiki 超过时只审近期+标签相邻页面（防提示词溢出）。 |
 | `LLMWIKI_REVIEW_INTERVAL_DAYS` | `7` | `review --if-due` 的节奏门 — 距上次已提交 review 满这个天数才运行（之前约 0.03 秒即确定性跳过）。让会话收尾的 review 成本默认为零。 |
 | `LLMWIKI_TOPIC_BUDGET` | `10000` | `5_topic` 页面的超大警告（`topic-oversize`，advisory）字符预算 — 超预算时深度整理会从其引用的 transcript 重写页面，由 `distill-verify` 把关（引用集不得缩小）。 |
-| `LLMWIKI_OVERVIEW_BUDGET` | `8000` | `overview --normalize` 发出警告的 overview.md 字符预算（监控入口膨胀）。 |
+| `LLMWIKI_OVERVIEW_BUDGET` | `8000` | `overview` 发出警告的 overview.md 字符预算（监控入口膨胀；`--check` 只预览不写入）。 |
 | `LLMWIKI_L0_BUDGET` | `1600` | 冷启动 L0（current-state）的字符**基准**。注入**从不截断**: 超基准的页面也整页注入并附一行超额提示（推动下次收尾去修剪）; `oversized-l0` lint 从 1.25× 起警告。 |
 
 - 把各档换成"当下刚发布的顶级模型"，或换成非 Anthropic 的模型/端点，都可以
@@ -361,6 +371,12 @@ cd llmwiki
     - Claude Code 自动接线两个钩子 · 近期 Codex 可原生执行同一批钩子脚本（`adapters/codex/`）· OpenCode 用单文件插件注入（`adapters/opencode/`）
     - 其他 harness 从 AGENTS.md 或启动提示词调用同样的命令即可
     - 每轮注入是渐进增强 — 冷启动 + `search` 的基线在哪里都一样
+
+### 索引维护升级（有上限 · 需主动触发）
+
+`/wiki-save` 只调用 `llmwiki db-health <repo> --notice`: 记录一条带冷却期的健康信号，最多建议运行 `/wiki-deep`，绝不压缩 SQLite 或执行语义清理。`/wiki-deep` 先刷新索引和 lint，仅当 health 命令标记数据库合格时才压缩并复查。只有**压缩之后**存活索引仍超过 30 MiB，才会建议手动的、默认 dry-run 的 `llmwiki wiki-clean <repo>`。仅靠 free-ratio 的压力若被压缩解决，会报告为无需清理。
+
+默认值刻意保守，目前没有环境变量覆盖: 压缩要求同时满足**数据库 30 MiB**、**空闲页占比 10%**、**空闲页 1 MiB 下限**三个条件。notice 状态冷却 **7 天**（合格性变化或索引增长 10% 时解除）。可逆清理分类器只把超过 **180 天**的旧页面列为候选；gap 报告保留最近解决的 **20** 条。`wiki-clean --date YYYY-MM-DD` 只是提供确定性的评审日期 — `wiki-clean --commit` 和 `wiki-clean-apply` 都不属于 save/deep 的自动化。
 
 ## 团队使用（共享同一项目的 wiki）
 
@@ -379,7 +395,7 @@ cd llmwiki
     - 克隆落后于 origin 时，冷启动会提示一行 — 可能有队友合并过的上下文，开工前先 pull
 - **评审流程**
     - wiki 提交与代码同分支、同 PR — **PR 评审就是 AI 所写页面的人工把关**
-    - `gap-queue.md` / `overview.md` 冲突时: 任取一边，重跑 `llmwiki gaps` / `llmwiki overview --normalize`（会收敛）— 决不手工合并生成的正文
+    - `gap-queue.md` / `overview.md` 冲突时: 任取一边，重跑 `llmwiki gaps` / `llmwiki overview`（会收敛）— 决不手工合并生成的正文
 - **两类已验证安全的冲突**
     - `current-state.md`（L0）: 任取一边都安全 — 下次 `/wiki-save` 会从 wiki 状态重推 Now/Next 并收敛 · 唯 **Next** 列表建议取双方并集（不丢待办动作）
     - 同一 `5_topic` 页面的并发追加: **保留双方全部条目** — 主题页按格式规则只增不改（既有行不可变·合并只做添加），并集永远是正确的合并

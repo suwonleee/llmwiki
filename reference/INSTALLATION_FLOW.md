@@ -4,6 +4,10 @@ Detailed execution reference for the coding agent following [`../setup_text.md`]
 Read the shared flow plus the active harness section only. Treat live setup and doctor output as
 the current source of truth.
 
+**Claude-only installs have no `llmwiki` launcher** (it is installed by the Codex and OpenCode
+wiring). On such an install, read every `llmwiki <args>` in this document as
+`bun <absolute-clone-path>/src/cli.ts <args>` — the subcommands and flags are identical.
+
 ## Contents
 
 - [Source-of-truth order](#source-of-truth-order)

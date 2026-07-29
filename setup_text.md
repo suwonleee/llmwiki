@@ -10,6 +10,10 @@ Use [`reference/INSTALLATION_FLOW.md`](reference/INSTALLATION_FLOW.md) for the s
 the active harness branch, and recovery rules. Read only the relevant harness section unless the
 human explicitly requests multiple harnesses.
 
+**Claude-only installs have no `llmwiki` launcher** (the launcher is installed by the Codex and
+OpenCode wiring). On such an install, read every `llmwiki <args>` in this contract as
+`bun <absolute-clone-path>/src/cli.ts <args>` — the subcommands and flags are identical.
+
 ## Boundaries
 
 - Work from the repository clone that contains this file. Confirm the absolute clone path before running setup.

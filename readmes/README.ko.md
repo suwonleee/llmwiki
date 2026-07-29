@@ -81,7 +81,7 @@ clone 한 것은 거기서 llmwiki를 돌리겠다는 결정이 아니기 때문
 위키가 제대로 쌓이는지 확인하려면 해당 프로젝트의 에이전트 입력창에 붙여 넣습니다.
 
 ```text
-이 프로젝트의 docs/wiki에 문서가 제대로 쌓이는지 확인해줘. 알맞은 llmwiki 상태·진행·lint 점검을 실행하고, 정상인 부분과 조치가 필요한 부분을 요약해줘.
+이 프로젝트에서 /wiki-doctor 를 실행해줘. 안전한 생성 상태와 근거가 있는 페이지 문제를 복구한 뒤, 고친 것과 아직 주의가 필요한 것을 요약해줘. Codex에서는 $wiki-doctor 를 실행해줘.
 ```
 
 ### 내 방식대로 바꾸고 싶다면 — 파일 하나
@@ -219,7 +219,7 @@ MCP 서버·Docker·외부 데이터베이스·벡터 DB·클라우드 서비스
 ```
 setup.sh       원클릭 온보딩 (경로 무관: doctor→데몬→훅·커맨드→인덱스)
 src/           TypeScript 엔진 (Bun 런타임, bun:sqlite 내장 — node_modules·빌드 0)
-  cli.ts       CLI 디스패처: init·index·reindex·refs·lint·search·update-*·skeleton·autoupdate·consolidate·topics·ingest·register-transcript·review·gaps·distill-verify·git-rules·overview·reconcile·doctor·context·digest·context-audit·config·conventions·migrate·quiz-*·capture-prune·bench·compare-arm·compare-verdict
+  cli.ts       CLI 디스패처 — 서브커맨드 40여 개: init·status·disable·index·search·lint·doctor·wiki-doctor·db-health·wiki-clean·locate·connect·save-current·update-*·quiz-*·autoupdate·consolidate·review·gaps·overview·ingest·bench·… (전체 목록: 이 파일 하단의 HANDLERS)
   engine/
     schema.sql   per-repo 인덱스 스키마 (documents·chunks·FTS5·references)
     db.ts        WikiIndex: 인덱싱(content_hash 증분)·검색·그래프·staleness
@@ -248,7 +248,7 @@ daemon/        install.sh (launchd/systemd/cron 자동감지) + autoupdate-*.sh 
 hooks/         sessionstart-inject.sh (cold-start 주입) · userpromptsubmit-inject.sh (턴별 포인터 주입)
 adapters/      codex/ (네이티브 훅 hooks.json 템플릿) · opencode/ (플러그인 1파일)
 skill/         wiki-save(세션 마감)·wiki-deep(deep 주기 패스)·wiki-doctor(진단·복구)·wiki-ask·wiki-quiz(사람 기억) (/커맨드)
-examples/      sample-wiki/ — 완성된 위키 예시(읽기 전용). 엔진이 인덱싱 안 함(IGNORE_DIRS). **복사하지 말 것** — 실제 위키는 각 프로젝트 docs/wiki에 자동 생성. examples/README.md 참조
+examples/      sample-wiki/ — 완성된 위키 예시(읽기 전용). 엔진이 인덱싱 안 함(IGNORE_DIRS). **복사하지 말 것** — 실제 위키는 각 프로젝트 docs/wiki에 자동 생성. examples/README.ko.md 참조
 tests/         bun:test 스위트 (chunker·refs·lint·extract·capture·db·source·review-scope·overview·gaps·quiz·마이그레이션) — `bun test`
 package.json·tsconfig.json   Bun 메타(typecheck용; 런타임은 .ts 직접 실행)
 ```
@@ -299,7 +299,7 @@ cd ~/llmwiki
 
 ### 하네스 · OS 노트 (Claude Code / Codex / OpenCode / Windows)
 
-- **Claude Code** — `git clone … && ./setup.sh`, 끝
+- **Claude Code** — `git clone … && ./setup.sh --harness claude`, 끝
     - 캡처 · 읽기 주입 · `/wiki-*` 커맨드 전부 자동 배선
 - **Codex (OpenAI)** — `./setup.sh --harness codex`
     - 사용자 CLI + `$wiki-*` 스킬 5개 설치, `$CODEX_HOME/hooks.json`에 native `SessionStart`/`UserPromptSubmit` 훅 병합
@@ -328,13 +328,14 @@ git clone https://github.com/suwonleee/llmwiki.git
 cd llmwiki
 
 # 1) 한 방 설치 — doctor → 캡처 데몬(OS 자동감지) → 하네스 배선 → doctor
-./setup.sh --harness auto                # 하나만 지정하려면: claude · codex · opencode
+./setup.sh --harness claude              # 또는: codex · opencode · auto (auto 는 감지된 모든 하네스를 배선)
 
 # 2) 그냥 작업한다 — 어느 폴더·터미널이든 세션이 자동 캡처됨
 #    레포별 수동 명령: bun <clone>/src/cli.ts init|index|search|lint <repo>
 
 # 3) 에이전트 입력창에서 세션 마감
 /wiki-save                               # 세션 마감 (Codex: $wiki-save)
+/wiki-ask                                # 이 프로젝트 위키에 질문 (Codex: $wiki-ask)
 /wiki-deep                               # deep 주기 패스 (Codex: $wiki-deep)
 /wiki-doctor                             # 이 위키 진단·복구 (Codex: $wiki-doctor)
 /wiki-quiz                               # 사람 기억 루프 (Codex: $wiki-quiz)
@@ -343,6 +344,12 @@ cd llmwiki
 > 개별 단계: `bun <clone>/src/cli.ts doctor` · `bash <clone>/daemon/install.sh` ·
 > `bun <clone>/src/daemon/wire.ts`(Claude) · `wire-codex.ts` / `wire-opencode.ts`(Codex/OpenCode) —
 > 각 wire 스크립트는 `--revert`로 자기 변경만 되돌림.
+
+### 설치 doctor 와 프로젝트 위키 doctor
+
+- `llmwiki doctor` — llmwiki 설치 자체를 점검: 엔진 파일·데몬·훅·설치된 스킬·사용자 CLI. `--fix` 는 배선 복구
+- `llmwiki wiki-doctor <repo>` — 한 프로젝트의 `docs/wiki/` 를 기본 읽기 전용으로 진단: 구조·인덱스 신선도·SQLite 무결성/저장량·lint·캡처 연속성·gap 큐·시맨틱 리뷰 주기. `--fix` 는 안전한 파생/생성 상태만 재구축
+- `/wiki-doctor` (Codex: `$wiki-doctor`) — 전체 복구 워크플로 실행. 결정적 엔진 복구 후, 에이전트가 남은 lint/리뷰 근거를 읽고 출처를 지우거나 프로젝트 방향을 지어내지 않는 범위에서 페이지 내용을 수정
 
 ## 설정 (환경 변수) — provider · 모델 · CLI 무관
 
@@ -365,7 +372,7 @@ cd llmwiki
 | `LLMWIKI_REVIEW_MAX_PAGES` | `80` | `review` 단일패스 입력 cap. 위키가 이보다 크면 최근+태그 이웃만 검토(프롬프트 오버플로 방지). |
 | `LLMWIKI_REVIEW_INTERVAL_DAYS` | `7` | `review --if-due` 주기 게이트 — 마지막 커밋된 review 이후 이 일수가 지나야 실행(그 전엔 ~0.03초에 결정적 skip). 세션 마감의 review 비용을 기본 0으로. |
 | `LLMWIKI_TOPIC_BUDGET` | `10000` | `5_topic` 페이지 비대 경고(`topic-oversize`, advisory) 글자 예산 — 초과 시 deep 패스가 인용 transcript 로부터 다시 작성하며 `distill-verify`(인용 세트 축소 금지)로 게이트. |
-| `LLMWIKI_OVERVIEW_BUDGET` | `8000` | `overview --normalize` 가 경고를 내는 overview.md 글자 예산(엔트리포인트 비대 감시). |
+| `LLMWIKI_OVERVIEW_BUDGET` | `8000` | `overview` 가 경고를 내는 overview.md 글자 예산(엔트리포인트 비대 감시; `--check` 는 쓰기 없이 미리보기). |
 | `LLMWIKI_L0_BUDGET` | `1600` | cold-start L0(current-state)의 글자 **기준**. 주입은 **자르지 않음** — 기준 초과 페이지도 전량 주입하고 초과 통지 1줄을 부착(다음 마감이 트리밍하도록); `oversized-l0` lint 는 1.25×부터 경고. |
 
 - 각 tier를 "그때그때 출시된 최상위 모델"로 올리거나, 비-Anthropic 모델/엔드포인트로 교체 가능
@@ -374,6 +381,12 @@ cd llmwiki
     - Claude Code는 두 훅이 자동 배선 · 최신 Codex는 같은 훅 스크립트를 네이티브로 실행(`adapters/codex/`) · OpenCode는 1파일 플러그인이 주입(`adapters/opencode/`)
     - 그 밖의 하네스는 AGENTS.md·시작 프롬프트에서 같은 명령 호출
     - 턴별 주입은 점진적 향상 — cold-start + `search` 기준선은 어디서나 동일
+
+### 인덱스 유지보수 에스컬레이션 (상한 있음 · 옵트인)
+
+`/wiki-save` 는 `llmwiki db-health <repo> --notice` 만 호출합니다: 쿨다운이 걸린 건강 신호를 기록하고 `/wiki-deep` 을 권고할 수 있을 뿐, SQLite compact 나 시맨틱 정리는 절대 실행하지 않습니다. `/wiki-deep` 은 인덱스와 lint 를 먼저 갱신하고, health 명령이 자격을 표시한 경우에만 compact 한 뒤 재확인합니다. **compact 후에도** 라이브 인덱스가 30 MiB 를 넘을 때만 수동·기본 dry-run 인 `llmwiki wiki-clean <repo>` 을 권고합니다. compact 로 해소되는 free-ratio 단독 압박은 "정리 조치 없음"으로 보고됩니다.
+
+기본값은 의도적으로 보수적이며 현재 환경변수 오버라이드가 없습니다: compact 는 **DB 30 MiB**·**free-page 비율 10%**·**free-page 1 MiB 바닥** 세 조건을 모두 요구합니다. notice 상태는 **7일** 쿨다운(자격 변화 또는 인덱스 10% 성장 시 해제). 가역 정리 분류기는 **180일** 지난 오래된 페이지만 후보로 보며, gap 리포트는 최근 해소 **20건**을 보존합니다. `wiki-clean --date YYYY-MM-DD` 는 결정적인 리뷰 날짜를 줄 뿐이고 — `wiki-clean --commit` 도 `wiki-clean-apply` 도 save/deep 자동화에는 포함되지 않습니다.
 
 ## 팀 사용 (한 프로젝트의 위키 공유)
 
@@ -392,7 +405,7 @@ cd llmwiki
     - 클론이 origin보다 뒤면 cold-start가 한 줄로 알림 — 팀원이 병합한 맥락이 있을 수 있으니 시작 전 pull
 - **리뷰 흐름**
     - 위키 커밋은 코드와 같은 브랜치·같은 PR — **PR 리뷰가 곧 AI 작성 페이지의 사람 승인 게이트**
-    - `gap-queue.md`/`overview.md` 충돌 시: 아무 쪽이나 취한 뒤 `llmwiki gaps` / `llmwiki overview --normalize` 재실행(수렴함) — 생성된 본문의 수동 병합 금지
+    - `gap-queue.md`/`overview.md` 충돌 시: 아무 쪽이나 취한 뒤 `llmwiki gaps` / `llmwiki overview` 재실행(수렴함) — 생성된 본문의 수동 병합 금지
 - **안전이 확인된 충돌 2종**
     - `current-state.md`(L0): 아무 쪽을 취해도 안전 — 다음 `/wiki-save`가 위키 상태에서 Now/Next를 재유도해 수렴 · 단 **Next** 불릿만은 양쪽 합집합 권장(액션 대기를 잃지 않기)
     - 같은 `5_topic` 페이지 동시 추가: **양쪽 불릿 모두 보존** — 토픽 페이지는 포맷 규칙상 추가 전용(기존 줄 불변·병합은 추가만)이라 합집합이 항상 옳은 병합
