@@ -109,10 +109,10 @@ cp llmwiki.config.example.toml llmwiki.config.toml   # English, fully commented
 |---|---|
 | `[wiki] lang` | the language the **engine** writes in. Unset = follows your session (the wiki's own pages, then what you type to your agent); pin it with `en` · `ko` · `ja` · `zh`. Your pages always follow your conversation either way |
 | `[[category]]` | the wiki folders and what belongs in each |
-| `[topic]` `[queue]` `[quiz]` | those folder names, and how many questions a quiz session asks |
+| `[quiz] questions` | how many questions a quiz session asks — the `5_topic` · `0_review` · `6_quiz` folders are fixed structure |
 | `[private] dirs` | folders indexed for you but never committed |
 | `[models]` | which model drafts (`light`) and which verifies (`heavy`) |
-| `[files]` · `legacy_dirs` | the three special file names, and old folders to keep scanning after a rename |
+| `legacy_dirs` | old folders to keep scanning after a rename — the three core files (`current-state` · `overview` · `log`) are fixed structure |
 | `[lint.banned_terms]` | wording to warn about (advisory only) |
 
 Easiest path: tell your agent what you want and ask it to edit only `llmwiki.config.toml`, then check the result with `llmwiki config <project-path>`. Existing pages are never migrated without your explicit approval.

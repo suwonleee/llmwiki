@@ -97,10 +97,10 @@ cp llmwiki.config.example.toml llmwiki.config.toml   # 영어 · 주석 상세
 |---|---|
 | `[wiki] lang` | **엔진**이 쓰는 언어. 미지정이면 세션 언어를 따라갑니다(위키에 쌓인 페이지 → 없으면 내가 에이전트에게 친 말). 고정하려면 `en` · `ko` · `ja` · `zh`. 페이지 언어는 어느 쪽이든 항상 대화 언어입니다 |
 | `[[category]]` | 위키 폴더 구성과 각 폴더에 담을 내용 |
-| `[topic]` `[queue]` `[quiz]` | 해당 폴더 이름, 그리고 퀴즈 한 세션의 문항 수 |
+| `[quiz] questions` | 퀴즈 한 세션의 문항 수 — `5_topic` · `0_review` · `6_quiz` 폴더는 고정 구조 |
 | `[private] dirs` | 나에게는 인덱싱되지만 커밋되지 않는 폴더 |
 | `[models]` | 초안을 쓰는 모델(`light`)과 검증하는 모델(`heavy`) |
-| `[files]` · `legacy_dirs` | 특별한 파일 3개의 이름, 이름 변경 후에도 계속 훑을 옛 폴더 |
+| `legacy_dirs` | 이름 변경 후에도 계속 훑을 옛 폴더 — 핵심 파일 3개(`current-state` · `overview` · `log`)는 고정 구조 |
 | `[lint.banned_terms]` | 경고할 표현 (권고일 뿐 차단 안 함) |
 
 가장 쉬운 방법: 원하는 바를 에이전트에게 말하고 `llmwiki.config.toml`만 고치게 한 뒤, `llmwiki config <프로젝트-경로>`로 결과를 확인합니다. 기존 문서 이관은 사용자가 명시적으로 승인하기 전에는 실행되지 않습니다.

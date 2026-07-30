@@ -96,10 +96,10 @@ cp llmwiki.config.example.toml llmwiki.config.toml   # 英語・コメント付�
 |---|---|
 | `[wiki] lang` | **エンジン**が書く言語。未設定ならセッションの言語に従います（ウィキの既存ページ → 無ければエージェントに打った言葉）。固定するなら `en` · `ko` · `ja` · `zh`。ページの言語はどちらの場合も常に会話の言語です |
 | `[[category]]` | wikiのフォルダ構成と、それぞれに置く内容 |
-| `[topic]` `[queue]` `[quiz]` | それらのフォルダ名と、クイズ一回の問題数 |
+| `[quiz] questions` | クイズ一回の問題数 — `5_topic` · `0_review` · `6_quiz` フォルダは固定構造 |
 | `[private] dirs` | 自分には索引されるが、コミットされないフォルダ |
 | `[models]` | 下書きを書くモデル（`light`）と検証するモデル（`heavy`） |
-| `[files]` · `legacy_dirs` | 特別な三つのファイル名と、改名後も走査を続ける旧フォルダ |
+| `legacy_dirs` | 改名後も走査を続ける旧フォルダ — コアファイル三つ（`current-state` · `overview` · `log`）は固定構造 |
 | `[lint.banned_terms]` | 警告したい表現（推奨のみ・阻止しない） |
 
 一番簡単な方法: 望むことをエージェントに伝えて `llmwiki.config.toml` だけを編集させ、`llmwiki config <プロジェクトのパス>` で結果を確認します。既存ページの移行は、ユーザーが明示的に承認するまで実行されません。

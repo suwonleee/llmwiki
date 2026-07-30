@@ -92,10 +92,10 @@ cp llmwiki.config.example.toml llmwiki.config.toml   # 英文，注释齐全
 |---|---|
 | `[wiki] lang` | **引擎**书写所用的语言。不设置时跟随本次会话（先看 wiki 已有页面，没有就看你打给智能体的话）；要固定就写 `en` · `ko` · `ja` · `zh`。页面语言无论如何都跟随你的对话 |
 | `[[category]]` | wiki 的文件夹结构，以及每个文件夹放什么 |
-| `[topic]` `[queue]` `[quiz]` | 这些文件夹的名字，以及一次测验出几道题 |
+| `[quiz] questions` | 一次测验出几道题 — `5_topic` · `0_review` · `6_quiz` 文件夹为固定结构 |
 | `[private] dirs` | 对你可索引、但永不提交的文件夹 |
 | `[models]` | 谁写初稿（`light`）、谁做校验（`heavy`） |
-| `[files]` · `legacy_dirs` | 三个特殊文件的名字，以及改名后仍继续扫描的旧文件夹 |
+| `legacy_dirs` | 改名后仍继续扫描的旧文件夹 — 三个核心文件（`current-state` · `overview` · `log`）为固定结构 |
 | `[lint.banned_terms]` | 需要提醒的措辞（仅建议，不阻止） |
 
 最省事的做法: 把想要的效果告诉智能体，让它只修改 `llmwiki.config.toml`，然后用 `llmwiki config <项目路径>` 查看结果。未经用户明确批准，不会迁移已有页面。
