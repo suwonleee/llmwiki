@@ -8,9 +8,10 @@
 #      cp llmwiki.config.example.toml llmwiki.config.toml
 #      llmwiki config <project-path>      # shows what the engine actually resolved
 #
-#  Everything below is commented out — uncomment only what you want to change.
-#  A broken file never breaks a session: it is skipped, defaults apply, and
-#  `llmwiki config` reports the warning.
+#  The [[category]] block below is ACTIVE and equals the built-in defaults — copying this
+#  file changes nothing until you edit it. Everything else is commented out; uncomment
+#  only what you want to change. A broken file never breaks a session: it is skipped,
+#  defaults apply, and `llmwiki config` reports the warning.
 
 config_version = 1
 
@@ -42,46 +43,71 @@ config_version = 1
 
 # ── 2. WIKI FOLDERS ───────────────────────────────────────────────────────────────────
 #
-#  Defaults, in reading order: 1_direction (big direction, human-confirmed) ·
-#  2_milestone (what got done, what's next) · 3_decision (ADR) · 4_insight (gotchas) ·
-#  5_topic (one living page per concept) · 0_review (questions for a human) ·
-#  6_quiz (your memory loop, never indexed).
+#  The default structure under docs/wiki/, registered below so you can edit it in place:
 #
-#  Declaring ONE [[category]] replaces the whole default list — no partial merge, so what
-#  you write is exactly what you get. Keep the number prefix: it is the reading order.
+#      1_direction/   domain=direction   review=human   big direction/strategy
+#      2_milestone/   domain=milestone   review=model   work progress + what's next
+#      3_decision/    domain=decision    review=model   ADR: problem → alternatives → choice
+#      4_insight/     domain=insight     review=model   realizations · gotchas · lessons
+#      5_topic/       FIXED — one living page per concept (consolidation target)
+#      0_review/      FIXED — the human-judgment queue
+#      6_quiz/        FIXED — your memory loop, never indexed
 #
-#      dir     folder under docs/wiki
-#      domain  the `domain:` value in a page's frontmatter (lowercase)
+#  The numbered CATEGORY folders are yours to change; the three FIXED folders are the
+#  engine's contract (consolidation target · human queue · never-indexed quiz layer) and
+#  keep their stock names.
+#
+#  Each category:
+#      dir     folder under docs/wiki (keep the number prefix: it is the reading order)
+#      domain  the `domain:` value in a page's frontmatter (lowercase slug)
 #      review  "human" → queued into 0_review for a person · "model" → the strong model
 #              decides, no human sign-off
-#      guide   one line telling the model what belongs here (free text, any language —
-#              passed to the model as written)
+#      guide   one line telling the model what belongs here — the folder's character and
+#              subject. Free text, any language; the WRITE prompts, cold-start rules and
+#              the /wiki-* skills (via `llmwiki conventions`) all follow it.
+#      prompt  (optional) the longer WRITE-prompt wording; omit it and `guide` is used
+#      aliases (optional) extra domain spellings routed to this folder
 #
-# [[category]]
-# dir = "1_goal"
-# domain = "goal"
-# review = "human"
-# guide = "분기 목표와 변경 이력. 목표 전환은 사람이 확정."
-#
-# [[category]]
-# dir = "2_lesson"
-# domain = "lesson"
-# review = "model"
-# guide = "작업 교훈·gotcha. transcript 근거 필수."
+#  The block below IS the built-in default — with these exact values the engine behaves
+#  byte-identically to having no config at all. Edit `dir`/`guide`/`prompt` to change a
+#  folder, or add/remove [[category]] blocks: declaring ANY [[category]] replaces the
+#  whole default list (no partial merge — what you write is exactly what you get).
 
-# The other three folders, renamed the same way:
-# [topic]
-# dir = "5_topic"
-#
-# [queue]
-# dir = "0_review"
-#
+[[category]]
+dir = "1_direction"
+domain = "direction"
+review = "human"
+guide = "big direction/strategy — only the human confirms"
+prompt = "the project's big direction/strategy, OR a shift in it this session (from what → to what, and why). Rare."
+
+[[category]]
+dir = "2_milestone"
+domain = "milestone"
+review = "model"
+guide = "work progress + what's next"
+prompt = "work progress + what's next: what was built / changed / measured this session, plus any remaining TODOs the human stated."
+
+[[category]]
+dir = "3_decision"
+domain = "decision"
+review = "model"
+guide = "ADR: problem → alternatives → choice → consequences"
+prompt = "an ADR: a problem the HUMAN faced this (or a past) session, the alternatives weighed, and the choice made (context / decision / alternatives / consequences)."
+
+[[category]]
+dir = "4_insight"
+domain = "insight"
+review = "model"
+guide = "realizations · gotchas · lessons while working"
+aliases = ["lesson"]
+prompt = "a realization or lesson surfaced while working with the human (a gotcha, a non-obvious learning, what made the result better) that helps future work."
+
+# Quiz session size (the 6_quiz folder itself is fixed):
 # [quiz]
-# dir = "6_quiz"
 # questions = 3            # per /wiki-quiz session (the engine caps a session at 7)
 
-# Personal folders inside a shared wiki: indexed, searched and quizzed for you, but
-# auto-gitignored so nothing in them is committed. Must not collide with the names above.
+# Personal folders inside a shared wiki: indexed and searched for you, but auto-gitignored
+# so nothing in them is committed. Must not collide with the names above.
 # [private]
 # dirs = ["9_personal"]
 
@@ -97,15 +123,11 @@ config_version = 1
 # heavy = "claude-opus-4-8"
 
 
-# ── 4. FILE NAMES AND WORDING ─────────────────────────────────────────────────────────
+# ── 4. WORDING ────────────────────────────────────────────────────────────────────────
 #
-#  l0 = the one-glance current state injected at every session start · overview = the
-#  entry point · log = the append-only ledger.
-#
-# [files]
-# l0 = "current-state.md"
-# overview = "overview.md"
-# log = "log.md"
+#  The three core files are FIXED structure, like the folders marked FIXED above:
+#  current-state.md (the one-glance L0 injected at session start) · overview.md (the
+#  entry point) · log.md (the append-only ledger).
 
 # Old folders to keep scanning after a rename, so earlier pages stay findable.
 # legacy_dirs = ["milestones", "insights", "decisions", "directions"]
@@ -130,4 +152,6 @@ config_version = 1
 #  Only valid inside a configs/ file, not here:
 # applies_to = ["~/work/repo-a", "/absolute/path/team-wikis"]
 #
-#  Team sharing: commit the file to your team's engine fork; members `git pull`.
+#  Team sharing: commit the file to your team's engine fork; members `git pull`. Note that
+#  `configs/*.toml` is gitignored by default (user-local) — track a team config explicitly
+#  with `git add -f configs/<team>.toml`.

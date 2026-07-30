@@ -24,6 +24,10 @@ $ARGUMENTS
   wiring. Never overwrite a conflicting user-owned file.
 - Human judgment is required only for direction shifts and genuinely unresolved contradictions.
   Ordinary lint repair, source lookup, cross-linking, and filing are the agent's work.
+- Custom conventions: if `llmwiki config <repo>` shows a non-default source, run
+  `llmwiki conventions <repo>` FIRST and follow ITS category table (dirs · domains · review
+  gates) over any category names written in this workflow. The queue (`0_review/`) and quiz
+  (`6_quiz/`) folders are fixed structure — those names never change.
 
 ## Procedure
 

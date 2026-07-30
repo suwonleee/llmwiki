@@ -434,7 +434,7 @@ guide = "분기 목표. 변경은 사람이 확정."
     - 폴더 rename + 모든 위키링크/상대링크 재작성 + frontmatter `domain:` 갱신 + `.schema-version` 스탬프
     - 자동 실행 없음 — cold-start는 드리프트를 양방향(위키가 config보다 새것 / config가 위키보다 새것)으로 감지·제안만 함
 - **팀 배포**
-    - config를 팀 엔진 포크에 커밋 → 각자 `git pull` → 1명이 `migrate` 실행 → 결과는 여느 변경처럼 PR로 병합
+    - config를 팀 엔진 포크에 커밋 → 각자 `git pull` → 1명이 `migrate` 실행 → 결과는 여느 변경처럼 PR로 병합 (`configs/*.toml`은 기본 gitignore 대상 — 팀 config는 `git add -f configs/<team>.toml`로 명시 추적; 루트 `llmwiki.config.toml`은 일반 커밋)
 - **호환성 규율**
     - config 키 제거는 폐기 유예 + lint 경고 + `migrate` 스텝을 거친 뒤에만 — 조용한 제거 금지
 

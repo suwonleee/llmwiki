@@ -44,4 +44,21 @@ describe("skill command lists stay in sync", () => {
     const core = read("src/engine/doctor.ts").match(/const CORE = \[([\s\S]*?)\]/)?.[1] ?? "";
     for (const f of skillFiles) expect(core).toContain(`"skill/${f}"`);
   });
+
+  // Skills are installed ONE copy per profile (never per-repo), so custom category names from
+  // llmwiki.config.toml / configs/*.toml can only reach them at runtime, via `llmwiki
+  // conventions`. A skill that names stock category folders without deferring to that command
+  // silently writes to the wrong folders on any repo with a custom config (observed 2026-07-30:
+  // wiki-quiz and wiki-doctor lacked the clause). wiki-deep inherits the clause by requiring
+  // wiki-save to be read first — an explicit read-first pointer counts.
+  test("every skill naming a stock category folder defers to `llmwiki conventions` (or reads wiki-save first)", () => {
+    const stockDirs = /1_direction|2_milestone|3_decision|4_insight/;
+    for (const f of skillFiles) {
+      const text = read(`skill/${f}`);
+      if (!stockDirs.test(text)) continue;
+      const defers = text.includes("llmwiki conventions");
+      const inherits = /Read.*wiki-save\.md/i.test(text);
+      expect(`${f}: ${defers || inherits}`).toBe(`${f}: true`);
+    }
+  });
 });

@@ -454,7 +454,7 @@ guide = "Quarterly goals; changes need human sign-off."
     - folder renames with every wikilink/relative link rewritten, frontmatter `domain:` updated, `.schema-version` stamped
     - never runs automatically — cold-start only detects drift (both directions: wiki newer than your engine config, or config newer than the wiki) and suggests it
 - **Team distribution**
-    - commit the config to your team's engine fork; members `git pull`, one person runs `migrate`, the result merges by PR like any other change
+    - commit the config to your team's engine fork; members `git pull`, one person runs `migrate`, the result merges by PR like any other change (`configs/*.toml` is gitignored by default — track a team config with `git add -f configs/<team>.toml`; the root `llmwiki.config.toml` commits normally)
 - **Compatibility discipline**
     - config keys are removed only after a deprecation window with a lint warning and a `migrate` step — never silently
 
