@@ -20,7 +20,7 @@ import { today } from "./today.ts";
 import { WikiIndex } from "./db.ts";
 import { updateReferences, autoRegisterCitedTranscripts } from "./refs.ts";
 import { Linter, type WikiIndexLike } from "./lint.ts";
-import { readRepoDir, readRepoFile, renameRepoPath, repoDirExists, repoFileExists, repoRelative, writeRepoFile } from "./repo-write.ts";
+import { readRepoDir, readRepoFile, removeEmptyRepoDir, renameRepoPath, repoDirExists, repoFileExists, repoRelative, writeRepoFile } from "./repo-write.ts";
 
 export const SCHEMA_VERSION_FILE = ".schema-version";
 
@@ -34,6 +34,7 @@ export interface MigrateResult {
   verdict: "conforms" | "planned" | "migrated" | "skip";
   pairs?: Pair[];
   strays?: string[]; // on-disk numbered dirs with no config counterpart (left untouched)
+  straysRemoved?: string[]; // EMPTY unmapped dirs dropped on commit (nothing to lose, git never tracked them)
   linksRewritten?: number;
   domainsRewritten?: number;
   quizLedgerRemapped?: number; // ledger page identities moved to renamed category dirs
@@ -121,6 +122,18 @@ function rewriteLinks(content: string, from: string, to: string): [string, numbe
   return [content, n];
 }
 
+// On commit, drop unmapped numbered dirs that hold NOTHING: an empty dir carries no knowledge
+// (git never tracked it) but would re-print "⚠ unmapped" on every later dry-run — the husk
+// problem, generalized. Dry-run keeps reporting them so the plan shows the full picture.
+function dropEmptyStrays(ws: string, root: string, strays: string[], commit: boolean): { kept: string[]; removed: string[] } {
+  if (!commit) return { kept: strays, removed: [] };
+  const removed: string[] = [];
+  for (const s of strays) {
+    if (!readRepoDir(root, join("docs", "wiki", s)).length && removeEmptyRepoDir(ws, join("docs", "wiki", s))) removed.push(s);
+  }
+  return { kept: strays.filter((s) => !removed.includes(s)), removed };
+}
+
 export function migrate(
   ws: string,
   opts: { commit?: boolean; map?: Record<string, string> } = {},
@@ -135,7 +148,8 @@ export function migrate(
     // structure already conforms → just (re)stamp the snapshot on commit so reverse-drift
     // detection has a baseline even for wikis created before this feature.
     if (opts.commit) writeRepoFile(ws, join("docs", "wiki", SCHEMA_VERSION_FILE), schemaSnapshot(cfg) + "\n");
-    return { verdict: "conforms", strays };
+    const swept = dropEmptyStrays(ws, root, strays, Boolean(opts.commit));
+    return { verdict: "conforms", strays: swept.kept, straysRemoved: swept.removed };
   }
 
   // plan: count link rewrites without touching disk
@@ -211,10 +225,12 @@ export function migrate(
     // Both sides go through the boundary: a category folder is repository content, and a
     // symlinked one must not be renamed (or written through) during a migration.
     if (repoDirExists(root, join("docs", "wiki", pair.to))) {
-      // target exists (partially migrated) → move children instead of clobbering
+      // target exists (partially migrated) → move children instead of clobbering, then drop the
+      // emptied husk — left behind it would nag as "unmapped" on every later dry-run forever
       for (const entry of readRepoDir(root, join("docs", "wiki", pair.from))) {
         renameRepoPath(ws, join("docs", "wiki", pair.from, entry.name), join("docs", "wiki", pair.to, entry.name));
       }
+      removeEmptyRepoDir(ws, join("docs", "wiki", pair.from));
     } else {
       renameRepoPath(ws, join("docs", "wiki", pair.from), join("docs", "wiki", pair.to));
     }
@@ -223,6 +239,7 @@ export function migrate(
     writeRepoFile(ws, repoRelative(ws, l.file), renderLedger(l.entries, today(), resolveLang(cfg)));
   }
   writeRepoFile(ws, join("docs", "wiki", SCHEMA_VERSION_FILE), schemaSnapshot(cfg) + "\n");
+  const swept = dropEmptyStrays(ws, root, strays, true);
 
   const idx = new WikiIndex(ws);
   idx.indexAll();
@@ -236,7 +253,8 @@ export function migrate(
   return {
     verdict: "migrated",
     pairs,
-    strays,
+    strays: swept.kept,
+    straysRemoved: swept.removed,
     linksRewritten: links,
     domainsRewritten: domains,
     quizLedgerRemapped: ledgerRemapped,

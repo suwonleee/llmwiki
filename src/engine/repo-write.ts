@@ -35,6 +35,7 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  rmdirSync,
   rmSync,
   writeSync,
 } from "node:fs";
@@ -321,6 +322,22 @@ export function removeRepoFile(root: string, relativePath: string): boolean {
   }
   rmSync(path, { force: true });
   return true;
+}
+
+/**
+ * Remove a repository DIRECTORY only when it is empty (rmdir semantics — a non-empty directory
+ * fails and returns false, so no page can ever be lost through this path). Same containment as
+ * every other mutation: refuses symlinks and boundary escapes.
+ */
+export function removeEmptyRepoDir(root: string, relativePath: string): boolean {
+  const path = repoPath(root, relativePath);
+  try {
+    if (lstatSync(path).isSymbolicLink() || !lstatSync(path).isDirectory()) return false;
+    rmdirSync(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Rename inside the repository. Both sides are validated; neither may cross a symlink. */

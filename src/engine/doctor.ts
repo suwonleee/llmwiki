@@ -20,6 +20,7 @@ import { claudeConfigDirs, claudeRetentionDays } from "./sources/claude.ts";
 import { EXPIRY_WARN_DAYS, healthReadOnly, pendingPastRetentionReadOnly } from "./capture.ts";
 import { effectiveStateRoot, probeStateRoot } from "./state-dir.ts";
 import { inspectEnrollment } from "./enrollment.ts";
+import { detectConfigDrift } from "./migrate.ts";
 import { liveEngineVersion, readUpdateCheck, updateAvailable } from "./update-check.ts";
 import { persistedClaudeDirs, persistedCodexHome, persistedOpencodeDb, verifyHarnessPath, type Harness } from "./harness-locate.ts";
 
@@ -475,6 +476,22 @@ export function reportCaptureHealth(): number {
     console.log(`  [capture] ⚠️ ${dormant.length} repositor(ies) hold a wiki but are not enrolled — \`llmwiki init <repo>\``);
     console.log(`  [capture]    ${preview(dormant)}`);
     issues += 1;
+  }
+
+  // Structure drift: a wiki whose folders no longer match its effective config (the team config
+  // changed, or this engine clone is the stale side). Detection only — migration stays an
+  // explicit `llmwiki migrate`, same contract as the cold-start line (migrate.ts safety model).
+  for (const repo of known) {
+    if (!existsSync(join(repo, "docs", "wiki"))) continue;
+    try {
+      const drift = detectConfigDrift(repo);
+      if (drift) {
+        console.log(`  [config] ⚠️ ${repo}: ${drift}`);
+        issues += 1;
+      }
+    } catch {
+      /* fail-safe: drift detection must never break doctor */
+    }
   }
 
   for (const k of health.byKind) {

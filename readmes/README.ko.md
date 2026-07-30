@@ -432,7 +432,7 @@ guide = "분기 목표. 변경은 사람이 확정."
     - 어느 파일이 왜 선택됐는지 표시(검증 포함) · 잘못된/못 읽는 파일은 경고와 함께 안전 폴백 — 세션을 깨지 않음
 - **기존 위키 구조 변경** — `llmwiki migrate <repo>` (dry-run) → `--commit`
     - 폴더 rename + 모든 위키링크/상대링크 재작성 + frontmatter `domain:` 갱신 + `.schema-version` 스탬프
-    - 자동 실행 없음 — cold-start는 드리프트를 양방향(위키가 config보다 새것 / config가 위키보다 새것)으로 감지·제안만 함
+    - 자동 실행 없음 — 드리프트는 양방향(위키가 config보다 새것 / config가 위키보다 새것)으로 감지되어 매 cold-start·`llmwiki doctor`·`/wiki-deep`·`/wiki-doctor` preflight에서 표면화되고, 적용은 언제나 사람 확인 후 명시적 `--commit`
 - **팀 배포**
     - config를 팀 엔진 포크에 커밋 → 각자 `git pull` → 1명이 `migrate` 실행 → 결과는 여느 변경처럼 PR로 병합 (`configs/*.toml`은 기본 gitignore 대상 — 팀 config는 `git add -f configs/<team>.toml`로 명시 추적; 루트 `llmwiki.config.toml`은 일반 커밋)
 - **호환성 규율**

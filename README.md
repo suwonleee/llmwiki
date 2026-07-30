@@ -452,7 +452,7 @@ guide = "Quarterly goals; changes need human sign-off."
     - shows which file was selected and why (with validation); an invalid or unreadable file falls back safely with a warning — never breaks a session
 - **Restructure an existing wiki** — `llmwiki migrate <repo>` (dry-run) → `--commit`
     - folder renames with every wikilink/relative link rewritten, frontmatter `domain:` updated, `.schema-version` stamped
-    - never runs automatically — cold-start only detects drift (both directions: wiki newer than your engine config, or config newer than the wiki) and suggests it
+    - never runs automatically — drift is detected (both directions: wiki newer than your engine config, or config newer than the wiki) and surfaced at every cold-start, in `llmwiki doctor`, and as a preflight in the `/wiki-deep` · `/wiki-doctor` passes; applying it always takes an explicit `--commit` with your OK
 - **Team distribution**
     - commit the config to your team's engine fork; members `git pull`, one person runs `migrate`, the result merges by PR like any other change (`configs/*.toml` is gitignored by default — track a team config with `git add -f configs/<team>.toml`; the root `llmwiki.config.toml` commits normally)
 - **Compatibility discipline**

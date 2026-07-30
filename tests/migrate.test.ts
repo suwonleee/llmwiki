@@ -94,6 +94,30 @@ test("commit renames dirs, rewrites links + domains, stamps schema-version; reru
   expect(again.verdict).toBe("conforms"); // idempotent
 });
 
+test("commit merges into an existing target (drift-window split-brain), drops the husk and empty strays", () => {
+  const repo = stockWiki();
+  const wiki = join(repo, "docs", "wiki");
+  // The drift window already produced the new dir with a page → same-number pairing can't
+  // pair 2_milestone (its counterpart is not "missing"), so only an explicit --map merges it.
+  mkdirSync(join(wiki, "2_lesson"));
+  writeFileSync(join(wiki, "2_lesson", "new-page.md"), "---\ntitle: N\ndomain: lesson\n---\nnew\n", "utf-8");
+  const cfg = teamCfg();
+  const r = migrate(repo, { commit: true, map: { "2_milestone": "2_lesson" } }, cfg);
+  expect(r.verdict).toBe("migrated");
+  // merge, not clobber: both the migrated page and the drift-window page coexist
+  expect(existsSync(join(wiki, "2_lesson", "m1.md"))).toBe(true);
+  expect(existsSync(join(wiki, "2_lesson", "new-page.md"))).toBe(true);
+  // the emptied husk is gone — it must not nag as "unmapped" on every later dry-run
+  expect(existsSync(join(wiki, "2_milestone"))).toBe(false);
+  // empty unmapped dirs (4_insight · 5_topic hold nothing) are cleaned on commit, kept in dry-run
+  expect(r.straysRemoved?.sort()).toEqual(["4_insight", "5_topic"]);
+  expect(r.strays).toEqual([]);
+  expect(existsSync(join(wiki, "4_insight"))).toBe(false);
+  const again = migrate(repo, {}, cfg);
+  expect(again.verdict).toBe("conforms");
+  expect(again.strays).toEqual([]); // no eternal ⚠ unmapped after the merge
+});
+
 test("drift detection: forward (structure vs config), clean after migrate, reverse (stale engine)", () => {
   const repo = stockWiki();
   const cfg = teamCfg();

@@ -160,11 +160,13 @@ export function createMaintenanceHandlers(dependencies: MaintenanceDependencies)
       if (result.verdict === "conforms") {
         console.log(`✓ structure already conforms to the config${args.flags["--commit"] ? " (schema-version stamped)" : ""}`);
         if (result.strays?.length) console.log(`  ⚠ unmapped numbered dir(s) left untouched: ${result.strays.join(", ")} (use --map old=new)`);
+        if (result.straysRemoved?.length) console.log(`  removed empty unmapped dir(s): ${result.straysRemoved.join(", ")}`);
         return;
       }
       console.log(`=== migrate [${result.verdict === "migrated" ? "COMMIT" : "DRY-RUN"}] ===`);
       for (const pair of result.pairs ?? []) console.log(`  ${pair.from} → ${pair.to}${pair.domain ? `  (domain → ${pair.domain})` : ""}`);
       if (result.strays?.length) console.log(`  ⚠ unmapped: ${result.strays.join(", ")} (use --map old=new)`);
+      if (result.straysRemoved?.length) console.log(`  removed empty unmapped dir(s): ${result.straysRemoved.join(", ")}`);
       console.log(`  links rewritten: ${result.linksRewritten}   frontmatter domains: ${result.domainsRewritten}`);
       if (result.quizLedgerRemapped) console.log(`  quiz ledger identities remapped: ${result.quizLedgerRemapped}`);
       if (result.verdict === "migrated") console.log(`  reindexed · lint errors: ${result.lintErrors}`);

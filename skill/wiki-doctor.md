@@ -28,6 +28,11 @@ $ARGUMENTS
   `llmwiki conventions <repo>` FIRST and follow ITS category table (dirs · domains · review
   gates) over any category names written in this workflow. The queue (`0_review/`) and quiz
   (`6_quiz/`) folders are fixed structure — those names never change.
+- Structural migration is gated: `llmwiki migrate <repo>` (dry-run) is free detection — always
+  safe to run and report. `--commit` runs only with the human's explicit OK in this session
+  (add `--map old=new` for `⚠ unmapped` dirs that still hold pages). Reverse drift
+  (".schema-version differs from this engine's config") means the engine clone is the stale
+  side — recommend `git pull` on the engine clone instead of migrating.
 
 ## Procedure
 
@@ -94,6 +99,11 @@ $ARGUMENTS
 
    Continue even when it exits 1: that means deterministic repair completed but one or more
    evidence-bearing problems still need this agent's judgment. Read the entire report.
+
+   Then run `llmwiki migrate <repo>` (dry-run) as the structure-drift check. If it plans
+   renames, surface the plan and resolve it per the Safety boundary's migration gate BEFORE
+   the lint repair passes below — page repairs on a drifted structure file into folders a
+   pending migration is about to rename.
 
 3. Repair every blocking lint error without weakening the underlying knowledge:
 

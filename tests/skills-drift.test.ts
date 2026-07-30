@@ -51,6 +51,16 @@ describe("skill command lists stay in sync", () => {
   // silently writes to the wrong folders on any repo with a custom config (observed 2026-07-30:
   // wiki-quiz and wiki-doctor lacked the clause). wiki-deep inherits the clause by requiring
   // wiki-save to be read first — an explicit read-first pointer counts.
+  // Config changes reach EXISTING wikis only through `llmwiki migrate`. Cold-start detects the
+  // drift every session, but the warm passes that write pages in volume (deep) or repair the
+  // wiki (doctor) must check it BEFORE writing — otherwise they grow the split-brain they could
+  // have closed. This pins the preflight into both skills (added 2026-07-30).
+  test("the periodic passes carry the structure-drift preflight", () => {
+    for (const f of ["wiki-deep.md", "wiki-doctor.md"]) {
+      expect(read(`skill/${f}`)).toContain("llmwiki migrate");
+    }
+  });
+
   test("every skill naming a stock category folder defers to `llmwiki conventions` (or reads wiki-save first)", () => {
     const stockDirs = /1_direction|2_milestone|3_decision|4_insight/;
     for (const f of skillFiles) {
