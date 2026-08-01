@@ -1,0 +1,72 @@
+name: CI
+
+# Two platforms, because this engine's hardest bugs are platform bugs it could not see.
+#
+# Until this file existed, every test ran only on the author's macOS machine, and the only
+# OS-gated test was the macOS one. The Linux install branches — the systemd unit and the cron
+# @reboot line, i.e. the entire Linux story the README promises — had never been executed by
+# anything but judgment. Adding a runner is what turns "supported" into "checked".
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} · bun ${{ matrix.bun }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        bun: [latest]
+        include:
+          # The floor the installer accepts. Kept in the matrix so a feature that silently needs a
+          # newer Bun (in-process zstd is the one that already did) fails here rather than in the
+          # field, where it presents as "Codex sessions are missing" and nothing else.
+          - os: ubuntu-latest
+            bun: "1.2.0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ matrix.bun }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun tsc --noEmit
+
+      - name: Shell syntax
+        run: |
+          for script in setup.sh daemon/*.sh hooks/*.sh; do
+            bash -n "$script"
+          done
+
+      - name: Test
+        run: bun test
+
+  # The capture loop's one hard dependency is git, and its failure mode is silence: enrollment
+  # cannot tell "git is missing" from "not a git worktree", so a machine without it captures
+  # nothing while doctor stays green. This job asserts that the engine SAYS so.
+  missing-git:
+    name: doctor reports a missing git
+    runs-on: ubuntu-latest
+    container: oven/bun:1-alpine
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report the dependency instead of failing silently
+        run: |
+          set -eu
+          # Alpine's bun image has no git. Run doctor with an empty PATH for the well-known
+          # directories too, so tool-locate genuinely comes up empty.
+          output="$(bun src/cli.ts doctor --harness all 2>&1 || true)"
+          printf '%s\n' "$output"
+          printf '%s' "$output" | grep -q 'git was not found' || {
+            echo "::error::doctor did not report the missing git dependency"
+            exit 1
+          }
