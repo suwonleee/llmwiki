@@ -603,13 +603,16 @@ export function enqueue(
   } else if (
     sourceKind === "opencode" &&
     row.source_kind === "opencode" &&
-    row.file_id !== null &&
-    currentFileId !== null &&
-    row.file_id !== currentFileId
+    ((row.file_id !== null && currentFileId !== null && row.file_id !== currentFileId) ||
+      (size > 0 && size < row.byte_offset))
   ) {
     // A retained distilled ledger row may outlive the 30-day plaintext export. If that logical
-    // path is later recreated with only newer messages, inode identity—not byte size—proves it is
-    // a new generation. This remains correct across a crash between file creation and enqueue.
+    // path is later recreated with only newer messages, inode identity proves it is a new
+    // generation — except where stat cannot: Linux runtimes without statx birthtime report
+    // birthtimeMs=0, and a delete+recreate routinely REUSES the freed inode, so both generations
+    // stat to the same `dev:ino:0`. Exports are append-only, so a body shorter than the recorded
+    // watermark is itself positive evidence of regeneration — the fallback that needs no stat
+    // support. Both remain correct across a crash between file creation and enqueue.
     db.run(
       "UPDATE capture_queue SET byte_offset=0, status='pending', distilled_at=NULL, " +
         "repo=COALESCE(repo, ?), session_id=COALESCE(session_id, ?), lines=?, file_id=? " +
