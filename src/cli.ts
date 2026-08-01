@@ -26,6 +26,9 @@ import {
   verifyHarnessPath,
   type Harness,
 } from "./engine/harness-locate.ts";
+import { restartDaemon } from "./engine/daemon-control.ts";
+import { envValueOutsideRepoFiles } from "./engine/env-policy.ts";
+import { autoConnect, renderHandoff } from "./engine/harness-autoconnect.ts";
 import * as autoupdate from "./engine/autoupdate.ts";
 import { review } from "./engine/review.ts";
 import { buildContext } from "./engine/context.ts";
@@ -1153,19 +1156,19 @@ function locateReport(harness: Harness): void {
     console.log(`  [${harness}] ${mark} ${path} (${origin}) — ${detail}`);
   const candidates: { origin: string; path: string }[] = [];
   if (harness === "claude") {
-    const env = process.env.CLAUDE_CONFIG_DIR?.trim();
+    const env = envValueOutsideRepoFiles("CLAUDE_CONFIG_DIR")?.trim();
     if (env) candidates.push({ origin: "env CLAUDE_CONFIG_DIR", path: env });
     for (const dir of persistedClaudeDirs()) candidates.push({ origin: "persisted", path: dir });
     for (const dir of claudeConfigDirs())
       if (!candidates.some((c) => c.path === dir)) candidates.push({ origin: "default scan", path: dir });
   } else if (harness === "codex") {
-    const env = process.env.CODEX_HOME?.trim();
+    const env = envValueOutsideRepoFiles("CODEX_HOME")?.trim();
     const persisted = persistedCodexHome();
     if (env) candidates.push({ origin: "env CODEX_HOME", path: env });
     else if (persisted) candidates.push({ origin: "persisted", path: persisted });
     else candidates.push({ origin: "default", path: codexHome() });
   } else {
-    const env = process.env.OPENCODE_DB?.trim();
+    const env = envValueOutsideRepoFiles("OPENCODE_DB")?.trim();
     const persisted = persistedOpencodeDb();
     if (env) candidates.push({ origin: "env OPENCODE_DB", path: env });
     else if (persisted) candidates.push({ origin: "persisted", path: persisted });
@@ -1178,16 +1181,15 @@ function locateReport(harness: Harness): void {
     line(v.ok ? "✅" : "⚠️", c.origin, c.path, v.detail);
   }
   if (verified === 0) {
-    const what =
-      harness === "claude"
-        ? "its config dir (holds projects/ with *.jsonl transcripts; default ~/.claude*, env $CLAUDE_CONFIG_DIR)"
-        : harness === "codex"
-          ? "its home (holds sessions/ or state_*.sqlite; default ~/.codex, env $CODEX_HOME)"
-          : "its database (opencode*.db; default $XDG_DATA_HOME/opencode/, env $OPENCODE_DB)";
-    console.log(`  [${harness}] ⚠️ no verified data location — if this harness IS installed here, its data lives at a nonstandard path:`);
-    console.log(`  [${harness}]    1) find ${what}`);
-    console.log(`  [${harness}]    2) verify:  llmwiki locate ${harness} <path>   (read-only)`);
-    console.log(`  [${harness}]    3) persist: llmwiki connect ${harness} <path>  (refused unless verification passes)`);
+    // Nothing deterministic resolved. Before asking anyone anything, look in the places the default
+    // predictably misses (WSL's Windows profile, XDG variants) and persist a winner outright. Only
+    // an empty or ambiguous result reaches a human, and it arrives as the one handoff format.
+    const auto = autoConnect(harness);
+    if (auto.status === "connected") {
+      console.log(`  [${harness}] ✅ ${auto.detail}`);
+      return;
+    }
+    for (const line of renderHandoff(auto)) console.log(line);
   }
 }
 
@@ -1197,9 +1199,13 @@ function cmdLocate(p: Parsed) {
   if (first && !harness) die(`locate [${HARNESSES.join("|")}] [path] — unknown harness: ${first}`);
   const candidate = p.positionals[1];
   if (candidate) {
-    const v = verifyHarnessPath(harness!, candidate);
-    console.log(`  [${harness}] ${v.ok ? "✅" : "❌"} ${candidate} — ${v.detail}`);
-    if (v.ok) console.log(`  [${harness}] persist it with: llmwiki connect ${harness} ${JSON.stringify(candidate)}`);
+    // Resolve BEFORE verifying, and echo the resolved path in the connect line. `connect` resolves
+    // against its own cwd, so verifying `./x` here and persisting `./x` from another directory used
+    // to record a location that was never checked.
+    const path = resolve(candidate);
+    const v = verifyHarnessPath(harness!, path);
+    console.log(`  [${harness}] ${v.ok ? "✅" : "❌"} ${path} — ${v.detail}`);
+    if (v.ok) console.log(`  [${harness}] persist it with: llmwiki connect ${harness} ${JSON.stringify(path)}`);
     else process.exit(1);
     return;
   }
@@ -1225,8 +1231,10 @@ function cmdConnect(p: Parsed) {
     die(`refused: ${r.detail}\n  (nothing was persisted — verify a candidate first: llmwiki locate ${harness} <path>)`);
   }
   console.log(`✓ ${harness} data location persisted (${r.saved}) — ${r.detail}`);
-  console.log("  restart the capture daemon so the running sweep sees it (re-run ./setup.sh, or on macOS:");
-  console.log("  launchctl kickstart -k gui/$UID/com.llmwiki.daemon)");
+  // Do the restart rather than describing one. The daemon re-reads persisted locations every sweep
+  // regardless, so this is about immediacy (the watch list is built at start), and every outcome
+  // here is already a working one.
+  console.log(`  ${restartDaemon().detail}`);
 }
 
 // Commands the HARNESS runs automatically on every session/turn. They resolve the repository

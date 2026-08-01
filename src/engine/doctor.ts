@@ -22,7 +22,20 @@ import { effectiveStateRoot, probeStateRoot } from "./state-dir.ts";
 import { inspectEnrollment } from "./enrollment.ts";
 import { detectConfigDrift } from "./migrate.ts";
 import { liveEngineVersion, readUpdateCheck, updateAvailable } from "./update-check.ts";
-import { persistedClaudeDirs, persistedCodexHome, persistedOpencodeDb, verifyHarnessPath, type Harness } from "./harness-locate.ts";
+import {
+  HARNESSES,
+  persistedClaudeDirs,
+  persistedCodexHome,
+  persistedOpencodeDb,
+  verifyHarnessPath,
+  type Harness,
+} from "./harness-locate.ts";
+import { watchProcessRunning } from "./daemon-control.ts";
+import { autoConnect, harnessInstalled, renderHandoff } from "./harness-autoconnect.ts";
+import { locateGit } from "./tool-locate.ts";
+import { gitMissingDetail } from "./enrollment.ts";
+import { zstdAvailability } from "./sources/codex.ts";
+import { envValueOutsideRepoFiles } from "./env-policy.ts";
 
 const HOME = process.env.HOME?.trim() || homedir();
 const CORE = [
@@ -409,7 +422,7 @@ export function reportEngineUpdate(): void {
   }
 }
 
-export function reportCaptureHealth(): number {
+export function reportCaptureHealth(harness: Harness | "all" = "all"): number {
   let issues = 0;
   const root = effectiveStateRoot();
   const state = probeStateRoot(root);
@@ -437,6 +450,43 @@ export function reportCaptureHealth(): number {
       console.log(`  [capture]    re-verify with \`llmwiki locate ${harness} <path>\` or drop it: \`llmwiki connect ${harness} --forget\``);
       issues += 1;
     }
+  }
+
+  // An override that is being ignored must say so. The repo-env guard silently drops a variable
+  // declared in the cwd repository's env files (the value may be attacker-supplied), and "silently"
+  // is the problem for the legitimate direnv user, who is otherwise left debugging an export that
+  // does nothing. Informational, never an issue: the engine is behaving exactly as designed.
+  for (const name of ["CODEX_HOME", "CLAUDE_CONFIG_DIR", "OPENCODE_DB", "XDG_DATA_HOME", "XDG_CONFIG_HOME"]) {
+    if (process.env[name] !== undefined && envValueOutsideRepoFiles(name) === undefined) {
+      console.log(
+        `  [capture] • $${name} is declared in this repository's env files, so the engine ignores it ` +
+          `(a tracked .env must not steer machine-level discovery) — export it from your shell if you meant it`,
+      );
+    }
+  }
+
+  // Repair before complaint. setup.sh runs doctor on both sides of the install, so this is the
+  // natural place for the extended scan to connect an unusual machine — no prompt, no agent, no
+  // question anyone has to answer. Only what it CANNOT decide reaches a human.
+  //
+  // Deliberately not counted as an issue: a harness installed but never used has no data to verify
+  // (that is the whole point of requiring evidence over a directory name), and failing setup over
+  // an empty profile would block an install that is working exactly as intended.
+  for (const h of HARNESSES) {
+    // Both gates come BEFORE autoConnect, because autoConnect PERSISTS. Scanning for a harness the
+    // user did not ask about (--harness codex must not touch claude), or one whose CLI is not even
+    // installed here, could auto-connect a mounted profile that belongs to someone else — the
+    // installed-check is the strongest ownership signal available and it must gate the decision,
+    // not merely the message.
+    if (harness !== "all" && harness !== h) continue;
+    if (!harnessInstalled(h)) continue; // a harness that is not installed is not a defect
+    const auto = autoConnect(h);
+    if (auto.status === "already") continue;
+    if (auto.status === "connected") {
+      console.log(`  [capture] ✅ ${h} ${auto.detail}`);
+      continue;
+    }
+    for (const line of renderHandoff(auto, "  ")) console.log(line);
   }
 
   const health = healthReadOnly();
@@ -549,14 +599,36 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
     console.log(`  [core] ${ok ? "✅" : "❌"} ${rel}`);
   }
 
+  // External executables. `git` is the one hard dependency of the capture loop — enrollment.ts asks
+  // it whether a path is a worktree, and "git is missing" is indistinguishable from "not a
+  // worktree", so without this line the whole engine reads as installed-and-idle. tool-locate
+  // already searched past PATH before we say a word.
+  const git = locateGit();
+  if (git.path === null) {
+    console.log(`  [deps] ❌ ${gitMissingDetail()}`);
+    console.log("  [deps]    until then every session routes as \"not a git worktree\" and nothing is captured");
+    issues += 1;
+  } else {
+    console.log(`  [deps] ✅ git: ${git.path}`);
+  }
+  // Codex compresses cold rollouts to .jsonl.zst. Without any way to decompress them those sessions
+  // are skipped in silence, which looks identical to having none.
+  if (harness === "all" || harness === "codex") {
+    const zstd = zstdAvailability();
+    if (zstd.available) console.log(`  [deps] ✅ zstd: ${zstd.via}`);
+    else {
+      console.log("  [deps] ⚠️ no zstd (Bun <1.2, no node:zlib zstd, no `zstd` binary) — Codex's compressed");
+      console.log("  [deps]    rollouts are skipped each sweep. Upgrade Bun, or install zstd; nothing is lost meanwhile.");
+    }
+  }
+
   // daemon installed? (OS-aware: macOS launchd / Linux systemd / cron·nohup)
   if (process.platform === "darwin") {
     // What matters is whether capture is RUNNING, not which supervisor is holding it. macOS
     // without a usable launchd falls back to the same plain background process Linux uses, so the
     // check accepts that state too — reporting it honestly as degraded (it will not survive a
     // reboot) rather than as a failure, which would fail `setup.sh` over a working loop.
-    const pgrep = tryRun(["pgrep", "-f", "daemon/watch.ts"]);
-    const unsupervised = pgrep.ok && pgrep.code === 0;
+    const unsupervised = watchProcessRunning();
     const r = existsSync(PLIST) ? tryRun(["launchctl", "list"]) : { ok: false, stdout: "", code: 1 };
     if (existsSync(PLIST)) console.log(`  [daemon] ✅ plist installed: ${PLIST}`);
     if (r.ok && r.stdout.includes(LABEL)) {
@@ -581,8 +653,7 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
   } else {
     // Linux: prefer a systemd --user unit; else accept a running watch.ts (cron/nohup fallback)
     const unit = join(HOME, ".config", "systemd", "user", "llmwiki-daemon.service");
-    const pgrep = tryRun(["pgrep", "-f", "daemon/watch.ts"]);
-    const watchRunning = pgrep.ok && pgrep.code === 0;
+    const watchRunning = watchProcessRunning();
     if (existsSync(unit)) {
       const sc = tryRun(["systemctl", "--user", "is-active", "--quiet", "llmwiki-daemon.service"]);
       const active = sc.ok ? sc.code === 0 : watchRunning;
@@ -603,7 +674,7 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
   }
 
   reportEngineUpdate();
-  issues += reportCaptureHealth();
+  issues += reportCaptureHealth(harness);
 
   // SessionStart read-injection hooks across profiles. A Codex-only setup must not fail
   // because an independently managed Claude profile points at another llmwiki clone.
@@ -704,7 +775,7 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
   // exits 1" and a repair command for a harness the person does not run. A red line over a fine
   // install is the same defect as a green line over a dead one. The directory is still reported
   // — as information, not as a defect of this install.
-  const codexHomeDir = process.env.CODEX_HOME?.trim() || join(HOME, ".codex");
+  const codexHomeDir = envValueOutsideRepoFiles("CODEX_HOME")?.trim() || join(HOME, ".codex");
   const inspectCodex = harness === "codex" || (harness === "all" && Bun.which("codex") !== null);
   if (harness === "all" && !inspectCodex && existsSync(codexHomeDir)) {
     console.log(`  [codex] • ${codexHomeDir} exists but the Codex CLI is not on PATH — not inspected`);
@@ -796,7 +867,7 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
   // without the CLI is reported as information; failing on it would red-flag an install that is
   // correct for the harnesses this machine actually runs.
   if (harness === "all" || harness === "opencode") {
-    const configRoot = process.env.XDG_CONFIG_HOME?.trim() || join(HOME, ".config");
+    const configRoot = envValueOutsideRepoFiles("XDG_CONFIG_HOME")?.trim() || join(HOME, ".config");
     const opencodeRoot = join(configRoot, "opencode");
     const status = inspectOpenCodeInstall(configRoot, HOME);
     if (harness === "all" && !status.installed && existsSync(opencodeRoot)) {

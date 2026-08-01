@@ -20,9 +20,10 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { RETIRED_OPENCODE_COMMANDS } from "../engine/install-history.ts";
 import { CLONE_ROOT } from "../engine/paths.ts";
+import { envValueOutsideRepoFiles } from "../engine/env-policy.ts";
 
 const HOME = process.env.HOME?.trim() || homedir();
-const CONFIG_ROOT = process.env.XDG_CONFIG_HOME?.trim() || join(HOME, ".config");
+const CONFIG_ROOT = envValueOutsideRepoFiles("XDG_CONFIG_HOME")?.trim() || join(HOME, ".config");
 const OPENCODE_ROOT = join(CONFIG_ROOT, "opencode");
 const PLUGIN = join(OPENCODE_ROOT, "plugin", "llmwiki.ts");
 const COMMANDS_ROOT = join(OPENCODE_ROOT, "commands");

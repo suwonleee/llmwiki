@@ -42,6 +42,8 @@ const ALLOWED_MUTATORS: Record<string, string> = {
   "engine/claude.ts": "creates and removes the throwaway cwd for a generative subprocess",
   "engine/doctor.ts": "repairs HARNESS configuration (~/.claude, ~/.codex), never a repository",
   "engine/claude-commands.ts": "writes the /wiki-* command files into a Claude profile (harness config), reading only this clone's own skill/ sources",
+  "engine/sqlite-open.ts":
+    "copies a foreign harness database into a private OS temp dir when its own directory is not writable, and removes that copy on close — never repository content",
   "engine/bench.ts": "engine-development benchmark writing its own report next to the corpus",
   "engine/compare.ts": "engine-development A/B harness building disposable temp workspaces",
   "daemon/wire.ts": "installs/removes Claude Code hooks and commands in the user's harness config",
@@ -69,6 +71,10 @@ const ALLOWED_READERS: Record<string, string> = {
   "engine/sources/routing.ts": "bounded routing reads over machine-local transcripts",
   "engine/session-model.ts":
     "bounded tail reads of machine-local transcripts to learn which model the session ran on — a model id, never message content",
+  "engine/tool-locate.ts": "stats machine-local bin directories looking for the git executable",
+  "engine/daemon-control.ts": "reads /proc to tell whether this clone's own capture daemon is running",
+  "engine/harness-autoconnect.ts":
+    "enumerates machine-local harness data locations (XDG dirs, mounted Windows profiles) so an unusual machine connects without being asked — every candidate is then verified by harness-locate, never read as content",
 };
 
 function sourceFiles(dir: string, out: string[] = []): string[] {
@@ -166,12 +172,41 @@ describe("tests cannot reach the developer's supervisor", () => {
       const src = readFileSync(join(dir, file), "utf-8");
       const runsInstaller = /spawnSync\(\[[^\]]*(setup\.sh|install\.sh)/s.test(src) || /"setup\.sh"|"install\.sh"/.test(src);
       if (!runsInstaller) continue;
-      // "mentions launchctl at all" is the heuristic: every neutralization in this suite defines a
-      // shim by that name, whether as an object key, a tuple, or the shared helper.
-      const neutralized = src.includes("inertSupervisorBin") || src.includes("launchctl");
+      // Any of the three ways this suite neutralizes a supervisor: the inert-shim helper, a
+      // hand-written `launchctl` shim, or `supervisorStubs()` — which supplies whichever supervisor
+      // THIS platform's install branch actually reaches (launchctl on macOS, systemctl on Linux)
+      // so the run never falls through to the cron path and the developer's real crontab.
+      const neutralized =
+        src.includes("inertSupervisorBin") || src.includes("launchctl") || src.includes("supervisorStubs");
       if (!neutralized) offenders.push(file);
     }
     expect(offenders).toEqual([]);
+  });
+
+  // Bun autoloads the cwd's `.env`, and the cwd is the user's repository — so any env var that
+  // steers WHERE this engine reads or writes must go through envValueOutsideRepoFiles, which
+  // refuses values a repository file could have supplied. The security review found the newest
+  // module reading these raw, bypassing the guard the same changeset added to the adapters; this
+  // test makes that a compile-time-visible review decision instead of a recurring audit finding.
+  test("harness-steering env vars are read only through the repo-env guard", () => {
+    const GUARDED = ["CODEX_HOME", "CLAUDE_CONFIG_DIR", "OPENCODE_DB", "XDG_DATA_HOME", "XDG_CONFIG_HOME"];
+    const pattern = new RegExp(`process\\.env\\.(${GUARDED.join("|")})\\b`);
+    const offenders: string[] = [];
+    for (const path of sourceFiles(SRC)) {
+      const rel = relative(SRC, path).replace(/\\/g, "/");
+      if (rel === "engine/env-policy.ts") continue;
+      // doctor's ignored-override NOTICE reads process.env[name] dynamically to compare against the
+      // guard's answer — that read never steers a path, it reports the discrepancy. The static scan
+      // matches direct member access, which is the steering form.
+      const text = readFileSync(path, "utf-8");
+      const hit = pattern.exec(text);
+      if (hit) offenders.push(`${rel} reads process.env.${hit[1]} directly`);
+    }
+    expect(
+      offenders,
+      "Route the read through envValueOutsideRepoFiles (src/engine/env-policy.ts) so a tracked " +
+        ".env cannot steer machine-level discovery, wiring, or persistence.",
+    ).toEqual([]);
   });
 
   // `llmwiki connect <harness> <path>` declares where transcripts may be READ. Wiring — the

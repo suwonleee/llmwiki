@@ -24,9 +24,10 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { RETIRED_CODEX_SKILLS } from "../engine/install-history.ts";
 import { CLONE_ROOT } from "../engine/paths.ts";
+import { envValueOutsideRepoFiles } from "../engine/env-policy.ts";
 
 const HOME = process.env.HOME?.trim() || homedir();
-const CODEX_HOME = process.env.CODEX_HOME?.trim() || join(HOME, ".codex");
+const CODEX_HOME = envValueOutsideRepoFiles("CODEX_HOME")?.trim() || join(HOME, ".codex");
 const HOOKS_PATH = join(CODEX_HOME, "hooks.json");
 const SKILLS_ROOT = join(HOME, ".agents", "skills");
 const BIN_DIR = process.env.LLMWIKI_BIN_DIR?.trim() || join(HOME, ".local", "bin");
@@ -349,7 +350,7 @@ function launcherConflict(): boolean {
 }
 
 function openCodeUsesCurrentClone(): boolean {
-  const configRoot = process.env.XDG_CONFIG_HOME?.trim() || join(HOME, ".config");
+  const configRoot = envValueOutsideRepoFiles("XDG_CONFIG_HOME")?.trim() || join(HOME, ".config");
   try {
     const plugin = readFileSync(join(configRoot, "opencode", "plugin", "llmwiki.ts"), "utf8");
     return plugin.includes("llmwiki-opencode-managed") && plugin.includes(`root=${CLONE_ROOT}`);

@@ -45,6 +45,26 @@ describe("doctor harness presence (--harness all)", () => {
     home = join(dir, "home");
     bin = join(dir, "bin");
     mkdirSync(bin, { recursive: true });
+    // A daemon this sandbox can see as healthy, on either platform.
+    //
+    // The assertion below is about HARNESS issues, and the exit code is the total count — so the
+    // daemon has to be accounted for or the test is really asking "does the developer happen to
+    // have a capture daemon running right now?". It used to pass for exactly that reason: doctor
+    // matched any clone's watch.ts, so an unrelated daemon on the developer's machine stood in for
+    // this sandbox's. It is clone-specific now (and was always absent in CI), so the sandbox
+    // supplies its own supervisor instead of borrowing one.
+    mkdirSync(join(home, "Library", "LaunchAgents"), { recursive: true });
+    writeFileSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"), "<plist/>\n");
+    mkdirSync(join(home, ".config", "systemd", "user"), { recursive: true });
+    writeFileSync(join(home, ".config", "systemd", "user", "llmwiki-daemon.service"), "[Service]\n");
+    for (const [name, body] of [
+      ["launchctl", "#!/bin/sh\nif [ \"${1:-}\" = list ]; then printf '0\\t0\\tcom.llmwiki.daemon\\n'; fi\nexit 0\n"],
+      ["systemctl", "#!/bin/sh\nexit 0\n"], // `is-active --quiet` succeeds → the unit is running
+    ] as const) {
+      const file = join(bin, name);
+      writeFileSync(file, body);
+      chmodSync(file, 0o755);
+    }
     // A Codex home the person left behind, with no llmwiki wiring in it at all.
     mkdirSync(join(home, ".codex", "sessions"), { recursive: true });
     // …and an OpenCode global config in the same state.
