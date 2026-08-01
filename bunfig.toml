@@ -1,0 +1,3 @@
+[test]
+# Pins LLMWIKI_STATE_DIR to a per-run temp directory; see tests/support/preload.ts for why.
+preload = ["./tests/support/preload.ts"]

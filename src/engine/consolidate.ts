@@ -34,6 +34,7 @@ import { Linter, type LintIssue, type WikiIndexLike } from "./lint.ts";
 import { MODEL_HEAVY, MODEL_LIGHT } from "./models.ts";
 import { generativeModel } from "./session-model.ts";
 import { ensureRepoDir, readRepoFile, removeRepoFile, repoPathAllowed, writeRepoFile } from "./repo-write.ts";
+import { projectStatePath, readProjectState, writeProjectState } from "./project-state.ts";
 
 // WRITE drafts the merged page (cheap tier); VERIFY adjudicates the added claims (heavy tier,
 // independent — same independence guarantee as the log gate). Both env-overridable via models.ts.
@@ -51,14 +52,14 @@ interface ConsolidatedState {
   [transcriptPath: string]: number; // byte offset consolidated up to
 }
 
-const CONSOLIDATED_STATE_REL = join(".llmwiki", "consolidated.json");
+const CONSOLIDATED_STATE_NAME = "consolidated.json";
 function statePath(root: string): string {
-  return join(root, CONSOLIDATED_STATE_REL);
+  return projectStatePath(root, CONSOLIDATED_STATE_NAME);
 }
 
 function loadState(root: string): ConsolidatedState {
   try {
-    const raw = readRepoFile(root, CONSOLIDATED_STATE_REL);
+    const raw = readProjectState(root, CONSOLIDATED_STATE_NAME);
     return raw === null ? {} : (JSON.parse(raw) as ConsolidatedState);
   } catch {
     return {};
@@ -66,8 +67,7 @@ function loadState(root: string): ConsolidatedState {
 }
 
 function saveState(root: string, st: ConsolidatedState): void {
-  ensureRepoDir(root, ".llmwiki");
-  writeRepoFile(root, CONSOLIDATED_STATE_REL, JSON.stringify(st, null, 2));
+  writeProjectState(root, CONSOLIDATED_STATE_NAME, JSON.stringify(st, null, 2));
 }
 
 // Sessions this repo has seen whose new bytes have not yet been folded into the topic layer.

@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { basename, join, relative, resolve, sep } from "node:path";
+import { projectStateExists, projectStatePath, quarantineProjectState } from "./project-state.ts";
 import * as capture from "./capture.ts";
 import { COLD_INDEX_RELATIVE_PATH } from "./cold-index.ts";
 import { getConfig, type WikiConfig } from "./config.ts";
@@ -124,7 +125,7 @@ function walkKnowledgeFiles(root: string, cfg: WikiConfig): Map<string, string |
 
 function inspectIndex(root: string, cfg: WikiConfig): IndexInspection {
   const index = new WikiIndex(root);
-  if (!repoFileExists(root, join(".llmwiki", "index.db"))) {
+  if (!projectStateExists(root, "index.db")) {
     return {
       health: { status: "missing", missingFromIndex: [], changedOnDisk: [], deletedFromDisk: [] },
       database: null,
@@ -135,7 +136,7 @@ function inspectIndex(root: string, cfg: WikiConfig): IndexInspection {
 
   let db: Database | null = null;
   try {
-    db = new Database(repoPath(root, join(".llmwiki", "index.db")), { readonly: true });
+    db = new Database(projectStatePath(root, "index.db"), { readonly: true });
     const rows = db
       .query<{ readonly relative_path: string; readonly content_hash: string | null }, []>(
         "SELECT relative_path, content_hash FROM documents WHERE source_kind='wiki'",
@@ -242,25 +243,15 @@ function inspectContinuity(root: string): WikiDoctorContinuityHealth {
 }
 
 function quarantineDerivedIndex(root: string): string[] {
-  const indexDir = join(root, ".llmwiki");
-  const recovery = ensureRepoDir(root, join(".llmwiki", "recovery"));
   const stamp = new Date().toISOString().replaceAll(/[:.]/g, "-");
-  const moved: string[] = [];
-  for (const name of ["index.db", "index.db-wal", "index.db-shm"]) {
-    if (!repoFileExists(root, join(".llmwiki", name))) continue;
-    const target = join(recovery, `${name}.${stamp}.bak`);
-    renameRepoPath(root, join(".llmwiki", name), join(".llmwiki", "recovery", `${name}.${stamp}.bak`));
-    moved.push(target);
-  }
-  return moved;
+  return quarantineProjectState(root, ["index.db", "index.db-wal", "index.db-shm"], stamp);
 }
 
 function derivedIndexNeedsRebuild(root: string): boolean {
-  const relativePath = join(".llmwiki", "index.db");
-  if (!repoFileExists(root, relativePath)) return false;
+  if (!projectStateExists(root, "index.db")) return false;
   let db: Database | null = null;
   try {
-    db = new Database(repoPath(root, relativePath), { readonly: true });
+    db = new Database(projectStatePath(root, "index.db"), { readonly: true });
     return !inspectDatabaseHealth(db).integrity.ok;
   } catch {
     return true;

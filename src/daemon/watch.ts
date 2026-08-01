@@ -10,6 +10,7 @@ import { existsSync } from "node:fs";
 import * as capture from "../engine/capture.ts";
 import { reassertClaudeReadHooks } from "../engine/doctor.ts";
 import { checkEngineUpdate } from "../engine/update-check.ts";
+import { runProjectMaintenance } from "../engine/project-maintenance.ts";
 import { isEnrolled, isEnrolledFresh, resetEnrollmentCache } from "../engine/enrollment.ts";
 import {
   sources,
@@ -153,6 +154,7 @@ async function pollLoop(): Promise<void> {
     }
     reassertWiringIfDue();
     checkEngineUpdateIfDue();
+    maintainProjectStateIfDue();
     await Bun.sleep(POLL_SECONDS * 1000);
   }
 }
@@ -191,6 +193,32 @@ function checkEngineUpdateIfDue(): void {
     else log("update check: no answer (offline, no origin, or unparsable) — retrying tomorrow");
   } catch (e) {
     log(`update check FAILED (will retry tomorrow): ${e}`);
+  }
+}
+
+// Per-project index maintenance — compact, evict idle, collect orphans (engine/project-maintenance.ts).
+// Daily, from the loop ONLY, for the same reason as the two above: `--once` runs inside tests and
+// one-shot sweeps, and neither should delete anything. This is the whole point of holding project
+// state centrally — while it lived inside each repository the daemon could not see it, so nothing
+// ever reclaimed it and every index grew until a human happened to run /wiki-deep in that repo.
+const PROJECT_MAINTENANCE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+let lastProjectMaintenanceAt = 0;
+
+function maintainProjectStateIfDue(): void {
+  const now = Date.now();
+  if (now - lastProjectMaintenanceAt < PROJECT_MAINTENANCE_INTERVAL_MS) return;
+  lastProjectMaintenanceAt = now;
+  try {
+    const r = runProjectMaintenance();
+    if (r.compacted + r.evicted + r.collected > 0) {
+      log(
+        `index maintenance: compacted ${r.compacted} (${r.reclaimedBytes}B) · ` +
+          `evicted ${r.evicted} (${r.evictedBytes}B, rebuilt on next use) · ` +
+          `collected ${r.collected} orphan(s) (${r.collectedBytes}B)`,
+      );
+    }
+  } catch (e) {
+    log(`index maintenance FAILED (will retry tomorrow): ${e}`);
   }
 }
 

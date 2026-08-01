@@ -1,8 +1,8 @@
 import { join } from "node:path";
 import type { Gap } from "./gaps.ts";
-import { ensureRepoDir, readRepoFile, writeRepoFile } from "./repo-write.ts";
+import { projectStatePath, readProjectState, writeProjectState } from "./project-state.ts";
 
-export const GAP_STATE_RELATIVE_PATH = join(".llmwiki", "gap-queue-state.json");
+export const GAP_STATE_NAME = "gap-queue-state.json";
 
 type GapState = {
   readonly version: 1;
@@ -41,14 +41,14 @@ function parseGapState(value: unknown): readonly Gap[] | null {
 }
 
 export function gapStatePath(root: string): string {
-  return join(root, GAP_STATE_RELATIVE_PATH);
+  return projectStatePath(root, GAP_STATE_NAME);
 }
 
-// Engine state that lives INSIDE the user's repository (.llmwiki/) is still repository-relative
-// I/O: a `.llmwiki` symlink planted by someone else's commit must neither be read through nor
-// written through. Both directions go via the boundary.
+// Derived state is engine-held (project-state.ts). A non-git directory keeps the legacy in-repo
+// layout, and there the boundary still applies: a `.llmwiki` symlink planted by someone else's
+// commit must neither be read through nor written through.
 export function loadResolvedGapState(root: string): readonly Gap[] | null {
-  const raw = readRepoFile(root, GAP_STATE_RELATIVE_PATH);
+  const raw = readProjectState(root, GAP_STATE_NAME);
   if (raw === null) return null;
   try {
     return parseGapState(JSON.parse(raw) as unknown);
@@ -63,6 +63,5 @@ export function writeResolvedGapState(root: string, gaps: readonly Gap[]): void 
     .filter((gap) => gap.status === "resolved")
     .sort((a, b) => a.hash.localeCompare(b.hash));
   const state: GapState = { version: 1, resolved };
-  ensureRepoDir(root, ".llmwiki");
-  writeRepoFile(root, GAP_STATE_RELATIVE_PATH, JSON.stringify(state));
+  writeProjectState(root, GAP_STATE_NAME, JSON.stringify(state));
 }

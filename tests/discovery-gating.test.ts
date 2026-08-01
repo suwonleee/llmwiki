@@ -21,6 +21,7 @@ import { join } from "node:path";
 import { ROUTE_MAX_BYTES, ROUTE_MAX_RECORDS, routeNeedsMaterialization } from "../src/engine/source.ts";
 import { claudeJsonlSource } from "../src/engine/sources/claude.ts";
 import { codexSource } from "../src/engine/sources/codex.ts";
+import { setEffectiveStateRoot } from "../src/engine/state-dir.ts";
 import { opencodeSource, setExportDir } from "../src/engine/sources/opencode.ts";
 import { resetEnrollmentCache } from "../src/engine/enrollment.ts";
 import { enrollRepo, makeGitRepo } from "./support/git-repo.ts";
@@ -41,6 +42,7 @@ function setEnv(name: string, value: string): void {
 }
 
 afterEach(() => {
+  setEffectiveStateRoot(null); // setExportDir overrides it process-wide; children only see the env
   for (const [name, value] of Object.entries(saved)) {
     if (value === undefined) delete process.env[name];
     else process.env[name] = value;

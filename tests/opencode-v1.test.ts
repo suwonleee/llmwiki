@@ -14,6 +14,7 @@ import { appendFileSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSy
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setEffectiveStateRoot } from "../src/engine/state-dir.ts";
 import { opencodeSource, setExportDir } from "../src/engine/sources/opencode.ts";
 import { enrollRepo, makeGitRepo } from "./support/git-repo.ts";
 import * as capture from "../src/engine/capture.ts";
@@ -88,6 +89,7 @@ beforeEach(() => {
   repo = enrollRepo(makeGitRepo(join(dir, "repo")));
 });
 afterEach(() => {
+  setEffectiveStateRoot(null); // setExportDir overrides it process-wide; children only see the env
   if (prevEnv === undefined) delete process.env.OPENCODE_DB;
   else process.env.OPENCODE_DB = prevEnv;
   rmSync(dir, { recursive: true, force: true });

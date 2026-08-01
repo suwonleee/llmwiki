@@ -21,7 +21,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { opencodeSource, setExportDir, opencodeDbPaths } from "../src/engine/sources/opencode.ts";
 import { enrollRepo, makeGitRepo } from "./support/git-repo.ts";
-import { ensureOwnedStateRoot } from "../src/engine/state-dir.ts";
+import { ensureOwnedStateRoot, setEffectiveStateRoot } from "../src/engine/state-dir.ts";
 import * as capture from "../src/engine/capture.ts";
 
 let dir: string;
@@ -57,6 +57,7 @@ beforeEach(() => {
   seedDb();
 });
 afterEach(() => {
+  setEffectiveStateRoot(null); // setExportDir overrides it process-wide; children only see the env
   if (prevEnv === undefined) delete process.env.OPENCODE_DB;
   else process.env.OPENCODE_DB = prevEnv;
   rmSync(dir, { recursive: true, force: true });

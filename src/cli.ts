@@ -52,6 +52,7 @@ import { runArm, loadArm, judgeArms } from "./engine/compare.ts";
 import { CLONE_ROOT } from "./engine/paths.ts";
 import { existsSync, readFileSync, statSync, type Stats } from "node:fs";
 import { join, resolve } from "node:path";
+import { ensureProjectStateDir, resolveProjectStateLocation } from "./engine/project-state.ts";
 
 // User-facing CLI output adapts to LLMWIKI_LANG (default English, Korean when set) — same
 // policy as the cold-start context/digest. LLM-facing prompts stay English by design.
@@ -726,6 +727,27 @@ function cmdStatus(p: Parsed) {
 
 // Local runtime state: report it, or delete exactly the artifacts llmwiki created. Reached
 // through `setup.sh --uninstall [--purge-data]`; exposed here so the installed CLI can do it too.
+// Where the engine keeps this project's derived state. Scripts and skills need a way to ask —
+// writing into the repository to find out is exactly what this layout removes.
+function cmdStatePath(p: Parsed) {
+  const root = resolve(p.positionals[0] ?? die("state-path <workspace> [subpath] required"));
+  const sub = p.positionals[1];
+  const location = resolveProjectStateLocation(root);
+  if (p.flags["--ensure"]) {
+    console.log(sub ? ensureProjectStateDir(root, sub) : ensureProjectStateDir(root));
+    return;
+  }
+  if (location === null) {
+    console.error(
+      ko
+        ? "이 저장소에는 아직 엔진 보관 상태가 없다 — 먼저 `llmwiki index`/`init`, 또는 `--ensure` 로 생성"
+        : "no engine-held state for this repository yet — run `llmwiki index`/`init` first, or pass `--ensure`",
+    );
+    process.exit(1);
+  }
+  console.log(sub ? join(location.dir, sub) : location.dir);
+}
+
 function cmdPurgeState(p: Parsed) {
   const dir = capture.stateDir();
   if (!p.flags["--confirm"]) {
@@ -1248,6 +1270,7 @@ const HANDLERS: Record<string, (p: Parsed) => void | Promise<void>> = {
   status: cmdStatus,
   enabled: cmdEnabled,
   "purge-state": cmdPurgeState,
+  "state-path": cmdStatePath,
   config: cmdConfig,
   conventions: cmdConventions,
   migrate: MAINTENANCE_HANDLERS.migrate,

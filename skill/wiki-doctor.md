@@ -14,7 +14,7 @@ $ARGUMENTS
 ## Safety boundary
 
 - The CLI owns safe, deterministic repairs only: missing skeleton files/directories, the
-  rebuildable `.llmwiki/index.db`, citation/link graph, the bounded generated overview section, fully
+  the rebuildable index (engine-held; `llmwiki state-path <repo>`), citation/link graph, the bounded generated overview section, fully
   reflected capture watermarks, and eligible derived-database compaction.
 - Markdown pages are the source of truth. Never rewrite a claim, delete provenance, resolve a
   contradiction, or choose project direction merely to make the report green.

@@ -35,6 +35,8 @@ import { autoConnect, harnessInstalled, renderHandoff } from "./harness-autoconn
 import { locateGit } from "./tool-locate.ts";
 import { gitMissingDetail } from "./enrollment.ts";
 import { zstdAvailability } from "./sources/codex.ts";
+import { listProjectStates } from "./project-state.ts";
+import { summarizeProjectStore } from "./project-maintenance.ts";
 import { envValueOutsideRepoFiles } from "./env-policy.ts";
 
 const HOME = process.env.HOME?.trim() || homedir();
@@ -99,6 +101,11 @@ const CODEX_SKILLS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-d
 const CODEX_MANAGED = "llmwiki-codex-managed";
 const OPENCODE_COMMANDS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"] as const;
 const OPENCODE_MANAGED = "llmwiki-opencode-managed";
+
+/** Sizes in this report are for a human deciding whether to care, not for accounting. */
+function mib(bytes: number): string {
+  return bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MiB` : `${Math.round(bytes / 1024)} KiB`;
+}
 
 export interface CodexInstallStatus {
   installed: boolean;
@@ -619,6 +626,22 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
     else {
       console.log("  [deps] ⚠️ no zstd (Bun <1.2, no node:zlib zstd, no `zstd` binary) — Codex's compressed");
       console.log("  [deps]    rollouts are skipped each sweep. Upgrade Bun, or install zstd; nothing is lost meanwhile.");
+    }
+  }
+
+  // Engine-held per-project state. Scattered indexes could not be enumerated at all, so nothing
+  // could report their size or reclaim them; this section is the visible half of that fix.
+  {
+    const entries = listProjectStates();
+    if (entries.length > 0) {
+      const s = summarizeProjectStore(entries);
+      console.log(`  [index] ${s.projects} project(s) · ${mib(s.bytes)} total`);
+      if (s.evictableBytes > 0) {
+        console.log(`  [index]    ${mib(s.evictableBytes)} idle (rebuilt automatically on next use)`);
+      }
+      if (s.orphans > 0) {
+        console.log(`  [index]    ${s.orphans} orphaned · ${mib(s.orphanBytes)} — the project is gone`);
+      }
     }
   }
 

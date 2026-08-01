@@ -1,5 +1,4 @@
-import { join } from "node:path";
-import { ensureRepoDir, readRepoFile, writeRepoFile } from "./repo-write.ts";
+import { readProjectState, writeProjectState } from "./project-state.ts";
 
 type MaintenanceState = {
   readonly lastNoticeAt: string;
@@ -7,7 +6,7 @@ type MaintenanceState = {
   readonly liveIndexedBytes: number;
 };
 
-const STATE_PATH = join(".llmwiki", "maintenance-state.json");
+const STATE_NAME = "maintenance-state.json";
 const SEVEN_DAYS = 7 * 86_400_000;
 
 function isMaintenanceState(value: unknown): value is MaintenanceState {
@@ -20,7 +19,7 @@ function isMaintenanceState(value: unknown): value is MaintenanceState {
 }
 
 function parseState(root: string): MaintenanceState | null {
-  const raw = readRepoFile(root, STATE_PATH);
+  const raw = readProjectState(root, STATE_NAME);
   if (raw === null) return null;
   try {
     const value: unknown = JSON.parse(raw);
@@ -32,10 +31,9 @@ function parseState(root: string): MaintenanceState | null {
 }
 
 function writeState(root: string, state: MaintenanceState): void {
-  // .llmwiki/ lives inside the user's repository, so this goes through the boundary too: the
-  // atomic temp-and-rename is the boundary's own, and a symlinked .llmwiki is refused.
-  ensureRepoDir(root, ".llmwiki");
-  writeRepoFile(root, STATE_PATH, JSON.stringify(state));
+  // Derived state is engine-held (project-state.ts); a non-git directory still routes through the
+  // repository boundary, so a symlinked .llmwiki is refused either way.
+  writeProjectState(root, STATE_NAME, JSON.stringify(state));
 }
 
 export function maintenanceNotice(root: string, report: { readonly compactionEligible: boolean; readonly liveIndexedBytes: number }, now = new Date()): boolean {

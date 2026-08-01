@@ -9,6 +9,7 @@ import { homedir } from "node:os";
 import { join, relative as relpath, resolve } from "node:path";
 import { storeChunks, chunkText, CHUNKER_VERSION } from "./chunker.ts";
 import { stripEvidence } from "./refs.ts";
+import { ensureProjectStateDir, ensureProjectStatePath, projectStatePath } from "./project-state.ts";
 import { getConfig } from "./config.ts";
 import {
   RepoBoundaryError,
@@ -45,7 +46,6 @@ const TEXT_EXTENSIONS = new Set([
   "toml", "ini", "cfg", "rst", "tex",
 ]);
 const WIKI_DIR = "docs/wiki";
-const INDEX_DB_REL = join(".llmwiki", "index.db");
 
 function lstatSafe(path: string): Stats | null {
   try {
@@ -151,7 +151,14 @@ function* walkFiles(workspaceRoot: string, relativeDir: string | null): Generato
 
 export class WikiIndex {
   root: string;
-  dbPath: string;
+  /**
+   * Resolved on read, never in the constructor: resolution must not create state (turncontext
+   * probes this to decide whether an index exists at all), and WikiIndex is constructed on paths
+   * that may have none.
+   */
+  get dbPath(): string {
+    return projectStatePath(this.root, "index.db");
+  }
   // Rows updated by the current index pass. Staleness is propagated once the pass is complete,
   // so pages edited together never mark each other (flushStaleness).
   private readonly _updatedInPass = new Set<string>();
@@ -169,26 +176,26 @@ export class WikiIndex {
 
   constructor(workspace: string) {
     this.root = resolve(workspace);
-    this.dbPath = join(this.root, ".llmwiki", "index.db");
   }
 
   // ---- lifecycle --------------------------------------------------------
 
   init(): void {
     ensureRepoDir(this.root, WIKI_DIR);
-    ensureRepoDir(this.root, join(".llmwiki", "cache"));
+    ensureProjectStateDir(this.root, "cache");
     const db = this.connect();
     db.close();
   }
 
   connect(): Database {
-    // The index lives inside the user's repository, so its directory and its file are validated
-    // like any other repository path BEFORE SQLite opens them: a `.llmwiki` (or `.llmwiki/index.db`)
-    // symlink planted by someone else's commit would otherwise have SQLite write through it.
-    ensureRepoDir(this.root, ".llmwiki");
-    const dbPath = repoPath(this.root, INDEX_DB_REL);
+    // The index is engine-held derived state (project-state.ts). Wherever it resolves, the file
+    // is validated BEFORE SQLite opens it: a symlink in its place — planted by someone else's
+    // commit in the legacy in-repo layout, or by anything at all in the state root — would
+    // otherwise have SQLite write through it. ensureProjectStateDir routes the legacy branch
+    // through the repository boundary, so containment is still checked there.
+    const dbPath = ensureProjectStatePath(this.root, "index.db");
     if (lstatSafe(dbPath)?.isSymbolicLink()) {
-      throw new RepoBoundaryError(`refusing to open a symlinked index database: ${INDEX_DB_REL}`);
+      throw new RepoBoundaryError(`refusing to open a symlinked index database: ${dbPath}`);
     }
     const db = new Database(dbPath);
     db.exec("PRAGMA journal_mode=WAL");

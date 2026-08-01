@@ -32,9 +32,11 @@ import {
   realpathSync,
   renameSync,
   rmdirSync,
+  rmSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { CLONE_ROOT } from "./paths.ts";
 import { envValueOutsideRepoFiles } from "./env-policy.ts";
@@ -48,11 +50,21 @@ export const EXPORT_TTL_DAYS = 30;
 
 export const EXPORT_DIR_NAME = "opencode-export";
 /**
+ * Per-project derived state, one subdirectory per enrolled worktree (engine/project-state.ts).
+ * Like the export directory this is ours to create and ours to purge, so it belongs to the
+ * ownership contract on both halves: recognized when adopting a root, removed by `--purge-data`.
+ */
+export const PROJECTS_DIR_NAME = "projects";
+/** A project-state directory name: 32 lowercase hex characters (engine/project-state.ts). */
+const PROJECT_ID_RE = /^[0-9a-f]{32}$/;
+
+/**
  * Everything an llmwiki-owned state root may contain — the purge allowlist, and nothing else.
  * This list is BOTH halves of the contract: an engine-written file missing from it is left behind
  * by `--purge-data` AND counts as a foreign entry when the canonical default root is adopted,
  * which is the silent-capture-death shape described just below. Adding a file here is therefore
- * part of adding a file to the state root, never a follow-up.
+ * part of adding a file to the state root, never a follow-up. Directories have their own entries
+ * (EXPORT_DIR_NAME, PROJECTS_DIR_NAME) with content verification of their own.
  */
 export const OWNED_FILES = [
   "capture.db",
@@ -74,15 +86,72 @@ const LEGACY_OWNED_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*\.log$/;
 
 const POSIX = process.platform !== "win32";
 let stateRootOverride: string | null = null;
+/** "" means the variable was unset before the first override; undefined means no override is active. */
+let savedStateDirEnv: string | undefined;
 
-/** One process-wide state location, shared by capture, OpenCode exports, retention and purge. */
-export function effectiveStateRoot(): string {
-  return stateRootOverride ?? (envValueOutsideRepoFiles("LLMWIKI_STATE_DIR")?.trim() || join(CLONE_ROOT, ".state"));
+/**
+ * The clone-local default every version through v0.10 used. Still honoured wherever it already
+ * exists (see effectiveStateRoot) — moving somebody's live capture queue as a side effect of an
+ * upgrade is exactly the kind of surprise this engine refuses to spring.
+ */
+export function legacyCloneStateRoot(): string {
+  return join(CLONE_ROOT, ".state");
 }
 
-/** Test/embedded-process override. Production callers normally use LLMWIKI_STATE_DIR. */
+/**
+ * The default for a NEW installation: outside the engine clone.
+ *
+ * The clone is meant to be disposable — people re-clone it, `git pull` it, and `git clean -xdf`
+ * it — and once per-project derived state lives in the state root (project-state.ts), a disposable
+ * clone would take every project's index with it. XDG_DATA_HOME is the platform's own answer to
+ * "machine-local data that is not configuration".
+ */
+export function defaultStateRoot(): string {
+  const xdg = envValueOutsideRepoFiles("XDG_DATA_HOME")?.trim();
+  const base = xdg && xdg.startsWith("/") ? xdg : join(homedir(), ".local", "share");
+  return join(base, "llmwiki");
+}
+
+/**
+ * One process-wide state location, shared by capture, OpenCode exports, per-project state,
+ * retention and purge.
+ *
+ * Resolution order, and why: an explicit `LLMWIKI_STATE_DIR` always wins (it is what the installed
+ * service definition bakes in); otherwise an EXISTING clone-local `.state` keeps being used, so
+ * upgrading never strands a queue; otherwise the new default. The sticky branch is what makes this
+ * change safe to ship — the migration is offered by `doctor`, never performed behind the user.
+ */
+export function effectiveStateRoot(): string {
+  if (stateRootOverride !== null) return stateRootOverride;
+  const explicit = envValueOutsideRepoFiles("LLMWIKI_STATE_DIR")?.trim();
+  if (explicit) return explicit;
+  const legacy = legacyCloneStateRoot();
+  if (hasOwnershipMarker(legacy)) return legacy;
+  return defaultStateRoot();
+}
+
+/**
+ * Test/embedded-process override. Production callers normally use LLMWIKI_STATE_DIR.
+ *
+ * The override is mirrored into the environment so CHILD processes resolve the same root. It used
+ * to be process-local, which was harmless only as long as nothing under the state root mattered to
+ * a subprocess. Per-project derived state (project-state.ts) lives there now, so a parent that
+ * overrode the root wrote its index somewhere its own `llmwiki` subprocess could not see — the
+ * subprocess found no index and stayed silent, which is indistinguishable from "nothing to say".
+ * An override that half the processes cannot see is not an override.
+ */
 export function setEffectiveStateRoot(dir: string | null): void {
   stateRootOverride = dir;
+  if (dir === null) {
+    // "" is the sentinel for "there was no variable before the override" — restoring it as an
+    // empty string would leave a variable that resolves to nothing, which is not the same thing.
+    if (savedStateDirEnv === undefined || savedStateDirEnv === "") delete process.env.LLMWIKI_STATE_DIR;
+    else process.env.LLMWIKI_STATE_DIR = savedStateDirEnv;
+    savedStateDirEnv = undefined;
+    return;
+  }
+  if (savedStateDirEnv === undefined) savedStateDirEnv = process.env.LLMWIKI_STATE_DIR ?? "";
+  process.env.LLMWIKI_STATE_DIR = dir;
 }
 
 export function effectiveExportDir(): string {
@@ -262,6 +331,31 @@ function looksLikeOurCaptureDb(path: string): boolean {
   }
 }
 
+/**
+ * A projects/ directory is ours when every entry is a hex-id directory holding our own meta file.
+ * Same standard as the export directory: positive evidence of authorship, not merely the absence
+ * of anything foreign.
+ */
+function looksLikeOurProjectsDir(dir: string): boolean {
+  if (!isRealDir(dir)) return false;
+  for (const name of readdirSync(dir)) {
+    if (!PROJECT_ID_RE.test(name)) return false;
+    const path = join(dir, name);
+    if (!isRealDir(path)) return false;
+    const meta = join(path, "meta.json");
+    if (!isRegular(meta)) continue; // freshly created, not yet stamped
+    const text = readBounded(meta, 4096);
+    if (text === null) return false;
+    try {
+      const parsed = JSON.parse(text) as Record<string, unknown>;
+      if (typeof parsed?.worktree !== "string") return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
 function looksLikeOurExportDir(dir: string): boolean {
   if (!isRealDir(dir)) return false;
   for (const name of readdirSync(dir)) {
@@ -344,7 +438,7 @@ function movedCloneIsOurs(root: string): boolean {
 
 /** Entries of a state root that this engine is known to write. */
 function unownedEntries(root: string, opts: { strictLogs?: boolean } = {}): string[] | null {
-  const allowed = new Set<string>([...OWNED_FILES, EXPORT_DIR_NAME]);
+  const allowed = new Set<string>([...OWNED_FILES, EXPORT_DIR_NAME, PROJECTS_DIR_NAME]);
   // Our own marker is not a foreign file. When its recorded path is stale the caller decides what
   // to do about that — but listing it under "unrecognized" made the refusal name the one file in
   // the directory that proves the directory is ours, which sent people hunting for a foreign entry
@@ -362,6 +456,10 @@ function unownedEntries(root: string, opts: { strictLogs?: boolean } = {}): stri
     const path = join(root, name);
     if (name === EXPORT_DIR_NAME) {
       if (!looksLikeOurExportDir(path)) foreign.push(name);
+      continue;
+    }
+    if (name === PROJECTS_DIR_NAME) {
+      if (!looksLikeOurProjectsDir(path)) foreign.push(name);
       continue;
     }
     if (!allowed.has(name) && !logRe.test(name)) {
@@ -799,6 +897,31 @@ export function purgeOwnedState(dir: string): PurgeResult {
       rmdirSync(exportDir); // empty only
     } catch {
       retained.push(EXPORT_DIR_NAME);
+    }
+  }
+  const projectsDir = join(root, PROJECTS_DIR_NAME);
+  if (isRealDir(projectsDir)) {
+    // Whole-subtree removal is right here and nowhere else: `--purge-data` is the explicit
+    // "delete what llmwiki stored about me" request, and every id directory under projects/ was
+    // created by this engine. Anything NOT matching our id shape is left, and leaving it also
+    // leaves the parent directory — the same refusal the rest of this function makes.
+    let allOurs = true;
+    for (const name of readdirSync(projectsDir)) {
+      const path = join(projectsDir, name);
+      if (!PROJECT_ID_RE.test(name) || !isRealDir(path)) {
+        retained.push(join(PROJECTS_DIR_NAME, name));
+        allOurs = false;
+        continue;
+      }
+      rmSync(path, { recursive: true, force: true });
+      removed.push(join(PROJECTS_DIR_NAME, name));
+    }
+    if (allOurs) {
+      try {
+        rmdirSync(projectsDir);
+      } catch {
+        retained.push(PROJECTS_DIR_NAME);
+      }
     }
   }
   for (const name of OWNED_FILES) {

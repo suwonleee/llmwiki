@@ -33,6 +33,8 @@ const ALLOWED_MUTATORS: Record<string, string> = {
   "engine/repo-write.ts": "IS the repository boundary — the one place that may write repo content",
   "engine/enrollment.ts": "writes the enrollment marker under .git/, which is not repository content",
   "engine/state-dir.ts": "owns the machine-local state root (ownership marker, private modes, purge)",
+  "engine/project-state.ts":
+    "owns per-project derived state in the machine-local state root and the id sidecar under .git/ — never repository content (the legacy in-repo directory is only read and rmdir'd during migration)",
   "engine/harness-locate.ts":
     "verifies harness data locations read-only and persists the accepted ones in the machine-local state root — never repository content",
   "engine/capture.ts": "removes expired transcript exports from the machine-local state root",

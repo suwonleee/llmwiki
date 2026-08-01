@@ -278,7 +278,7 @@ Storage principle — three homes, one owner each:
 
 - capture queue — central: `<clone>/.state/capture.db`
 - content — each repo's own `docs/wiki/` (co-located; markdown = source of truth)
-- index — `<repo>/.llmwiki/index.db` (regenerable at any time)
+- index — engine-held, one directory per project under the state root (`llmwiki state-path <repo>`); regenerable at any time, so the repository carries only `docs/wiki/`
 
 ## Uninstall
 
@@ -422,7 +422,7 @@ The defaults are intentionally conservative and currently have no environment ov
 Solo is the default and needs none of this — everything below is additive and silent for a single user. With several people on one project, each runs their own local engine (own capture daemon, own queue) and condenses **their own sessions** into the shared `docs/wiki/`; sharing is plain git.
 
 - **Scaffold safety**
-    - `.gitignore` seeded — `.llmwiki/` (the derived index) never gets committed
+    - `.gitignore` seeded — `.llmwiki/` stays listed so an index written by an older engine can never be committed
     - `.gitattributes` seeded — `docs/wiki/log.md merge=union`, so concurrent appends merge instead of conflicting
 - **Attribution**
     - authorship is derived from git history (`.mailmap`-aware); pages never stamp `author:` into frontmatter

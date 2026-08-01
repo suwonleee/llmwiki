@@ -17,7 +17,7 @@ import {
   persistedOpencodeDb,
   verifyHarnessPath,
 } from "../src/engine/harness-locate.ts";
-import { OWNED_FILES } from "../src/engine/state-dir.ts";
+import { OWNED_FILES, setEffectiveStateRoot } from "../src/engine/state-dir.ts";
 
 let dir: string;
 const savedEnv: Record<string, string | undefined> = {};
@@ -50,6 +50,7 @@ beforeEach(() => {
   setExportDir(join(dir, "state", "opencode-export")); // state root → <dir>/state
 });
 afterEach(() => {
+  setEffectiveStateRoot(null); // setExportDir overrides it process-wide; children only see the env
   for (const k of ENV_KEYS) {
     if (savedEnv[k] === undefined) delete process.env[k];
     else process.env[k] = savedEnv[k];

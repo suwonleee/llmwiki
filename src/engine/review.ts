@@ -17,6 +17,7 @@ import { appendLog } from "./update.ts";
 import { MODEL_HEAVY } from "./models.ts";
 import { generativeModel } from "./session-model.ts";
 import { ensureRepoDir, readRepoFile, repoFileExists, writeRepoFile } from "./repo-write.ts";
+import { readProjectState, writeProjectState } from "./project-state.ts";
 
 // review is the JUDGMENT half (semantic lint + grounding adjudication). It is the place
 // where real judgment is needed, so it runs on the heavy tier (strongest model): deterministic
@@ -241,10 +242,10 @@ export function _runHash(briefs: Brief[]): string {
   for (const b of briefs) h.update(`${b.link}|${b.date}|${b.cites}|${b.excerpt}\n`);
   return h.digest("hex").slice(0, 16);
 }
-const REVIEW_STATE_REL = join(".llmwiki", "review-state.json");
+const REVIEW_STATE_NAME = "review-state.json";
 function _readState(root: string): { hash?: string; date?: string; dest?: string; launched?: string } {
   try {
-    const raw = readRepoFile(root, REVIEW_STATE_REL);
+    const raw = readProjectState(root, REVIEW_STATE_NAME);
     return raw === null ? {} : JSON.parse(raw);
   } catch {
     return {};
@@ -277,15 +278,13 @@ export function inspectReviewHealth(ws: string, today = todayLocal()): ReviewHea
 // existing state so the last completed stamp stays readable; the completion _writeState
 // overwrites with a launch-free object, which is what clears the marker.
 function _markLaunched(root: string, date: string): void {
-  ensureRepoDir(root, ".llmwiki");
-  writeRepoFile(root, REVIEW_STATE_REL, JSON.stringify({ ..._readState(root), launched: date }, null, 2));
+  writeProjectState(root, REVIEW_STATE_NAME, JSON.stringify({ ..._readState(root), launched: date }, null, 2));
 }
 // A completion writes a launch-free object — this is what clears the `launched` marker, and it
 // also clears any CONCURRENT run's marker (two same-repo close-outs racing): acceptable, because
 // the erasing run is itself a completed review and the cadence gate re-runs on schedule anyway.
 function _writeState(root: string, st: { hash: string; date: string; dest: string }): void {
-  ensureRepoDir(root, ".llmwiki");
-  writeRepoFile(root, REVIEW_STATE_REL, JSON.stringify(st, null, 2));
+  writeProjectState(root, REVIEW_STATE_NAME, JSON.stringify(st, null, 2));
 }
 
 // The two lines appended to log.md when a report lands. This is page content in the user's

@@ -8,7 +8,7 @@
 //     is "no confident pointer → say nothing", so refusal-correct ⟺ empty output)
 //
 // Golden set lives in <repo>/docs/wiki/.bench/golden.toml — co-located with the wiki,
-// git-tracked, and invisible to the indexer (dot-dir). Results go to .llmwiki/bench/
+// git-tracked, and invisible to the indexer. Results go to the engine-held bench/ (project-state.ts)
 // (derived state, disposable). Anti-contamination is discipline-based (as mempalace
 // documents): a seeded
 // deterministic tune/sealed split (tune = look freely while iterating; sealed = final-check only — every look weakens it) + subset-tagged result files + discipline (the CLI
@@ -19,6 +19,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { WikiIndex, dedupeByPage } from "./db.ts";
+import { ensureProjectStateDir } from "./project-state.ts";
 import { buildTurnContext } from "./turncontext.ts";
 import { buildContext } from "./context.ts";
 
@@ -265,8 +266,7 @@ function percentile(values: readonly number[], p: number): number {
 }
 
 export function writeResults(root: string, report: BenchReport): string {
-  const dir = join(resolve(root), ".llmwiki", "bench");
-  mkdirSync(dir, { recursive: true });
+  const dir = ensureProjectStateDir(root, "bench");
   const ts = new Date().toISOString().replace(/[-:]/g, "").slice(0, 15);
   const p = join(dir, `results_${report.subset}_${ts}.json`);
   writeFileSync(p, JSON.stringify(report, null, 2));
