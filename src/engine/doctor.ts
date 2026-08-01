@@ -18,7 +18,7 @@ import { RETIRED_CODEX_SKILLS } from "./install-history.ts";
 import { CLONE_ROOT } from "./paths.ts";
 import { claudeConfigDirs, claudeRetentionDays } from "./sources/claude.ts";
 import { EXPIRY_WARN_DAYS, healthReadOnly, pendingPastRetentionReadOnly } from "./capture.ts";
-import { effectiveStateRoot, probeStateRoot } from "./state-dir.ts";
+import { effectiveStateRoot, probeStateRoot, planStateMigration } from "./state-dir.ts";
 import { inspectEnrollment } from "./enrollment.ts";
 import { detectConfigDrift } from "./migrate.ts";
 import { liveEngineVersion, readUpdateCheck, updateAvailable } from "./update-check.ts";
@@ -101,6 +101,26 @@ const CODEX_SKILLS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-d
 const CODEX_MANAGED = "llmwiki-codex-managed";
 const OPENCODE_COMMANDS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"] as const;
 const OPENCODE_MANAGED = "llmwiki-opencode-managed";
+
+/**
+ * Network filesystems and SQLite+WAL are a known-bad pair (advisory locking over NFS is where
+ * "database is locked" and silent corruption come from), and a roaming or NFS-mounted home is
+ * exactly where the XDG default would land. Best effort by design: `df` is parsed if it answers,
+ * and saying nothing is the correct outcome when it does not.
+ */
+function networkFilesystemWarning(path: string): string | null {
+  try {
+    const r = Bun.spawnSync(["df", "-P", path], { stdout: "pipe", stderr: "ignore", timeout: 2000 });
+    if (r.exitCode !== 0) return null;
+    const line = r.stdout.toString().split("\n")[1] ?? "";
+    const source = line.split(/\s+/)[0] ?? "";
+    // host:/export (NFS) and //host/share (SMB) are the two shapes worth naming.
+    if (/^[^/\s]+:\//.test(source) || source.startsWith("//")) return source;
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 /** Sizes in this report are for a human deciding whether to care, not for accounting. */
 function mib(bytes: number): string {
@@ -642,6 +662,23 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
       if (s.orphans > 0) {
         console.log(`  [index]    ${s.orphans} orphaned · ${mib(s.orphanBytes)} — the project is gone`);
       }
+    }
+  }
+
+  // Offered, never performed: moving the state root touches the capture queue and every project's
+  // derived state, so the check is automatic and the apply is a person's (same split as updates).
+  {
+    const migration = planStateMigration(watchProcessRunning());
+    if (migration.needed) {
+      console.log(`  [state] ⚠️ state root sits inside the engine clone: ${migration.summary}`);
+      console.log("  [state]    a re-clone or `git clean -xdf` would take the capture queue and every");
+      console.log(`  [state]    project's index with it — move it with \`llmwiki migrate-state\``);
+      for (const b of migration.blockers) console.log(`  [state]    blocked: ${b}`);
+    }
+    const net = networkFilesystemWarning(effectiveStateRoot());
+    if (net !== null) {
+      console.log(`  [state] ⚠️ state root is on a network filesystem (${net}) — SQLite locking over`);
+      console.log("  [state]    NFS/SMB is unreliable; point LLMWIKI_STATE_DIR at local disk");
     }
   }
 

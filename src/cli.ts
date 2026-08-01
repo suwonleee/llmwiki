@@ -26,7 +26,7 @@ import {
   verifyHarnessPath,
   type Harness,
 } from "./engine/harness-locate.ts";
-import { restartDaemon } from "./engine/daemon-control.ts";
+import { restartDaemon, watchProcessRunning } from "./engine/daemon-control.ts";
 import { envValueOutsideRepoFiles } from "./engine/env-policy.ts";
 import { autoConnect, renderHandoff } from "./engine/harness-autoconnect.ts";
 import * as autoupdate from "./engine/autoupdate.ts";
@@ -34,7 +34,7 @@ import { review } from "./engine/review.ts";
 import { buildContext } from "./engine/context.ts";
 import { captureBucket, wikiRootFor } from "./engine/wiki-root.ts";
 import * as enrollment from "./engine/enrollment.ts";
-import { StateRootError, describeStateRoot, purgeOwnedState } from "./engine/state-dir.ts";
+import { StateRootError, describeStateRoot, migrateStateRoot, purgeOwnedState } from "./engine/state-dir.ts";
 import { RepoBoundaryError } from "./engine/repo-write.ts";
 import { isEnrolled } from "./engine/enrollment.ts";
 import { buildTurnContext } from "./engine/turncontext.ts";
@@ -748,6 +748,44 @@ function cmdStatePath(p: Parsed) {
   console.log(sub ? join(location.dir, sub) : location.dir);
 }
 
+// Move the state root off the engine clone. Checked automatically (doctor says so), applied by a
+// person — the same split as engine updates, and for the same reason: this touches data the user
+// would not want moved behind their back.
+function cmdMigrateState(p: Parsed) {
+  const commit = p.flags["--commit"] === true;
+  const result = migrateStateRoot(watchProcessRunning(), commit);
+  const { plan } = result;
+  if (result.kind === "not-needed") {
+    console.log(ko ? `상태 루트 이관 불필요 — ${plan.reason}` : `no state migration needed — ${plan.reason}`);
+    console.log(`  ${plan.from}`);
+    return;
+  }
+  if (result.kind === "blocked") {
+    console.error(
+      ko ? "상태 루트를 옮길 수 없다:" : "cannot move the state root yet:",
+    );
+    for (const b of plan.blockers) console.error(`  - ${b}`);
+    process.exit(1);
+  }
+  if (result.kind === "dry-run") {
+    console.log(ko ? "상태 루트 이관 계획 (dry-run):" : "state migration plan (dry-run):");
+    console.log(`  from: ${plan.summary}`);
+    console.log(`  to  : ${plan.to}`);
+    console.log(
+      ko
+        ? "  적용: `llmwiki migrate-state --commit` · 이후 `bash <clone>/daemon/install.sh` 로 서비스 정의 갱신"
+        : "  apply: `llmwiki migrate-state --commit`, then re-run `bash <clone>/daemon/install.sh` so the service points at the new root",
+    );
+    return;
+  }
+  console.log(ko ? `✓ 상태 루트 이관 완료: ${plan.to}` : `✓ state root moved to ${plan.to}`);
+  console.log(
+    ko
+      ? "  서비스 정의에 옛 경로가 구워져 있다 — `bash <clone>/daemon/install.sh` 를 재실행할 것"
+      : "  the installed service still names the old path — re-run `bash <clone>/daemon/install.sh`",
+  );
+}
+
 function cmdPurgeState(p: Parsed) {
   const dir = capture.stateDir();
   if (!p.flags["--confirm"]) {
@@ -1270,6 +1308,7 @@ const HANDLERS: Record<string, (p: Parsed) => void | Promise<void>> = {
   status: cmdStatus,
   enabled: cmdEnabled,
   "purge-state": cmdPurgeState,
+  "migrate-state": cmdMigrateState,
   "state-path": cmdStatePath,
   config: cmdConfig,
   conventions: cmdConventions,

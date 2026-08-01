@@ -19,7 +19,9 @@ UNIT="llmwiki-daemon.service"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd -P)"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 SYSTEMD_UNIT="$HOME/.config/systemd/user/$UNIT"
-STATE_REQUESTED="${LLMWIKI_STATE_DIR:-$ROOT/.state}"
+# Empty means "ask the engine" (src/engine/state-bootstrap.ts). Hardcoding <clone>/.state here is
+# what used to put every fresh install back inside the disposable clone.
+STATE_REQUESTED="${LLMWIKI_STATE_DIR:-}"
 CODEX_STATE_HOME="${CODEX_HOME:-$HOME/.codex}"
 CLAUDE_PROFILE="${CLAUDE_CONFIG_DIR:-}"
 OPENCODE_DATA_HOME="${XDG_DATA_HOME:-}"

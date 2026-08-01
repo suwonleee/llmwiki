@@ -30,6 +30,7 @@ import {
   readSync,
   readdirSync,
   realpathSync,
+  cpSync,
   renameSync,
   rmdirSync,
   rmSync,
@@ -944,6 +945,109 @@ export function purgeOwnedState(dir: string): PurgeResult {
     /* unrelated entries survive, and so does the directory holding them */
   }
   return { removed, retained, rootRemoved };
+}
+
+// ---- moving the state root off a disposable clone -------------------------------------------
+//
+// The clone-local default is kept alive by the sticky branch in effectiveStateRoot, which is what
+// makes upgrading safe. But keeping it forever means "the engine clone is disposable" is false for
+// every existing user, and since per-project state moved into the state root there is now MORE to
+// lose to a `git clean -xdf` than there was before. So the situation is reported and a migration
+// is offered — checked automatically, applied by a person, the same split as engine updates.
+
+export type StateMigration = {
+  readonly needed: boolean;
+  readonly from: string;
+  readonly to: string;
+  /** Why nothing is offered — empty when `needed`. */
+  readonly reason: string;
+  /** Must be cleared before a commit run can proceed. */
+  readonly blockers: readonly string[];
+  readonly summary: string;
+};
+
+/**
+ * Should this machine move its state root, and can it right now?
+ *
+ * Deliberately narrow: only the clone-local default is ever offered for migration. A root the user
+ * named through LLMWIKI_STATE_DIR is their decision and is left alone.
+ */
+export function planStateMigration(
+  daemonRunning: boolean,
+  // Overridable so the decision can be exercised on temp directories: the real `from` is this
+  // clone's own live state root, which a test must never be able to move.
+  locations: { readonly from?: string; readonly to?: string } = {},
+): StateMigration {
+  const from = locations.from ?? legacyCloneStateRoot();
+  const to = locations.to ?? defaultStateRoot();
+  const explicit = envValueOutsideRepoFiles("LLMWIKI_STATE_DIR")?.trim();
+  const idle = { needed: false, from, to, blockers: [] as string[], summary: describeStateRoot(from) };
+  if (explicit) return { ...idle, reason: "LLMWIKI_STATE_DIR names the root explicitly — nothing to decide" };
+  if (from === to) return { ...idle, reason: "already at the default location" };
+  if (!isRealDir(from)) return { ...idle, reason: "no clone-local state root exists" };
+  if (!hasOwnershipMarker(from)) return { ...idle, reason: "the clone-local directory is not an llmwiki state root" };
+
+  const blockers: string[] = [];
+  // capture.db is open for writing while the daemon sweeps; moving it under a live writer is how
+  // a queue gets truncated. Stopping first costs one poll interval and nothing else.
+  if (daemonRunning) blockers.push("the capture daemon is running — stop it first (`./setup.sh --uninstall` keeps your data, or unload the service)");
+  if (isRealDir(to)) {
+    let entries: string[] = [];
+    try {
+      entries = readdirSync(to);
+    } catch {
+      blockers.push(`cannot read the destination: ${to}`);
+    }
+    if (entries.length > 0) blockers.push(`destination is not empty: ${to}`);
+  }
+  return { needed: true, from, to, reason: "", blockers, summary: describeStateRoot(from) };
+}
+
+export type StateMigrationResult =
+  | { readonly kind: "dry-run"; readonly plan: StateMigration }
+  | { readonly kind: "blocked"; readonly plan: StateMigration }
+  | { readonly kind: "not-needed"; readonly plan: StateMigration }
+  | { readonly kind: "moved"; readonly plan: StateMigration };
+
+/**
+ * Move the whole state root, then re-stamp the ownership marker for its new path (the marker
+ * records the path it was written for, so a moved root that kept the old marker would read as
+ * un-owned and every later command would refuse it).
+ *
+ * A rename is preferred and a copy is the fallback for a cross-device move; the source is removed
+ * only after the destination verifies, so an interrupted migration leaves the original intact.
+ */
+export function migrateStateRoot(
+  daemonRunning: boolean,
+  commit: boolean,
+  locations: { readonly from?: string; readonly to?: string } = {},
+): StateMigrationResult {
+  const plan = planStateMigration(daemonRunning, locations);
+  if (!plan.needed) return { kind: "not-needed", plan };
+  if (plan.blockers.length > 0) return { kind: "blocked", plan };
+  if (!commit) return { kind: "dry-run", plan };
+
+  mkdirSync(dirname(plan.to), { recursive: true, mode: 0o700 });
+  let renamed = false;
+  try {
+    renameSync(plan.from, plan.to);
+    renamed = true;
+  } catch {
+    /* cross-device or otherwise unrenameable → copy below */
+  }
+  if (!renamed) {
+    cpSync(plan.from, plan.to, { recursive: true, preserveTimestamps: true, dereference: false });
+    if (!isRealDir(plan.to) || readdirSync(plan.to).length === 0) {
+      throw new StateRootError(`state migration copied nothing into ${plan.to}; the original is untouched`);
+    }
+  }
+  writeOwnershipMarker(plan.to);
+  reassertPrivateModes(plan.to);
+  if (!hasOwnershipMarker(plan.to)) {
+    throw new StateRootError(`state migration could not stamp ownership on ${plan.to}`);
+  }
+  if (!renamed) rmSync(plan.from, { recursive: true, force: true });
+  return { kind: "moved", plan };
 }
 
 /** Size of the state root's contents, for reporting when a purge was NOT requested. */
