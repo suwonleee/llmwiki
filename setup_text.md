@@ -33,8 +33,15 @@ OpenCode wiring). On such an install, read every `llmwiki <args>` in this contra
     - Identify the active harness: Claude Code, Codex, or OpenCode
     - Read the shared flow and only that harness branch in `reference/INSTALLATION_FLOW.md`
 - Check prerequisites
-    - `git`
-    - Bun 1.1 or newer
+    - A POSIX shell. `setup.sh` and the daemon installer are bash; on Windows run them under WSL2
+      (see README § Requirements). Do not attempt a native-Windows install
+    - `git` — the capture loop's one hard dependency. Enrollment cannot tell "git is missing" from
+      "not a git worktree", so without it the engine installs cleanly and captures nothing. The
+      engine searches past PATH (Homebrew, MacPorts, Nix, ~/.local/bin) before reporting it absent;
+      `llmwiki doctor` prints a `[deps]` line either way
+    - Bun 1.2 or newer recommended; 1.1 is the accepted floor. Below 1.2 there is no in-process
+      zstd, so Codex's compressed rollouts are skipped unless a `zstd` binary is installed —
+      doctor's `[deps]` line says which route it found
     - Active harness CLI: `claude`, `codex`, or `opencode`
     - Missing prerequisite → stop before mutation and report the exact item
 - Run the read-only preflight
@@ -54,19 +61,32 @@ OpenCode wiring). On such an install, read every `llmwiki <args>` in this contra
     - Codex: `llmwiki doctor --harness codex`
     - OpenCode: `llmwiki doctor --harness opencode`
     - Claude-only: `bun <absolute-clone-path>/src/cli.ts doctor --harness claude`
-- Confirm the harness data location (3-tier discovery)
+- Confirm the harness data location (discovery resolves itself before it asks you)
     - Run `llmwiki locate <harness>` (Claude-only: `bun <absolute-clone-path>/src/cli.ts locate claude`)
-    - A ✅ line means deterministic discovery verified the location — nothing more to do
-    - No verified location while the harness IS installed here → this local is nonstandard: search
-      the machine yourself (locate prints per-harness hints on what the location must contain),
-      verify a candidate read-only with `llmwiki locate <harness> <path>`, then persist it with
-      `llmwiki connect <harness> <path>`
-    - `connect` records only an absolute path that passes the engine's schema-signature
-      verification (fail-closed) — never bypass it by editing state files by hand, and never
-      persist a guess
+    - A ✅ line means the location is verified and nothing is required of you. That includes
+      `found and connected automatically` — the engine searched past the defaults (WSL's mounted
+      Windows profile, XDG variants), verified a candidate, and persisted it on its own
+    - You are needed ONLY when locate prints the handoff block, which states three things:
+        - `tried  :` every path already examined — do not re-check these
+        - `blocked:` why no automatic answer was possible
+        - `options:` the numbered choices; pick one and run exactly the command shown
+    - Four blocking shapes exist, and they want different things:
+        - Nothing found, harness installed → search the machine for the location `options` describes,
+          then `llmwiki locate <harness> <path>` (read-only check) and `llmwiki connect <harness> <path>`
+        - Several locations verified → the engine refuses to guess between them because they are
+          usually different PEOPLE's profiles. Ask the human which is theirs; never pick for them
+        - One location verified but OUTSIDE the user's home (e.g. a mounted Windows profile under
+          `/mnt/c/Users/*`) → the engine never connects foreign-looking data by itself. Ask the
+          human whether that profile is theirs; only then run the `connect` command shown
+        - An env var ($CODEX_HOME, $OPENCODE_DB) is set but points at something that fails
+          verification → the engine cannot fix a shell variable, and env wins over anything it
+          could persist. Have the human fix or unset the variable, then re-run locate
+    - `connect` records only a path that passes the engine's schema-signature verification
+      (fail-closed) — never bypass it by editing state files by hand, and never persist a guess
     - A connected location is read-only: capture reads transcripts from it and the engine never
       writes into it (hook wiring stays in the profiles this machine owns)
-    - After a successful `connect`, restart the capture daemon and re-run the harness doctor
+    - `connect` restarts the capture daemon itself; no command to copy. Re-run the harness doctor
+    - To undo one: `llmwiki connect <harness> --forget`
     - Details and per-harness signatures: `reference/INSTALLATION_FLOW.md` § Harness data locations
 - Enroll the project (the one project-level trust decision)
     - Machine-level installation is INERT until a repository is enrolled: no cold-start context,

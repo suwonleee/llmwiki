@@ -49,9 +49,17 @@ health checks, `PATH` handling, hook trust, OS notes, and recovery rules live in
 agent contract [`setup_text.md`](setup_text.md) and its
 [installation-flow reference](reference/INSTALLATION_FLOW.md).
 
-Machines differ: if your coding agent keeps its data somewhere unusual, `llmwiki locate <harness>`
-shows what discovery found (and how to verify and persist the real location with
-`llmwiki connect`) — the setup agent runs this flow for you as part of `setup_text.md`.
+Machines differ, and the engine resolves that itself where it can: when the default locations come
+up empty it also checks the ones they predictably miss — a mounted Windows profile under
+`/mnt/c/Users/*` (WSL), XDG variants, `~/.opencode` — and verifies each by schema signature. A
+single verified candidate **inside your own home** is connected without asking. Anything outside
+your home (a mounted Windows profile is routinely another person's) is never auto-connected: it is
+reported with the exact `llmwiki connect` command, so claiming it is one paste and one deliberate
+decision. `llmwiki locate <harness>` shows what discovery found; when it cannot act (nothing found,
+several candidates, an env var pointing at a broken location, or data outside your home) it prints
+one block naming what was tried, what blocked it, and the numbered options — and
+`llmwiki connect <harness> <path>` records only what verification accepts. The setup agent runs
+this flow for you as part of `setup_text.md`.
 
 ### Then turn it on for a project — once
 
@@ -306,10 +314,11 @@ transcripts are read in place from the harness's own store — llmwiki makes no 
 
 | | Required | Notes |
 |---|---|---|
-| **Bun ≥ 1.1** | ✔ required | Single binary (`curl -fsSL https://bun.sh/install \| bash`). Runs `.ts` directly, and `bun:sqlite` bundles FTS5 — zero build·`node_modules`. Running the engine and `bun test` work with no install; only `bun run typecheck` (tsc) needs a one-time `bun install` (dev-only). |
+| **Bun ≥ 1.1** (1.2+ recommended) | ✔ required | Single binary (`curl -fsSL https://bun.sh/install \| bash`). Runs `.ts` directly, and `bun:sqlite` bundles FTS5 — zero build·`node_modules`. Running the engine and `bun test` work with no install; only `bun run typecheck` (tsc) needs a one-time `bun install` (dev-only). Below 1.2 there is no in-process zstd: Codex's compressed rollouts (`*.jsonl.zst`) are read only if a `zstd` binary is on `PATH`, and `llmwiki doctor` says which route it found. |
+| **git** | ✔ required | The capture loop asks git whether a directory is a worktree, and cannot distinguish "git is missing" from "not a worktree" — so without it the engine installs cleanly and captures nothing. It is searched for beyond `PATH` (Homebrew · MacPorts · Nix · `~/.local/bin`), baked into the daemon's service environment at install time, and reported by `llmwiki doctor` under `[deps]`. |
 | **Codex · OpenCode CLI** | their quick starts only | `codex` / `opencode` on `PATH`. Codex additionally needs lifecycle-hook support with the stable `hooks` feature enabled. Setup checks support — and any existing feature setting — before changing hooks, skills, or services. |
 | **LLM CLI** | optional, opt-in | Capture·read-injection·`/wiki-*`·`ingest` (capture-only, queues pending updates) work without it, and **nothing is sent anywhere by default**. `autoupdate·review` and `ingest`'s consolidation launch a generative subprocess only when you set `LLMWIKI_LLM_CMD` in your shell environment (e.g. `export LLMWIKI_LLM_CMD='claude -p {prompt} --model {model} --disallowedTools Write Edit NotebookEdit Bash'`). Unset → those passes report "unavailable" and skip; everything deterministic keeps working. |
-| **OS** | macOS / Linux | macOS=launchd, Linux=systemd (`--user`), falls back to cron+nohup if systemd is unavailable. Daemon details in [`daemon/README.md`](daemon/README.md) |
+| **OS** | macOS / Linux | macOS=launchd, Linux=systemd (`--user`), falls back to cron+nohup if systemd is unavailable — for the capture daemon AND for unattended update (`daemon/autoupdate-schedule.sh`). Both are exercised on macOS and Linux in CI. Daemon details in [`daemon/README.md`](daemon/README.md) |
 
 ### Harness · OS notes (Claude Code / Codex / OpenCode / Windows)
 
