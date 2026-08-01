@@ -8,11 +8,13 @@
 //
 //   1. WE ONLY TOUCH WHAT WE OWN. A state root is ours when it carries our ownership marker, or
 //      when it is empty (nothing to be wrong about), or when it is the canonical clone-local
-//      `.state` and every single entry in it validates as something this engine wrote. A
-//      pre-existing directory someone pointed LLMWIKI_STATE_DIR at is NEVER adopted, never
-//      recursively chmodded, and never purged — setup and capture fail closed with an
-//      explanation instead. Adopting it would mean changing permissions on, and later deleting,
-//      files we have no reason to believe are ours.
+//      `.state` and every single entry in it validates as something this engine wrote, or when it
+//      is a MOVED clone's root: a privately-moded marker of ours naming its old path, with every
+//      other entry validating under the strict rules (movedCloneIsOurs — named logs only,
+//      capture.db by schema, exports by content). Any other pre-existing directory someone pointed
+//      LLMWIKI_STATE_DIR at is NEVER adopted, never recursively chmodded, and never purged — setup
+//      and capture fail closed naming the entries that blocked adoption. Adopting it would mean
+//      changing permissions on, and later deleting, files we have no reason to believe are ours.
 //   2. PRIVATE BY CONSTRUCTION. An owned root and its export directory are 0700; the databases,
 //      logs and exports inside are 0600. Not "usually" — enforced on every open.
 import { Database } from "bun:sqlite";
@@ -121,6 +123,40 @@ function markerPath(root: string): string {
   return join(root, STATE_MARKER);
 }
 
+function markerTempName(pid: number | string, nonce: string): string {
+  // The nonce makes O_EXCL collisions impossible even against a crashed peer that had our PID.
+  return `.${STATE_MARKER}.tmp-${pid}-${nonce}`;
+}
+
+/**
+ * The half-written marker of a CONCURRENT bootstrap, not a foreign file.
+ *
+ * On a fresh install the daemon, both session hooks and any `llmwiki` command can reach an empty
+ * state root at the same moment. Whoever gets there second used to list the first one's exclusive
+ * temp file, conclude the directory held something it could not account for, and throw — so a first
+ * run under load failed for reasons that had nothing to do with the user's machine.
+ *
+ * Name shape alone is NOT enough to disregard an entry: a directory or symlink wearing this name
+ * would otherwise make a non-empty root read as empty and get it adopted. In-flight means a regular
+ * non-symlink file, written seconds ago — a bootstrap takes milliseconds, so anything older is a
+ * crash leftover and counts as a real entry (the refusal then names it, which is actionable).
+ */
+const MARKER_TEMP_MAX_AGE_MS = 60_000;
+
+function isMarkerTemp(root: string, name: string): boolean {
+  const prefix = `.${STATE_MARKER}.tmp-`;
+  if (!name.startsWith(prefix) || !/^\d+(-[a-z0-9]+)?$/.test(name.slice(prefix.length))) return false;
+  const st = lstatOrNull(join(root, name));
+  return (
+    st !== null && st.isFile() && !st.isSymbolicLink() && Date.now() - st.mtimeMs < MARKER_TEMP_MAX_AGE_MS
+  );
+}
+
+/** Entries that decide emptiness — a peer's in-flight marker write does not count. */
+function settledEntries(root: string): string[] {
+  return readdirSync(root).filter((name) => !isMarkerTemp(root, name));
+}
+
 export function stateMarkerBytes(root: string): string {
   return `{"version":${STATE_MARKER_VERSION},"root":${JSON.stringify(root)}}\n`;
 }
@@ -167,7 +203,7 @@ export function hasOwnershipMarker(root: string): boolean {
 
 function writeOwnershipMarker(root: string): void {
   const target = markerPath(root);
-  const temp = join(root, `.${STATE_MARKER}.tmp-${process.pid}`);
+  const temp = join(root, markerTempName(process.pid, Date.now().toString(36)));
   const fd = openSync(temp, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o600);
   try {
     writeSync(fd, stateMarkerBytes(root));
@@ -212,6 +248,10 @@ function looksLikeOurCaptureDb(path: string): boolean {
   let db: Database | null = null;
   try {
     db = new Database(path, { readonly: true });
+    // The one capture.db open whose failure is NOT absorbed: `false` here becomes "capture.db is
+    // foreign", which fails the whole state root. Without a busy timeout a daemon write transaction
+    // during a first-run bootstrap turned a transient SQLITE_BUSY into exactly that hard refusal.
+    db.exec("PRAGMA busy_timeout=5000");
     const cols = db.query("PRAGMA table_info(capture_queue)").all() as { name: string }[];
     const names = new Set(cols.map((c) => c.name));
     return names.has("transcript_path") && names.has("status") && names.has("repo");
@@ -251,12 +291,69 @@ function looksLikeOurExportDir(dir: string): boolean {
   return true;
 }
 
-/** Entries of the canonical default root that this engine is known to write. */
-function unownedEntries(root: string): string[] | null {
+/**
+ * A well-formed marker of ours that names SOME root — possibly not this one.
+ *
+ * The distinction matters because a clone can legitimately change address: moved to another
+ * directory, checked out at a different path on another machine, or bind-mounted into a container
+ * at /w. In every one of those the state root is still ours and still holds only our files; only
+ * the string inside the marker went stale.
+ */
+function markerIsWellFormed(root: string): boolean {
+  const path = markerPath(root);
+  const st = lstatOrNull(path);
+  if (st === null || !st.isFile() || st.isSymbolicLink()) return false;
+  // Same permission bar as hasOwnershipMarker: a group- or world-readable marker is one some OTHER
+  // account could have written, and this function's verdict authorizes chmod and (via purge) delete.
+  if (POSIX && (st.mode & 0o077) !== 0) return false;
+  const text = readBounded(path, STATE_MARKER_MAX_BYTES);
+  if (text === null) return false;
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    const keys = Object.keys(parsed).sort();
+    return (
+      keys.length === 2 &&
+      keys[0] === "root" &&
+      keys[1] === "version" &&
+      parsed.version === STATE_MARKER_VERSION &&
+      typeof parsed.root === "string"
+    );
+  } catch {
+    return false;
+  }
+}
+
+// Log names THIS engine has actually written, for the moved-clone path. The broad LEGACY_OWNED_FILE_RE
+// (any *.log) exists for the canonical clone-local default, whose location itself is evidence; a
+// moved root claims ownership by marker alone, so "some file ending in .log" must not count as ours
+// there — that is exactly how a planted marker next to a victim's production.log passed adoption.
+const MOVED_CLONE_LOG_RE = /^(daemon|autoupdate|autodistill[A-Za-z0-9_.-]*)\.log$/;
+
+/**
+ * Adoptable as a moved clone: our well-formed (and privately-moded) marker naming another path,
+ * and every other entry validating as engine-written under the STRICT rules — named logs only,
+ * capture.db checked by schema, exports checked by content. Renaming the clone directory, checking
+ * out at a different path, and bind-mounting into a container all land here; a directory that
+ * merely contains marker-shaped and log-shaped files does not.
+ */
+function movedCloneIsOurs(root: string): boolean {
+  if (!markerIsWellFormed(root)) return false;
+  const foreign = unownedEntries(root, { strictLogs: true });
+  return foreign !== null && foreign.length === 0;
+}
+
+/** Entries of a state root that this engine is known to write. */
+function unownedEntries(root: string, opts: { strictLogs?: boolean } = {}): string[] | null {
   const allowed = new Set<string>([...OWNED_FILES, EXPORT_DIR_NAME]);
+  // Our own marker is not a foreign file. When its recorded path is stale the caller decides what
+  // to do about that — but listing it under "unrecognized" made the refusal name the one file in
+  // the directory that proves the directory is ours, which sent people hunting for a foreign entry
+  // that did not exist.
+  if (markerIsWellFormed(root)) allowed.add(STATE_MARKER);
+  const logRe = opts.strictLogs ? MOVED_CLONE_LOG_RE : LEGACY_OWNED_FILE_RE;
   let entries: string[];
   try {
-    entries = readdirSync(root);
+    entries = settledEntries(root);
   } catch {
     return null;
   }
@@ -267,7 +364,7 @@ function unownedEntries(root: string): string[] | null {
       if (!looksLikeOurExportDir(path)) foreign.push(name);
       continue;
     }
-    if (!allowed.has(name) && !LEGACY_OWNED_FILE_RE.test(name)) {
+    if (!allowed.has(name) && !logRe.test(name)) {
       foreign.push(name);
       continue;
     }
@@ -361,7 +458,7 @@ export function ensureOwnedStateRoot(dir: string, opts: { defaultRoot?: string }
     enforcePrivateModes(root);
     return root;
   }
-  const entries = readdirSync(root);
+  const entries = settledEntries(root);
   if (entries.length === 0) {
     if (POSIX) chmodSync(root, 0o700);
     writeOwnershipMarker(root);
@@ -376,10 +473,33 @@ export function ensureOwnedStateRoot(dir: string, opts: { defaultRoot?: string }
     enforcePrivateModes(root);
     return root;
   }
+  // Last chance before refusing: a peer that was mid-bootstrap when this process listed the
+  // directory may have finished since. Re-asking costs one stat and turns a first-run race into the
+  // ordinary owned-root path, which is what it always was.
+  if (hasOwnershipMarker(root) || markerContentMatches(root)) {
+    enforcePrivateModes(root);
+    return root;
+  }
+  // The clone changed address. A privately-moded marker of ours naming a DIFFERENT root, in a
+  // directory where every other entry validates as engine-written under the STRICT rules, means
+  // this state root moved with the clone — renamed, checked out elsewhere, or bind-mounted into a
+  // container at another path. Re-point the marker and carry on. The strict rules are the point:
+  // the earlier version of this branch accepted any *.log as ours and skipped the marker's
+  // permission check, which let a planted marker beside a victim's own log files authorize a chmod
+  // and, later, a purge delete.
+  if (movedCloneIsOurs(root)) {
+    writeOwnershipMarker(root);
+    enforcePrivateModes(root);
+    return root;
+  }
   // Name what actually blocked adoption. The old wording ("files this engine did not create")
   // was both unactionable and, for an upgrading user, untrue — it was usually llmwiki's own older
   // artifacts. Whoever hits this needs to know which entries to move, not a category.
-  const foreign = (isDefault ? unownedEntries(root) : null) ?? [];
+  // Name the entries for ANY root, not just the canonical default. Whoever hits this needs to know
+  // which files to move; "must name a new directory, an empty one, or one llmwiki already owns" is
+  // a restatement of the rule, not an answer. The list is trustworthy now that our own marker is no
+  // longer counted among them.
+  const foreign = unownedEntries(root) ?? [];
   const named = foreign.length ? `\n  unrecognized: ${foreign.slice(0, 5).join(", ")}${foreign.length > 5 ? ", …" : ""}` : "";
   throw new StateRootError(
     `refusing to use a state root llmwiki cannot prove it owns: ${root}${named}\n` +
@@ -412,11 +532,14 @@ export function probeStateRoot(dir = effectiveStateRoot()): { usable: boolean; d
   if (hasOwnershipMarker(root) || markerContentMatches(root)) return { usable: true, detail: "owned" };
   let entries: string[];
   try {
-    entries = readdirSync(root);
+    entries = settledEntries(root);
   } catch (error) {
     return { usable: false, detail: `unreadable: ${error}` };
   }
   if (entries.length === 0) return { usable: true, detail: "empty — adoptable" };
+  if (movedCloneIsOurs(root)) {
+    return { usable: true, detail: "owned (marker re-pointed on use — the clone moved)" };
+  }
   const defaultRoot = join(CLONE_ROOT, ".state");
   const isDefault =
     root === defaultRoot || (lstatOrNull(defaultRoot) !== null && realpathSync(defaultRoot) === root);
