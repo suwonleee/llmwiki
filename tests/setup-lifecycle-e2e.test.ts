@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { inertSupervisorBin } from "./support/inert-supervisor.ts";
+import { serviceDefinitionPath, supervisorStubs } from "./support/service-definition.ts";
 
 const ROOT = join(import.meta.dir, "..");
 
@@ -55,10 +56,9 @@ describe("setup lifecycle across every harness", () => {
         "#!/bin/sh\n" +
         "if [ \"${1:-}\" = run ] && [ \"${2:-}\" = --help ]; then printf '%s\\n' --command; fi\n" +
         "exit 0\n",
-      launchctl:
-        "#!/bin/sh\n" +
-        "if [ \"${1:-}\" = list ]; then printf '0\\t0\\tcom.llmwiki.daemon\\n'; fi\n" +
-        "exit 0\n",
+      // The supervisor THIS platform's install branch uses, so the run succeeds deterministically
+      // here rather than falling through to the cron path.
+      ...supervisorStubs(),
     };
     // Inert supervisors first, this suite's harness stubs on top — an uninstall run here would
     // otherwise reach the developer's own launchd job and running daemon.
@@ -116,7 +116,8 @@ describe("setup lifecycle across every harness", () => {
     expect(existsSync(join(configRoot, "opencode", "plugin", "llmwiki.ts"))).toBe(false);
     expect(existsSync(join(configRoot, "opencode", "commands", "wiki-save.md"))).toBe(false);
     expect(existsSync(join(home, ".local", "bin", "llmwiki"))).toBe(false);
-    expect(existsSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"))).toBe(false);
+    // Whichever supervisor this platform installed, its definition is gone too.
+    expect(existsSync(serviceDefinitionPath(home))).toBe(false);
     expect(existsSync(stateRoot)).toBe(false);
   });
 });

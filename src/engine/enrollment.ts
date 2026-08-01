@@ -42,6 +42,7 @@ import {
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
+import { gitCommand, locateGit } from "./tool-locate.ts";
 
 export const MARKER_DIR = "llmwiki";
 export const MARKER_BASENAME = "enrollment-v1.json";
@@ -79,7 +80,11 @@ export interface EnrollmentStatus {
 
 function git(cwd: string, args: string[]): string | null {
   try {
-    const r = spawnSync("git", ["-C", cwd, ...args], {
+    // `gitCommand()` is the bare name whenever git is on PATH, and an absolute path when it is not
+    // — which is the daemon's normal condition under launchd/systemd's minimal PATH. Without it a
+    // Homebrew/Nix git is invisible to the service, every session reads as "not a git worktree",
+    // and capture stops with nothing to show for it.
+    const r = spawnSync(gitCommand(), ["-C", cwd, ...args], {
       encoding: "utf-8",
       timeout: GIT_TIMEOUT_MS,
       windowsHide: true,
@@ -90,6 +95,22 @@ function git(cwd: string, args: string[]): string | null {
   } catch {
     return null; // git absent / not executable → not a worktree, fail closed
   }
+}
+
+/** Was git found anywhere — on PATH or in the package-manager locations tool-locate searches? */
+export function gitAvailable(): boolean {
+  return locateGit().path !== null;
+}
+
+/**
+ * The one thing this engine genuinely cannot fix for the user, phrased so the caller can hand it
+ * off: what was searched, and what would resolve it. Everything else about a missing git — a
+ * service's truncated PATH, a non-standard install prefix — tool-locate already resolves silently.
+ */
+export function gitMissingDetail(): string {
+  const { tried } = locateGit();
+  const where = tried.length > 4 ? `${tried.slice(0, 4).join(", ")}, … (${tried.length} dirs)` : tried.join(", ");
+  return `git was not found — searched: ${where}. Install git (macOS: xcode-select --install · Debian/Ubuntu: apt install git · Fedora: dnf install git), then re-run.`;
 }
 
 function realDir(path: string): string | null {
@@ -271,7 +292,9 @@ export function enroll(repo: string): EnrollmentChange {
       ok: false,
       worktree: null,
       markerPath: null,
-      error: "not a git worktree — automatic integration needs git (run `git init` first)",
+      error: gitAvailable()
+        ? "not a git worktree — automatic integration needs git (run `git init` first)"
+        : gitMissingDetail(),
     };
   }
   const gitDir = worktreeGitDir(worktree);
@@ -361,6 +384,14 @@ export function explain(status: EnrollmentStatus, ko = false): string {
     case "enabled":
       return ko ? "활성 — 이 워크트리는 등록되어 있다" : "enabled — this worktree is enrolled";
     case "not-a-git-worktree":
+      // Same reason code, two very different situations. "Not a worktree" is a fact about the
+      // directory the user can act on; a missing git is a fact about the machine, and reporting the
+      // first when the second is true has sent people looking in entirely the wrong place.
+      if (!gitAvailable()) {
+        return ko
+          ? `비활성 — git 실행 파일을 찾지 못함 (${gitMissingDetail()})`
+          : `disabled — ${gitMissingDetail()}`;
+      }
       return ko
         ? "비활성 — git 워크트리가 아님 (자동 연동은 git 저장소에서만 동작)"
         : "disabled — not a git worktree (automatic integration is git-only)";

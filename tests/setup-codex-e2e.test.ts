@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { readServiceDefinition, serviceEnvEntry, supervisorStubs } from "./support/service-definition.ts";
 
 const ROOT = join(import.meta.dir, "..");
 
@@ -31,10 +32,10 @@ describe("fresh Codex setup", () => {
         "codex",
         "#!/bin/sh\nif [ \"${1:-}\" = --help ]; then printf '%s\\n' --dangerously-bypass-hook-trust; fi\nif [ \"${1:-}\" = features ] && [ \"${2:-}\" = list ]; then printf 'hooks stable true\\n'; fi\nexit 0\n",
       ],
-      [
-        "launchctl",
-        "#!/bin/sh\nif [ \"${1:-}\" = list ]; then printf '0\\t0\\tcom.llmwiki.daemon\\n'; fi\nexit 0\n",
-      ],
+      // Whichever supervisor THIS platform's install branch uses, so the run succeeds
+      // deterministically and never reaches the cron fallback (which would write into the
+      // developer's real crontab).
+      ...Object.entries(supervisorStubs()),
     ] as const) {
       const file = join(bin, name);
       writeFileSync(file, body);
@@ -69,9 +70,8 @@ describe("fresh Codex setup", () => {
     expect(output).toContain("ACTION REQUIRED");
     expect(output).toContain("one-time review required");
     expect(output).toContain(`export PATH='${join(home, ".local", "bin")}'`);
-    expect(readFileSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"), "utf8")).toContain(
-      `<key>CODEX_HOME</key><string>${codexHome.replaceAll("&", "&amp;")}</string>`,
-    );
+    // The daemon carries the Codex home it was installed with, in this platform's syntax.
+    expect(readServiceDefinition(home)).toContain(serviceEnvEntry("CODEX_HOME", codexHome));
     expect(readFileSync(join(codexHome, "hooks.json"), "utf8")).toContain("sessionstart-inject.sh");
     const savePath = join(home, ".agents", "skills", "wiki-save", "SKILL.md");
     const deepPath = join(home, ".agents", "skills", "wiki-deep", "SKILL.md");

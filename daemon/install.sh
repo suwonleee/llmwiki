@@ -28,11 +28,47 @@ PY="$(command -v bun)"
 [ -z "$PY" ] && { echo "🔴 bun not found on PATH — install Bun first: https://bun.sh"; exit 1; }
 WATCH="$ROOT/src/daemon/watch.ts"
 CRON_TAG="# llmwiki-daemon ($ROOT)"
+# The PATH the SERVICE will run with. launchd hands an agent /usr/bin:/bin:/usr/sbin:/sbin, and a
+# systemd --user unit little more — but the daemon shells out to `git` for every enrollment check.
+# A Homebrew/Nix/MacPorts git that this installing shell found perfectly well would be invisible to
+# the daemon, and the result is not an error: every session reads as "not a git worktree", the
+# queue fills with skipped rows, and doctor stays green. The engine computes it (src/engine/
+# tool-locate.ts) so the search list lives in exactly one language.
+SERVICE_PATH="$("$PY" "$ROOT/src/engine/tool-locate.ts" --service-path 2>/dev/null || true)"
+[ -z "$SERVICE_PATH" ] && SERVICE_PATH="$PATH"
 
 have() { command -v "$1" >/dev/null 2>&1; }
-watch_pids() {
+
+# Enumerate running watch.ts processes. Exit 2 means "could not verify", which every caller treats
+# as a hard stop — starting a second daemon is worse than not starting one.
+#
+# Two mechanisms, because `ps -axo` is not universal: BusyBox ps has no `-o`, so in a minimal
+# container this returned 2 forever and install refused to start the daemon at all. procfs is read
+# first where it exists: it needs no subprocess, and comparing argv entries NUL-by-NUL is an exact
+# match rather than a string-shape guess (`pgrep -f` would treat a clone path containing `[` as a
+# regex — the reason this was written by hand in the first place).
+watch_pids_proc() {
+    [ -d /proc ] || return 2
+    for PROC_DIR in /proc/[0-9]*; do
+        [ -r "$PROC_DIR/cmdline" ] || continue
+        PROC_PID="${PROC_DIR#/proc/}"
+        [ "$PROC_PID" = "$$" ] && continue
+        while IFS= read -r -d '' PROC_ARG; do
+            if [ "$PROC_ARG" = "$WATCH" ]; then
+                printf '%s\n' "$PROC_PID"
+                break
+            fi
+        done < "$PROC_DIR/cmdline" 2>/dev/null || continue
+    done
+    return 0
+}
+watch_pids_ps() {
     have ps || return 2
     WATCH_PS="$(ps -axo pid=,command= 2>/dev/null)" || return 2
+    # Exit 0 alone is not an answer: a partial `-o` implementation (some BusyBox builds) exits 0
+    # while printing a format with no per-process rows. A real listing always contains at least one
+    # "<pid> <command>" line — this very shell. No parseable rows → report unverified, not "none".
+    printf '%s\n' "$WATCH_PS" | grep -q '^ *[0-9][0-9]* ' || return 2
     WATCH_BIN="$(basename "$PY")"
     while read -r WATCH_PID WATCH_COMMAND; do
         case "$WATCH_COMMAND" in
@@ -43,6 +79,22 @@ watch_pids() {
     done <<EOF
 $WATCH_PS
 EOF
+}
+# `ps` FIRST, procfs only when it cannot answer.
+#
+# Order matters for more than preference. The test suite makes `ps` inert so that a setup run
+# cannot reach the developer's real process table and kill the daemon belonging to this very clone
+# (tests/support/inert-supervisor.ts). Consulting procfs first would walk straight past that shim on
+# Linux and do exactly what it exists to prevent. A `ps` that answers — even with nothing — is an
+# answer; procfs is the fallback for the BusyBox case, where `ps -axo` is not an answer at all.
+watch_pids() {
+    WATCH_PIDS_STATUS=0
+    WATCH_PIDS_OUT="$(watch_pids_ps)" || WATCH_PIDS_STATUS=$?
+    if [ "$WATCH_PIDS_STATUS" -eq 0 ]; then
+        [ -n "$WATCH_PIDS_OUT" ] && printf '%s\n' "$WATCH_PIDS_OUT"
+        return 0
+    fi
+    watch_pids_proc
 }
 stop_watch_processes() {
     STOP_PIDS_STATUS=0
@@ -163,6 +215,7 @@ if [ "$(uname)" = "Darwin" ]; then
     XML_OPENCODE_DATA_HOME="$(xml_escape "$OPENCODE_DATA_HOME")"
     XML_OPENCODE_DB_PATH="$(xml_escape "$OPENCODE_DB_PATH")"
     XML_STATE="$(xml_escape "$STATE")"
+    XML_SERVICE_PATH="$(xml_escape "$SERVICE_PATH")"
     cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -176,6 +229,7 @@ if [ "$(uname)" = "Darwin" ]; then
     </array>
     <key>EnvironmentVariables</key>
     <dict>
+        <key>PATH</key><string>$XML_SERVICE_PATH</string>
         <key>HOME</key><string>$XML_HOME</string>
         <key>CODEX_HOME</key><string>$XML_CODEX_HOME</string>
         <key>CLAUDE_CONFIG_DIR</key><string>$XML_CLAUDE_PROFILE</string>
@@ -226,6 +280,7 @@ After=default.target
 
 [Service]
 Type=simple
+Environment="PATH=$SERVICE_PATH"
 Environment="HOME=$HOME"
 Environment="CODEX_HOME=$CODEX_STATE_HOME"
 Environment="CLAUDE_CONFIG_DIR=$CLAUDE_PROFILE"
@@ -263,12 +318,13 @@ if have crontab; then
     printf -v CLAUDE_PROFILE_Q '%q' "$CLAUDE_PROFILE"
     printf -v OPENCODE_DATA_HOME_Q '%q' "$OPENCODE_DATA_HOME"
     printf -v OPENCODE_DB_PATH_Q '%q' "$OPENCODE_DB_PATH"
+    printf -v SERVICE_PATH_Q '%q' "$SERVICE_PATH"
     # idempotent: drop any prior llmwiki line, then add a fresh one.
     # `|| true` is required: on an EMPTY crontab `grep -v` selects 0 lines → exit 1,
     # which under `set -e` would abort the subshell before the echo and silently skip
     # registration (the common fresh-user case).
     ( { crontab -l 2>/dev/null | grep -vF "$CRON_TAG"; } || true; \
-      echo "@reboot HOME=$HOME_Q CODEX_HOME=$CODEX_HOME_Q CLAUDE_CONFIG_DIR=$CLAUDE_PROFILE_Q XDG_DATA_HOME=$OPENCODE_DATA_HOME_Q OPENCODE_DB=$OPENCODE_DB_PATH_Q LLMWIKI_STATE_DIR=$STATE_Q nohup $PY_Q $WATCH_Q >> $STATE_Q/daemon.log 2>&1 &  $CRON_TAG" ) | crontab -
+      echo "@reboot PATH=$SERVICE_PATH_Q HOME=$HOME_Q CODEX_HOME=$CODEX_HOME_Q CLAUDE_CONFIG_DIR=$CLAUDE_PROFILE_Q XDG_DATA_HOME=$OPENCODE_DATA_HOME_Q OPENCODE_DB=$OPENCODE_DB_PATH_Q LLMWIKI_STATE_DIR=$STATE_Q nohup $PY_Q $WATCH_Q >> $STATE_Q/daemon.log 2>&1 &  $CRON_TAG" ) | crontab -
     echo "✓ registered cron @reboot line ($CRON_TAG)"
 fi
 # start it now regardless (so capture begins this boot too)
@@ -278,7 +334,8 @@ if [ "$WATCH_STOP_STATUS" -ne 0 ]; then
     echo "🔴 existing watch.ts process could not be safely identified/stopped; refusing to start a duplicate." >&2
     exit 1
 fi
-nohup "$PY" "$WATCH" >> "$STATE/daemon.log" 2>&1 &
+# Same PATH the supervised branches bake in — this process is the daemon until the next reboot.
+PATH="$SERVICE_PATH" nohup "$PY" "$WATCH" >> "$STATE/daemon.log" 2>&1 &
 echo "✓ started watch.ts in background (pid $!)"
 echo "  runtime: $PY"
 echo "  log    : $STATE/daemon.log"

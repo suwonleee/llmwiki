@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { readServiceDefinition, serviceEnvEntry, supervisorStubs } from "./support/service-definition.ts";
 
 const ROOT = join(import.meta.dir, "..");
 
@@ -28,10 +29,10 @@ describe("fresh OpenCode setup", () => {
         "opencode",
         "#!/bin/sh\nif [ \"${1:-}\" = run ] && [ \"${2:-}\" = --help ]; then printf '%s\\n' --command; fi\nexit 0\n",
       ],
-      [
-        "launchctl",
-        "#!/bin/sh\nif [ \"${1:-}\" = list ]; then printf '0\\t0\\tcom.llmwiki.daemon\\n'; fi\nexit 0\n",
-      ],
+      // Whichever supervisor THIS platform's install branch uses, so the run succeeds
+      // deterministically and never reaches the cron fallback (which would write into the
+      // developer's real crontab).
+      ...Object.entries(supervisorStubs()),
     ] as const) {
       const file = join(bin, name);
       writeFileSync(file, body);
@@ -65,9 +66,10 @@ describe("fresh OpenCode setup", () => {
     expect(output).toContain("setup installed");
     expect(output).toContain("OpenCode close-out: /wiki-save");
     expect(output).toContain("Verify the installation anytime: llmwiki doctor --harness opencode");
-    const plist = readFileSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"), "utf8");
-    expect(plist).toContain(`<key>XDG_DATA_HOME</key><string>${dataRoot.replaceAll("&", "&amp;")}</string>`);
-    expect(plist).toContain(`<key>OPENCODE_DB</key><string>${dbPath.replaceAll("&", "&amp;")}</string>`);
+    // The daemon carries the OpenCode location it was installed with, in this platform's syntax.
+    const service = readServiceDefinition(home);
+    expect(service).toContain(serviceEnvEntry("XDG_DATA_HOME", dataRoot));
+    expect(service).toContain(serviceEnvEntry("OPENCODE_DB", dbPath));
 
     const opencodeRoot = join(configRoot, "opencode");
     expect(readFileSync(join(opencodeRoot, "plugin", "llmwiki.ts"), "utf8")).toContain(

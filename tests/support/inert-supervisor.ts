@@ -29,7 +29,11 @@ const INERT: Record<string, string> = {
   launchctl: "#!/bin/sh\nexit 0\n", // never lists the label → nothing to unload or remove
   systemctl: "#!/bin/sh\nexit 1\n", // no user manager → the systemd branch is skipped
   crontab: "#!/bin/sh\ncat >/dev/null 2>&1 || true\nexit 0\n", // swallow the @reboot registration
-  ps: "#!/bin/sh\nexit 0\n", // empty process table → watch_pids matches nothing
+  // One parseable dummy row, not empty output: the callers treat "exit 0 but no `<pid> <command>`
+  // rows at all" as an unverifiable ps (the BusyBox partial `-o` shape) and FALL THROUGH to procfs
+  // — which on Linux is the developer's real process table, the exact thing these shims exist to
+  // keep tests away from. A row that matches nothing keeps the shim authoritative.
+  ps: "#!/bin/sh\nprintf '1 /sbin/init\\n'\nexit 0\n",
   pgrep: "#!/bin/sh\nexit 1\n",
   pkill: "#!/bin/sh\nexit 1\n",
 };

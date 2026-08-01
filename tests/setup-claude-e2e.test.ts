@@ -3,6 +3,8 @@ import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { readServiceDefinition, serviceEnvEntry, supervisorStubs } from "./support/service-definition.ts";
+
 const ROOT = join(import.meta.dir, "..");
 
 describe("fresh Claude Code setup", () => {
@@ -30,13 +32,10 @@ describe("fresh Claude Code setup", () => {
         },
       }),
     );
-    for (const [name, body] of [
-      ["claude", "#!/bin/sh\nexit 0\n"],
-      [
-        "launchctl",
-        "#!/bin/sh\nif [ \"${1:-}\" = list ]; then printf '0\\t0\\tcom.llmwiki.daemon\\n'; fi\nexit 0\n",
-      ],
-    ] as const) {
+    // The supervisor stub is whichever one THIS platform's install branch uses, so the run succeeds
+    // deterministically here and never falls through to the cron path — which would write into the
+    // developer's real crontab.
+    for (const [name, body] of [["claude", "#!/bin/sh\nexit 0\n"], ...Object.entries(supervisorStubs())] as const) {
       const file = join(bin, name);
       writeFileSync(file, body);
       chmodSync(file, 0o755);
@@ -76,10 +75,9 @@ describe("fresh Claude Code setup", () => {
     expect(output).toContain("turn-context hook present");
     expect(output).toContain("commands present");
 
-    const plist = readFileSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"), "utf8");
-    expect(plist).toContain(
-      `<key>CLAUDE_CONFIG_DIR</key><string>${profile.replaceAll("&", "&amp;")}</string>`,
-    );
+    // The daemon must carry the profile it was installed for, in whatever syntax this platform's
+    // supervisor uses.
+    expect(readServiceDefinition(home)).toContain(serviceEnvEntry("CLAUDE_CONFIG_DIR", profile));
 
     const settingsPath = join(profile, "settings.json");
     const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
