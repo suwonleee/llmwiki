@@ -20,7 +20,9 @@ describe("setup command contract", () => {
     codexHome = join(dir, "codex");
     stubBin = join(dir, "stub-bin");
     mkdirSync(home, { recursive: true });
-    mkdirSync(stubBin, { recursive: true });
+    // Inert supervisors first: if a regression ever carries a run past preflight, the child must
+    // find these shims — never the machine's real launchd/systemd/cron (support/inert-supervisor.ts).
+    inertSupervisorBin(stubBin);
     // stub harness CLIs: the contract must hold no matter what is installed on the developer machine
     for (const [name, body] of [
       ["claude", "#!/bin/sh\nexit 0\n"],
@@ -45,7 +47,23 @@ describe("setup command contract", () => {
   function run(args: string[]) {
     return Bun.spawnSync(["bash", join(ROOT, "setup.sh"), ...args], {
       cwd: ROOT,
-      env: { ...process.env, HOME: home, CODEX_HOME: codexHome, CLAUDE_CONFIG_DIR: join(dir, "claude"), PATH: stubPath },
+      env: {
+        ...process.env,
+        HOME: home,
+        CODEX_HOME: codexHome,
+        CLAUDE_CONFIG_DIR: join(dir, "claude"),
+        PATH: stubPath,
+        // Isolation does not end at HOME: the engine resolves OpenCode surfaces XDG-first, so a
+        // host that exports XDG_CONFIG_HOME (GitHub's ubuntu runners do) steers discovery away
+        // from fixtures planted under the fake home. Pin the family to the fake home and blank
+        // the bus handles so no child can reach a live systemd user manager.
+        XDG_CONFIG_HOME: join(home, ".config"),
+        XDG_DATA_HOME: join(home, ".local", "share"),
+        XDG_STATE_HOME: join(home, ".local", "state"),
+        XDG_CACHE_HOME: join(home, ".cache"),
+        XDG_RUNTIME_DIR: "",
+        DBUS_SESSION_BUS_ADDRESS: "",
+      },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -205,6 +223,7 @@ describe("setup command contract", () => {
     expect(result.exitCode).toBe(1);
     expect(new TextDecoder().decode(result.stderr)).toContain("refusing to overwrite unrelated command");
     expect(existsSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"))).toBe(false);
+    expect(existsSync(join(home, ".config", "systemd", "user", "llmwiki-daemon.service"))).toBe(false);
   });
 
   test("Claude command conflicts fail in preflight before daemon mutation", () => {
@@ -218,6 +237,7 @@ describe("setup command contract", () => {
     expect(result.exitCode).toBe(1);
     expect(new TextDecoder().decode(result.stderr)).toContain("Claude command conflict");
     expect(existsSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"))).toBe(false);
+    expect(existsSync(join(home, ".config", "systemd", "user", "llmwiki-daemon.service"))).toBe(false);
     expect(existsSync(join(profile, "settings.json"))).toBe(false);
     expect(existsSync(join(commandDir, "wiki-save.md"))).toBe(true);
   });
@@ -249,5 +269,6 @@ describe("setup command contract", () => {
     expect(result.exitCode).toBe(1);
     expect(new TextDecoder().decode(result.stderr)).toContain("refusing to overwrite unrelated");
     expect(existsSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"))).toBe(false);
+    expect(existsSync(join(home, ".config", "systemd", "user", "llmwiki-daemon.service"))).toBe(false);
   });
 });
