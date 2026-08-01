@@ -13,10 +13,10 @@
 // Persisted overrides live in <state>/harness-paths.json: machine-local, never committed,
 // visible to the CLI, the doctor, and the daemon alike (they share this state root). Env
 // vars still win over a persisted path so a shell override remains the strongest word.
-import { Database } from "bun:sqlite";
-import { chmodSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { effectiveStateRoot, bootstrapStateRoot } from "./state-dir.ts";
+import { openReadonlySqlite } from "./sqlite-open.ts";
 
 /**
  * A persisted location is only ever an absolute path.
@@ -29,6 +29,43 @@ import { effectiveStateRoot, bootstrapStateRoot } from "./state-dir.ts";
  */
 function absolutePath(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "" && isAbsolute(value);
+}
+
+/**
+ * A Windows drive path (`C:\Users\me\.codex`) read by a POSIX process, re-expressed as the mount
+ * that same directory has here. `path.isAbsolute` is platform-specific, so such an entry is not
+ * absolute under POSIX rules and used to be dropped — SILENTLY, and by the one file whose entire
+ * job is to rescue a machine whose harness data is somewhere unusual. Connecting on native Windows
+ * and then working in WSL (the documented way to run this engine on that OS) is exactly the case
+ * that lost its own configuration.
+ *
+ * Only a mount that ACTUALLY EXISTS is accepted; a translation is a guess otherwise, and the caller
+ * still verifies the schema before trusting whatever comes back.
+ */
+export function windowsDriveMounts(value: string): string[] {
+  const drive = /^([A-Za-z]):[\\/](.*)$/.exec(value);
+  if (drive === null) return [];
+  const letter = drive[1]!.toLowerCase();
+  const rest = drive[2]!.replace(/\\/g, "/");
+  // A `..` component would let `C:\..\..\etc` translate to a path OUTSIDE the mount — the
+  // translated string is used as-is, so the recorded drive path must already be canonical.
+  if (rest.split("/").some((part) => part === "..")) return [];
+  return [
+    `/mnt/${letter}/${rest}`, // WSL default
+    `/${letter}/${rest}`, // Git Bash / MSYS
+    `/cygdrive/${letter}/${rest}`, // Cygwin
+  ];
+}
+
+function translateForeignPath(value: string): string | null {
+  return windowsDriveMounts(value).find((candidate) => existsSync(candidate)) ?? null;
+}
+
+/** Usable here: already absolute, or translatable to a path that exists on this machine. */
+function usablePath(value: unknown): string | null {
+  if (typeof value !== "string" || value.trim() === "") return null;
+  if (isAbsolute(value)) return value;
+  return translateForeignPath(value);
 }
 
 export type Harness = "claude" | "codex" | "opencode";
@@ -47,7 +84,7 @@ function pathsFile(): string {
 
 // The claude adapter asks per transcript during a sweep — cache by mtime so a hot scan
 // costs one stat, while a test (or `connect`) that rewrites the file is seen immediately.
-let _cache: { path: string; mtimeMs: number; value: HarnessPathsFile } | null = null;
+let _cache: { path: string; mtimeMs: number; value: HarnessPathsFile; raw: HarnessPathsFile } | null = null;
 
 export function readHarnessPaths(): HarnessPathsFile {
   const path = pathsFile();
@@ -59,23 +96,49 @@ export function readHarnessPaths(): HarnessPathsFile {
   }
   if (_cache && _cache.path === path && _cache.mtimeMs === mtimeMs) return _cache.value;
   let value: HarnessPathsFile = { version: 1 };
+  let raw: HarnessPathsFile = { version: 1 };
   try {
-    const raw = JSON.parse(readFileSync(path, "utf-8"));
-    if (raw && typeof raw === "object" && raw.version === 1) {
+    const parsed = JSON.parse(readFileSync(path, "utf-8"));
+    if (parsed && typeof parsed === "object" && parsed.version === 1) {
+      // RAW keeps recorded strings verbatim when they are plausible on SOME platform (absolute
+      // here, or a Windows drive path). Read-modify-write goes through raw, so a connect made under
+      // WSL never rewrites the `C:\...` spelling a native-Windows session recorded — translating in
+      // place would leave the entry broken the next time that Windows session runs.
+      const plausible = (v: unknown): v is string =>
+        typeof v === "string" && v.trim() !== "" && (isAbsolute(v) || windowsDriveMounts(v).length > 0);
+      raw = {
+        version: 1,
+        ...(plausible(parsed.opencodeDb) ? { opencodeDb: parsed.opencodeDb } : {}),
+        ...(plausible(parsed.codexHome) ? { codexHome: parsed.codexHome } : {}),
+        ...(Array.isArray(parsed.claudeConfigDirs)
+          ? { claudeConfigDirs: parsed.claudeConfigDirs.filter(plausible) }
+          : {}),
+      };
+      // The VIEW is what discovery consumes: usable on THIS platform, foreign spellings translated
+      // against a mount that actually exists, everything else dropped.
+      const opencodeDb = usablePath(raw.opencodeDb);
+      const codexHome = usablePath(raw.codexHome);
+      const claudeConfigDirs = (raw.claudeConfigDirs ?? [])
+        .map(usablePath)
+        .filter((dir): dir is string => dir !== null);
       value = {
         version: 1,
-        ...(absolutePath(raw.opencodeDb) ? { opencodeDb: raw.opencodeDb } : {}),
-        ...(absolutePath(raw.codexHome) ? { codexHome: raw.codexHome } : {}),
-        ...(Array.isArray(raw.claudeConfigDirs)
-          ? { claudeConfigDirs: raw.claudeConfigDirs.filter(absolutePath) }
-          : {}),
+        ...(opencodeDb === null ? {} : { opencodeDb }),
+        ...(codexHome === null ? {} : { codexHome }),
+        ...(claudeConfigDirs.length ? { claudeConfigDirs } : {}),
       };
     }
   } catch {
     /* unreadable → behave as absent; locate/doctor surface the file, never a crash */
   }
-  _cache = { path, mtimeMs, value };
+  _cache = { path, mtimeMs, value, raw };
   return value;
+}
+
+/** The file's verbatim (cross-platform) content — ONLY for read-modify-write in connect/forget. */
+function readHarnessPathsRaw(): HarnessPathsFile {
+  readHarnessPaths();
+  return _cache?.raw ?? { version: 1 };
 }
 
 export function persistedOpencodeDb(): string | null {
@@ -135,28 +198,34 @@ function verifyOpencodeDb(path: string): Verdict {
     return { ok: false, detail: "path does not exist" };
   }
   if (!st.isFile()) return { ok: false, detail: "not a file (expected a SQLite database)" };
-  let db: Database | null = null;
+  // Read through the fallback ladder, so a database this user can read but whose DIRECTORY is not
+  // writable still verifies. That case is common in containers and on read-only mounts, and a plain
+  // read-only open fails it with an errno string this function used to report as a SCHEMA verdict —
+  // "not an OpenCode database" for what is purely a permissions problem.
+  const handle = openReadonlySqlite(path);
+  const db = handle.db;
+  if (db === null) return { ok: false, detail: handle.detail };
   try {
-    db = new Database(path, { readonly: true });
     const tables = new Set(
       (db.query("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map((r) => r.name),
     );
     if (!tables.has("session")) return { ok: false, detail: "no `session` table — not an OpenCode database" };
     const count = (table: string): number =>
-      tables.has(table) ? (db!.query(`SELECT COUNT(*) AS n FROM "${table}"`).get() as { n: number }).n : -1;
+      tables.has(table) ? (db.query(`SELECT COUNT(*) AS n FROM "${table}"`).get() as { n: number }).n : -1;
     const legacy = count("message");
     const projected = count("session_message");
     if (legacy < 0 && projected < 0)
       return { ok: false, detail: "no `message` or `session_message` table — not an OpenCode database" };
     const show = (n: number) => (n < 0 ? "absent" : String(n));
+    const how = handle.via === "direct" ? "" : ` · via ${handle.via}: ${handle.detail}`;
     return {
       ok: true,
-      detail: `session=${count("session")} · legacy message=${show(legacy)} · session_message=${show(projected)}`,
+      detail: `session=${count("session")} · legacy message=${show(legacy)} · session_message=${show(projected)}${how}`,
     };
   } catch (e) {
     return { ok: false, detail: `cannot read as SQLite: ${e instanceof Error ? e.message : String(e)}` };
   } finally {
-    db?.close();
+    handle.close();
   }
 }
 
@@ -242,7 +311,9 @@ export function connectHarnessPath(harness: Harness, path: string): Verdict & { 
     return { ok: false, detail: "not an absolute path — a persisted location must not depend on a cwd" };
   const verdict = verifyHarnessPath(harness, path);
   if (!verdict.ok) return verdict; // fail-closed: an unverified path is never recorded
-  const current = readHarnessPaths();
+  // Merge onto the file's VERBATIM content, not the translated view — writing the view would
+  // rewrite another platform's spelling of an entry this platform merely translated to read.
+  const current = readHarnessPathsRaw();
   if (harness === "opencode") current.opencodeDb = path;
   else if (harness === "codex") current.codexHome = path;
   else {
@@ -254,7 +325,7 @@ export function connectHarnessPath(harness: Harness, path: string): Verdict & { 
 }
 
 export function forgetHarnessPath(harness: Harness): boolean {
-  const current = readHarnessPaths();
+  const current = readHarnessPathsRaw();
   const had =
     harness === "opencode" ? current.opencodeDb !== undefined
     : harness === "codex" ? current.codexHome !== undefined

@@ -22,6 +22,8 @@ import { countLines, discoverViaRoutes, scanIdentity, type IdentitySpec } from "
 import { readTail, type Increment, type Turn } from "../extract.ts";
 import { canonicalWorktree } from "../enrollment.ts";
 import { persistedCodexHome } from "../harness-locate.ts";
+import { openReadonlyDatabase } from "../sqlite-open.ts";
+import { envValueOutsideRepoFiles } from "../env-policy.ts";
 
 // Codex honors $CODEX_HOME (falling back to ~/.codex) for its state dir — mirror that so a
 // user who relocates CODEX_HOME is still captured. (openai/codex utils/home-dir.)
@@ -34,7 +36,12 @@ function home(): string {
 }
 export function codexHome(): string {
   // env > persisted (`llmwiki connect codex <dir>`, verified at connect time) > ~/.codex.
-  return process.env.CODEX_HOME?.trim() || persistedCodexHome() || join(home(), ".codex");
+  //
+  // The env read goes through the repository-env guard: Bun autoloads `.env` from the cwd, and the
+  // cwd here is the user's repository. Without the guard a tracked `.env` could redeclare
+  // CODEX_HOME and redirect which sessions this engine reads — a decision that must come from the
+  // machine, never from a file that arrives with a clone.
+  return envValueOutsideRepoFiles("CODEX_HOME")?.trim() || persistedCodexHome() || join(home(), ".codex");
 }
 function sessionsRoot(): string {
   return join(codexHome(), "sessions");
@@ -87,7 +94,8 @@ function indexedCompressedRoutes(): DiscoveredRoute[] {
   for (const dbPath of stateDbPaths()) {
     let db: Database | null = null;
     try {
-      db = new Database(dbPath, { readonly: true });
+      db = openReadonlyDatabase(dbPath);
+      if (db === null) continue; // unreadable state index → the uncompressed rollouts still route
       const rows = db.query("SELECT id, rollout_path, cwd FROM threads").all() as {
         id: unknown;
         rollout_path: unknown;
@@ -135,8 +143,36 @@ function indexedCompressedRoutes(): DiscoveredRoute[] {
 // Cold rollouts get compressed in place (foo.jsonl → foo.jsonl.zst). Two consequences:
 // (a) discovery/parse must decompress .zst; (b) a row queued as foo.jsonl may now exist
 // only as foo.jsonl.zst — resolve to the sibling instead of dropping the session.
-// Decompression is feature-detected (Bun.zstdDecompressSync, then node:zlib) so an old
-// runtime degrades to "skip compressed files" rather than crashing.
+// Decompression is feature-detected down three rungs, because the runtime floor this engine
+// advertises (Bun 1.1) predates in-process zstd entirely:
+//
+//   Bun.zstdDecompressSync — Bun 1.2+
+//   node:zlib zstd         — newer Node-compat surfaces
+//   the `zstd` binary      — present wherever Codex itself compressed these files, and the only
+//                            rung a Bun 1.1 machine has
+//
+// Missing all three is not a crash and not a lost session: readRollout returns null, the session is
+// simply not enqueued this pass, and the next sweep tries again. What it WAS, before the third rung
+// and `zstdAvailable()`, is invisible — every cold Codex session silently absent while doctor
+// reported a healthy Codex.
+let zstdBinary: string | null | undefined;
+
+function zstdViaBinary(buf: Buffer): Buffer | null {
+  if (zstdBinary === undefined) zstdBinary = Bun.which("zstd");
+  if (!zstdBinary) return null;
+  try {
+    const r = Bun.spawnSync([zstdBinary, "-d", "-c"], {
+      stdin: buf,
+      stdout: "pipe",
+      stderr: "ignore",
+      timeout: 15_000,
+    });
+    return r.exitCode === 0 ? Buffer.from(r.stdout) : null;
+  } catch {
+    return null;
+  }
+}
+
 function zstdDecompress(buf: Buffer): Buffer | null {
   try {
     const b: any = globalThis.Bun;
@@ -151,7 +187,22 @@ function zstdDecompress(buf: Buffer): Buffer | null {
   } catch {
     /* unavailable */
   }
-  return null;
+  return zstdViaBinary(buf);
+}
+
+/** Can this machine read compressed rollouts at all, and by which route? For doctor. */
+export function zstdAvailability(): { available: boolean; via: string } {
+  const b: any = globalThis.Bun;
+  if (typeof b?.zstdDecompressSync === "function") return { available: true, via: "Bun.zstdDecompressSync" };
+  try {
+    const zlib = require("node:zlib");
+    if (typeof zlib.zstdDecompressSync === "function") return { available: true, via: "node:zlib" };
+  } catch {
+    /* unavailable */
+  }
+  if (zstdBinary === undefined) zstdBinary = Bun.which("zstd");
+  if (zstdBinary) return { available: true, via: `${zstdBinary} (external)` };
+  return { available: false, via: "none" };
 }
 
 // A queued path may have been compressed after enqueue — return the path that exists now.

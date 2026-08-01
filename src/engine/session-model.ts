@@ -32,6 +32,7 @@ import { basename } from "node:path";
 import { getSourceKind, transcriptsForRepoReadOnly } from "./capture.ts";
 import { llmTemplate } from "./claude.ts";
 import { opencodeDbPaths } from "./sources/opencode.ts";
+import { openReadonlyDatabase } from "./sqlite-open.ts";
 
 export type Harness = "claude" | "codex" | "opencode";
 export type ModelTier = "light" | "heavy";
@@ -211,7 +212,8 @@ function opencodeExportMeta(path: string): { sourcePath?: string; sessionID?: st
 function opencodeDbModel(dbPath: string, sessionID?: string): string | null {
   let db: Database | null = null;
   try {
-    db = new Database(dbPath, { readonly: true });
+    db = openReadonlyDatabase(dbPath);
+    if (db === null) return null;
     // v1 (`message`) is the schema every installed OpenCode actually writes; the event-sourced
     // `session_message` projection is checked second for forward compatibility. Both store the
     // model on the assistant row's JSON, so neither read touches message text.

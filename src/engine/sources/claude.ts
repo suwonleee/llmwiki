@@ -11,6 +11,7 @@ import type { DiscoveredRoute, DiscoveredSession, ParseOpts, TranscriptSource } 
 import { countLines, discoverViaRoutes, scanIdentity, type IdentitySpec } from "./routing.ts";
 import { extractIncrement, type Increment } from "../extract.ts";
 import { persistedClaudeDirs } from "../harness-locate.ts";
+import { envValueOutsideRepoFiles } from "../env-policy.ts";
 
 // Respect an explicitly isolated HOME (fresh-install tests, containers, CI). On macOS
 // os.homedir() can resolve the account database home even when HOME was overridden,
@@ -50,7 +51,9 @@ export function claudeConfigDirs(root: string = home()): string[] {
     entries = [];
   }
   const candidates = entries.filter((d) => d.startsWith(".claude")).map((d) => join(root, d));
-  const cfg = process.env.CLAUDE_CONFIG_DIR?.trim().replace(/[\\/]+$/, "");
+  // Guarded: Bun autoloads the cwd's `.env`, and the cwd is the user's repository. A tracked file
+  // must not be able to declare where this machine's Claude profile lives.
+  const cfg = envValueOutsideRepoFiles("CLAUDE_CONFIG_DIR")?.trim().replace(/[\\/]+$/, "");
   if (cfg) candidates.push(cfg.startsWith("~/") ? join(root, cfg.slice(2)) : cfg);
   return dirsThatExist(candidates);
 }
@@ -168,7 +171,7 @@ function isClaudeTranscript(path: string): boolean {
   if (p.includes("/subagents/")) return false;
   if ((p.startsWith(homeDir + "/") || p === homeDir) && /\/\.claude[^/]*\/projects\//.test(p)) return true;
   // Explicit config dir: accept <cfg>/projects/** wherever cfg lives (may be outside $HOME).
-  const cfg = process.env.CLAUDE_CONFIG_DIR?.trim().replace(/[\\/]+$/, "");
+  const cfg = envValueOutsideRepoFiles("CLAUDE_CONFIG_DIR")?.trim().replace(/[\\/]+$/, "");
   if (cfg) {
     const cfgN = (cfg.startsWith("~/") ? join(home(), cfg.slice(2)) : cfg).replace(/\\/g, "/");
     if (p.startsWith(cfgN + "/projects/")) return true;

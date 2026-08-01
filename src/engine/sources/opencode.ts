@@ -39,6 +39,8 @@ import {
   setEffectiveStateRoot,
 } from "../state-dir.ts";
 import { persistedOpencodeDb } from "../harness-locate.ts";
+import { openReadonlyDatabase } from "../sqlite-open.ts";
+import { envValueOutsideRepoFiles } from "../env-policy.ts";
 
 const HOME = homedir();
 // ---- locations -----------------------------------------------------------------
@@ -47,7 +49,10 @@ const HOME = homedir();
 // and $OPENCODE_DB overrides everything (database.ts:44-55). Lazy so tests can redirect.
 export function opencodeDbPaths(): string[] {
   // env > persisted (`llmwiki connect opencode <db>`, verified at connect time) > XDG scan.
-  const override = process.env.OPENCODE_DB?.trim() || persistedOpencodeDb() || "";
+  // Both env reads are guarded: Bun autoloads the cwd's `.env` and the cwd is the user's
+  // repository, so an unguarded read would let a tracked file redirect which database this engine
+  // reads sessions out of.
+  const override = envValueOutsideRepoFiles("OPENCODE_DB")?.trim() || persistedOpencodeDb() || "";
   if (override) {
     try {
       return existsSync(override) ? [realpathSync(override)] : [];
@@ -56,7 +61,7 @@ export function opencodeDbPaths(): string[] {
     }
   }
   const dataDir =
-    process.env.XDG_DATA_HOME?.trim() || join(HOME, ".local", "share");
+    envValueOutsideRepoFiles("XDG_DATA_HOME")?.trim() || join(HOME, ".local", "share");
   const root = join(dataDir, "opencode");
   let entries: string[];
   try {
@@ -798,12 +803,12 @@ function exportSessionV1(
   }
 }
 
+// A plain read-only open needs write permission on the DIRECTORY (SQLite has to attach the WAL's
+// -shm index there). On a read-only mount, or when OpenCode's data belongs to another uid, that
+// fails and this adapter reported "no OpenCode sessions" for what is a permissions problem. The
+// ladder in sqlite-open.ts falls back to a private snapshot, then to an immutable open.
 function openRO(path: string): Database | null {
-  try {
-    return new Database(path, { readonly: true });
-  } catch {
-    return null;
-  }
+  return openReadonlyDatabase(path);
 }
 
 function readMeta(path: string): ExportMeta | null {
