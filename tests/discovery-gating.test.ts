@@ -24,6 +24,7 @@ import { codexSource } from "../src/engine/sources/codex.ts";
 import { opencodeSource, setExportDir } from "../src/engine/sources/opencode.ts";
 import { resetEnrollmentCache } from "../src/engine/enrollment.ts";
 import { enrollRepo, makeGitRepo } from "./support/git-repo.ts";
+import { zstdCompressFixture } from "./support/zstd-fixture.ts";
 
 const dirs: string[] = [];
 const saved: Record<string, string | undefined> = {};
@@ -230,7 +231,7 @@ describe("Codex routing never decompresses a cold rollout", () => {
       "\n" +
       JSON.stringify({ type: "response_item", payload: { role: "user", content: [{ text: "hello" }] } }) +
       "\n";
-    writeFileSync(cold, Buffer.from((Bun as any).zstdCompressSync(Buffer.from(plain))));
+    writeFileSync(cold, zstdCompressFixture(Buffer.from(plain)));
 
     const state = new Database(join(codexHome, "state_5.sqlite"));
     state.exec("CREATE TABLE threads (id TEXT, rollout_path TEXT, cwd TEXT)");
@@ -268,7 +269,7 @@ describe("Codex routing never decompresses a cold rollout", () => {
     expect(before?.path).toBe(plainPath);
 
     const compressedPath = `${plainPath}.zst`;
-    writeFileSync(compressedPath, Buffer.from((Bun as any).zstdCompressSync(Buffer.from(body))));
+    writeFileSync(compressedPath, zstdCompressFixture(Buffer.from(body)));
     rmSync(plainPath);
     const state = new Database(join(linkedHome, "state_5.sqlite"));
     state.exec("CREATE TABLE threads (id TEXT, rollout_path TEXT, cwd TEXT)");

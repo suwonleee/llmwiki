@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { codexSource } from "../src/engine/sources/codex.ts";
 import { sources, sourceForKind, discoverableSources } from "../src/engine/source.ts";
+import { zstdCompressFixture } from "./support/zstd-fixture.ts";
 
 function writeJsonl(path: string, records: any[]): Buffer {
   const data = Buffer.from(records.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf-8");
@@ -117,7 +118,7 @@ describe("codex .zst rollouts", () => {
 
   function writeZst(path: string): number {
     const plain = Buffer.from(RECORDS.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf-8");
-    writeFileSync(path, Buffer.from((Bun as any).zstdCompressSync(plain)));
+    writeFileSync(path, zstdCompressFixture(plain));
     return plain.length; // decompressed byte length = expected watermark
   }
 
