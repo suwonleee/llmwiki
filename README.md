@@ -276,7 +276,7 @@ package.json·tsconfig.json   Bun metadata (for typecheck; the runtime executes 
 
 Storage principle — three homes, one owner each:
 
-- capture queue — central: `<clone>/.state/capture.db`
+- capture queue — central: `<state>/capture.db`, where `<state>` defaults to `$XDG_DATA_HOME/llmwiki` (an existing `<clone>/.state` from an older install keeps being used; `llmwiki migrate-state` moves it)
 - content — each repo's own `docs/wiki/` (co-located; markdown = source of truth)
 - index — engine-held, one directory per project under the state root (`llmwiki state-path <repo>`); regenerable at any time, so the repository carries only `docs/wiki/`
 
@@ -303,9 +303,10 @@ between two installs). Run it from the installed clone **before** you move or de
 
 | what | where | retention |
 |---|---|---|
-| capture queue (which repositories you worked in, when — metadata only) | `<clone>/.state/capture.db` | kept until `--purge-data` |
-| daemon log (aggregate counts; never repository paths of unenrolled projects) | `<clone>/.state/daemon.log` | kept until `--purge-data` |
-| OpenCode transcript exports (conversation text — the only bodies llmwiki stores) | `<clone>/.state/opencode-export/` | **auto-deleted after 30 days** |
+| capture queue (which repositories you worked in, when — metadata only) | `<state>/capture.db` | kept until `--purge-data` |
+| daemon log (aggregate counts; never repository paths of unenrolled projects) | `<state>/daemon.log` | kept until `--purge-data` |
+| OpenCode transcript exports (conversation text — the only bodies llmwiki stores) | `<state>/opencode-export/` | **auto-deleted after 30 days** |
+| per-project index and caches (regenerable) | `<state>/projects/<id>/` | compacted, and dropped after 60 idle days |
 
 The state directory and everything in it are created private (`0700` / `0600`). Claude and Codex
 transcripts are read in place from the harness's own store — llmwiki makes no copy of them.
@@ -394,7 +395,7 @@ screens down to nothing cancels the call instead of sending the remainder.
 | `LLMWIKI_MODEL_LIGHT` | `claude-sonnet-5` | draft-tier — WRITE (page generation) |
 | `CLAUDE_CONFIG_DIR` | (Claude Code standard) | If set, that directory is also recognized as a Claude profile — hook wiring (wire)·capture (claude source)·doctor all honor it. |
 | `LLMWIKI_LLM_CMD` | **unset — no subprocess, no network** | argv template for the LLM call. `{prompt}`·`{model}` are substituted token-by-token (no shell parsing). If `{prompt}` is absent, the prompt is sent via stdin. For multi-word values needing quotes, use a JSON array (`["my-llm","--q","{prompt}"]`). Any CLI works — Codex·`llm`·ollama, etc. |
-| `LLMWIKI_STATE_DIR` | `<clone>/.state` | Optional machine-local state location. Repository `.env` files cannot redirect it. A custom path must be new, empty, or already owned by llmwiki; foreign non-empty directories fail closed. |
+| `LLMWIKI_STATE_DIR` | `$XDG_DATA_HOME/llmwiki` (or an existing `<clone>/.state`) | Optional machine-local state location. Repository `.env` files cannot redirect it. A custom path must be new, empty, or already owned by llmwiki; foreign non-empty directories fail closed. |
 | `LLMWIKI_LANG` | `en` | Language for cold-start operating rules/headers. `ko` for Korean. (The wiki body itself stays as written — only the UI copy switches.) |
 | `LLMWIKI_SEARCH_RELAX` | (on) | Set `off` to disable the relaxed-recall fallback — when a natural-language query strict-AND matches 0 rows, search retries ONCE with the same terms OR-joined (trigram-safe, Unicode/CJK-aware, no stopword lists). Kill-switch for A/B measurement. |
 | `LLMWIKI_MAX_SOURCE_BYTES` | `262144` (256KB) | Per-file content cap for SOURCE files. Larger files (multi-MB yaml/json fixtures) are registered metadata-only — findable by name, but not full-text indexed. Wiki pages are exempt. Keeps the index compact and search fast on fixture-heavy repos, with no quality change on search/turn-context. |
