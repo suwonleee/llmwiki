@@ -347,7 +347,11 @@ describe("opencode adapter", () => {
       process.env.LC_ALL = "fr_FR.UTF-8";
       const french = capture.openCodeOwner();
 
-      expect(korean.token).toStartWith("ps-lstart-c-v1:");
+      // The token must be locale-invariant, whichever mechanism produced it. `ps -o lstart=` prints
+      // a localized date, which is why that path pins LC_ALL=C; procfs has no such exposure. Both
+      // schemes are acceptable here — pinning ONE of them would assert the implementation rather
+      // than the property, and would fail on the platform that legitimately uses the other.
+      expect(korean.token).toMatch(/^(proc-starttime-v1|ps-lstart-c-v1):/);
       expect(french.token).toBe(korean.token);
       expect(capture.openCodeOwnerLive(korean)).toBe(true);
     } finally {

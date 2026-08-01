@@ -3,7 +3,7 @@
 // the daemon sees, regardless of terminal/profile/repo. The update step (per-repo)
 // reads its slice by repo path and advances the watermark here.
 import { Database } from "bun:sqlite";
-import { existsSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { captureBucket } from "./wiki-root.ts";
 import {
@@ -122,12 +122,31 @@ export interface CaptureRow {
   distilled_at: string | null;
 }
 
+// Every open of this file — the 30s daemon sweep, both session hooks, and any `llmwiki`
+// subcommand — runs the schema block above as a write transaction. Without a busy timeout SQLite's
+// default is 0: the loser of any overlap fails INSTANTLY with SQLITE_BUSY, and both the daemon
+// (a counter) and the hooks (`2>/dev/null; exit 0`) absorb that silently, so contention presents
+// as missing capture rather than as an error. Wait instead — the per-repo index has made the same
+// choice since its first WAL day (db.ts).
+const BUSY_TIMEOUT_MS = 5000;
+
+function applyBusyTimeout(db: Database): Database {
+  db.exec(`PRAGMA busy_timeout=${BUSY_TIMEOUT_MS}`);
+  return db;
+}
+
+/** Readers wait too: a WAL checkpoint or a schema migration briefly locks them out as well. */
+function openReadonly(): Database {
+  return applyBusyTimeout(new Database(DB_PATH, { readonly: true }));
+}
+
 function connect(): Database {
   syncStatePaths();
   // The state root is created (or adopted) under the ownership contract, so the queue database
   // never lands in a directory this engine does not own — and never with default permissions.
   ensureOwnedStateRoot(STATE_DIR);
   const db = new Database(DB_PATH);
+  applyBusyTimeout(db);
   db.exec(SCHEMA);
   // SQLite creates capture.db plus its -wal/-shm siblings with the process umask; re-assert the
   // private modes right after they exist rather than hoping the umask was strict.
@@ -226,10 +245,39 @@ export interface OpenCodeOwner {
   readonly token: string;
 }
 
-const PROCESS_START_TOKEN_PREFIX = "ps-lstart-c-v1:";
+// A process-identity token: PID plus the moment that PID started, so a recycled PID never reads as
+// the original owner. Two ways to learn a start time, because neither is available everywhere:
+//
+//   proc-starttime — /proc/<pid>/stat field 22 (jiffies since boot). Linux only, but no spawn at
+//                    all, and present in the minimal containers where `ps` is BusyBox's and has no
+//                    `-o`. Before this, such a machine produced an empty token forever, which made
+//                    openCodeOwnerLive answer "cannot prove" for eternity and no interrupted append
+//                    was ever reclaimed.
+//   ps-lstart      — `ps -p <pid> -o lstart=`. The macOS/BSD answer, and the original scheme.
+//
+// Tokens are compared ONLY within the same scheme: the two spellings of "when did this start" are
+// not equal to each other, and treating a scheme change as a mismatch would report a live owner as
+// dead. Liveness therefore regenerates in the STORED token's scheme when it can.
+const PROC_START_TOKEN_PREFIX = "proc-starttime-v1:";
+const PS_START_TOKEN_PREFIX = "ps-lstart-c-v1:";
+const START_TOKEN_PREFIXES = [PROC_START_TOKEN_PREFIX, PS_START_TOKEN_PREFIX] as const;
 
-function processStartToken(pid: number): string {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return "";
+function procStartToken(pid: number): string {
+  let text: string;
+  try {
+    text = readFileSync(`/proc/${pid}/stat`, "utf-8");
+  } catch {
+    return ""; // no procfs (macOS/BSD), or the process is gone
+  }
+  // comm (field 2) is parenthesized and may itself contain spaces or ')', so every field after it
+  // is read relative to the LAST ')'. state (field 3) then lands at index 0, starttime (22) at 19.
+  const close = text.lastIndexOf(")");
+  if (close < 0) return "";
+  const starttime = text.slice(close + 1).trim().split(/\s+/)[19];
+  return starttime && /^\d+$/.test(starttime) ? PROC_START_TOKEN_PREFIX + starttime : "";
+}
+
+function psStartToken(pid: number): string {
   try {
     const result = Bun.spawnSync(["ps", "-p", String(pid), "-o", "lstart="], {
       env: { ...process.env, LC_ALL: "C", LANG: "C" },
@@ -237,10 +285,20 @@ function processStartToken(pid: number): string {
       stderr: "ignore",
     });
     const started = result.exitCode === 0 ? result.stdout.toString().trim() : "";
-    return started ? PROCESS_START_TOKEN_PREFIX + started : "";
+    return started ? PS_START_TOKEN_PREFIX + started : "";
   } catch {
     return "";
   }
+}
+
+function processStartToken(pid: number, prefer?: string): string {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return "";
+  const order = prefer === PS_START_TOKEN_PREFIX ? [psStartToken, procStartToken] : [procStartToken, psStartToken];
+  for (const read of order) {
+    const token = read(pid);
+    if (token) return token;
+  }
+  return "";
 }
 
 export function openCodeOwner(pid = process.pid): OpenCodeOwner {
@@ -250,11 +308,9 @@ export function openCodeOwner(pid = process.pid): OpenCodeOwner {
 /** true = same live process, false = dead/reused PID, null = live state cannot be proven. */
 export function openCodeOwnerLive(owner: OpenCodeOwner): boolean | null {
   if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) return false;
-  const currentToken = processStartToken(owner.pid);
-  if (
-    currentToken.startsWith(PROCESS_START_TOKEN_PREFIX) &&
-    owner.token.startsWith(PROCESS_START_TOKEN_PREFIX)
-  ) {
+  const storedScheme = START_TOKEN_PREFIXES.find((prefix) => owner.token.startsWith(prefix));
+  const currentToken = processStartToken(owner.pid, storedScheme);
+  if (storedScheme && currentToken.startsWith(storedScheme)) {
     return currentToken === owner.token;
   }
   // Legacy/unversioned tokens and lookup failures cannot prove PID reuse. If that PID is still
@@ -610,7 +666,7 @@ export function inspectPendingReadOnly(repo: string | null = null): PendingReadO
   if (!existsSync(DB_PATH)) return { status: "absent", rows: [], error: null };
   let db: Database | null = null;
   try {
-    db = new Database(DB_PATH, { readonly: true });
+    db = openReadonly();
     const rows = repo
       ? (db
           .query("SELECT * FROM capture_queue WHERE status='pending' AND repo=? ORDER BY first_seen")
@@ -686,7 +742,7 @@ export function transcriptsForRepoReadOnly(repo: string): { path: string; sessio
   if (!existsSync(DB_PATH)) return [];
   let db: Database | null = null;
   try {
-    db = new Database(DB_PATH, { readonly: true });
+    db = openReadonly();
     const rows = db
       .query("SELECT transcript_path, session_id FROM capture_queue WHERE repo = ? ORDER BY first_seen")
       .all(repo) as { transcript_path: string; session_id: string | null }[];
@@ -747,7 +803,7 @@ export function routeHintsForSession(
   if (!sessionId || !existsSync(DB_PATH)) return [];
   let db: Database | null = null;
   try {
-    db = new Database(DB_PATH, { readonly: true });
+    db = openReadonly();
     const rows = db
       .query("SELECT transcript_path, repo, source_kind FROM route_hint WHERE session_id = ? ORDER BY seen_at")
       .all(sessionId) as { transcript_path: string; repo: string; source_kind: string | null }[];
@@ -765,7 +821,7 @@ export function queueRowsForSession(sessionId: string): CaptureRow[] {
   if (!sessionId || !existsSync(DB_PATH)) return [];
   let db: Database | null = null;
   try {
-    db = new Database(DB_PATH, { readonly: true });
+    db = openReadonly();
     return db
       .query("SELECT * FROM capture_queue WHERE session_id = ? ORDER BY first_seen")
       .all(sessionId) as CaptureRow[];
@@ -782,7 +838,7 @@ export function routeHintFor(transcriptPath: string): { repo: string; sessionId:
   if (!existsSync(DB_PATH)) return null;
   let db: Database | null = null;
   try {
-    db = new Database(DB_PATH, { readonly: true });
+    db = openReadonly();
     const row = db
       .query("SELECT repo, session_id FROM route_hint WHERE transcript_path = ?")
       .get(transcriptPath) as { repo: string; session_id: string | null } | null;
@@ -817,7 +873,7 @@ export function healthReadOnly(): CaptureHealth | null {
   if (!existsSync(DB_PATH)) return null;
   let db: Database | null = null;
   try {
-    db = new Database(DB_PATH, { readonly: true });
+    db = openReadonly();
     const byKind = db
       .query(
         "SELECT COALESCE(source_kind,'(unknown)') kind, COUNT(*) rows, MAX(first_seen) lastSeen " +
@@ -893,7 +949,7 @@ export function pendingPastRetentionReadOnly(days: number, kind = "claude-jsonl"
   const window = Math.max(0, Math.floor(days));
   let db: Database | null = null;
   try {
-    db = new Database(DB_PATH, { readonly: true });
+    db = openReadonly();
     // One query for both bands: everything old enough that the deadline is in sight, split below.
     const rows = db
       .query(
