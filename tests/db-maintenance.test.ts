@@ -6,19 +6,32 @@ import { WikiIndex } from "../src/engine/db.ts";
 import {
   compactDatabase,
   DEFAULT_DB_COMPACTION_POLICY,
+  ftsIndexBytes,
   inspectDatabaseHealth,
 } from "../src/engine/db-maintenance.ts";
 
-function ftsBytes(idx: WikiIndex): number {
+// Per-table sizes come from `dbstat`, which is a COMPILE-TIME SQLite option — Bun ships it on
+// macOS and not on Linux. Assertions about index SIZE are therefore conditional on the platform
+// being able to measure one; everything else in these tests must hold everywhere.
+function ftsBytes(idx: WikiIndex): number | null {
   const conn = idx.connect();
-  const row = conn
-    .query<{ bytes: number }, []>(
-      "SELECT coalesce(sum(pgsize), 0) AS bytes FROM dbstat WHERE name LIKE 'chunks_fts_%'",
-    )
-    .get();
-  conn.close();
-  return row?.bytes ?? 0;
+  try {
+    return ftsIndexBytes(conn);
+  } finally {
+    conn.close();
+  }
 }
+
+const DBSTAT = (() => {
+  const probe = new WikiIndex(mkdtempSync(join(tmpdir(), "llmwiki-dbstat-probe-")));
+  const conn = probe.connect();
+  try {
+    return ftsIndexBytes(conn) !== null;
+  } finally {
+    conn.close();
+    rmSync(probe.root, { recursive: true, force: true });
+  }
+})();
 
 describe("WikiIndex maintenance", () => {
   let root: string;
@@ -85,17 +98,17 @@ describe("WikiIndex maintenance", () => {
     expect(row?.freelist_count).toBe(0);
   });
 
-  test("normal indexing keeps FTS storage bounded across repeated updates", () => {
+  test.if(DBSTAT)("normal indexing keeps FTS storage bounded across repeated updates", () => {
     const page = join(wiki, "page.md");
     for (let revision = 0; revision < 30; revision++) {
       writeFileSync(page, `# Page ${revision}\n\n` + `반복 갱신 검색 본문 ${revision} `.repeat(2000));
       idx.indexAll();
     }
-    const churnBytes = ftsBytes(idx);
+    const churnBytes = ftsBytes(idx)!;
 
     idx.reindex();
 
-    const freshBytes = ftsBytes(idx);
+    const freshBytes = ftsBytes(idx)!;
     expect(churnBytes).toBeLessThanOrEqual(freshBytes * 3);
   });
 
@@ -117,7 +130,10 @@ describe("WikiIndex maintenance", () => {
     });
     expect(report.integrity.ok).toBeTrue();
     expect(report.storage.databaseBytes).toBeGreaterThan(0);
-    expect(report.ftsBytes).toBeGreaterThan(0);
+    // Measurable only where SQLite was built with dbstat; elsewhere the report must say "unknown"
+    // rather than take the rest of database health down with it.
+    if (DBSTAT) expect(report.ftsBytes).toBeGreaterThan(0);
+    else expect(report.ftsBytes).toBeNull();
     expect(report.liveIndexedBytes).toBeGreaterThan(0);
     expect(report.buckets.some((bucket) => bucket.sourceKind === "wiki" && bucket.tier === "live")).toBeTrue();
     expect(report.buckets.some((bucket) => bucket.sourceKind === "source" && bucket.tier === "live")).toBeTrue();

@@ -36,7 +36,17 @@ export type DatabaseHealthReport = {
     readonly freeBytes: number;
     readonly freeRatio: number;
   };
-  readonly ftsBytes: number;
+  /**
+   * Bytes the trigram index occupies, or null where this build of SQLite cannot say.
+   *
+   * The only source for a per-table size is the `dbstat` virtual table, which is a COMPILE-TIME
+   * option (SQLITE_ENABLE_DBSTAT_VTAB). Bun ships it on macOS and not on Linux — so a query that
+   * had never failed for the author threw `no such table: dbstat` on every Linux machine, taking
+   * `db-health`, `compact` AND `wiki-doctor` down with it. Nothing else in this report needs it:
+   * total and free space come from PRAGMAs that exist everywhere, and compaction eligibility is
+   * decided entirely from those.
+   */
+  readonly ftsBytes: number | null;
   readonly buckets: readonly DatabaseHealthBucket[];
   readonly liveIndexedBytes: number;
   readonly compactionEligible: boolean;
@@ -75,6 +85,26 @@ class DatabaseMaintenanceReadError extends Error {
 
   constructor(readonly sql: string, readonly column: string) {
     super(`Expected numeric ${column} from database maintenance query`);
+  }
+}
+
+/**
+ * Size of the trigram index, when this SQLite build can measure one.
+ *
+ * Probed rather than assumed: `dbstat` is a compile-time option, and which platforms have it is not
+ * something this engine gets to decide. An absent one is a missing MEASUREMENT, never a missing
+ * database — so it degrades to null and every other number in the report stands.
+ */
+export function ftsIndexBytes(db: Database): number | null {
+  try {
+    const row = db
+      .query<{ bytes: number }, []>(
+        "SELECT COALESCE(SUM(pgsize), 0) AS bytes FROM dbstat WHERE name GLOB 'chunks_fts*'",
+      )
+      .get();
+    return typeof row?.bytes === "number" ? row.bytes : null;
+  } catch {
+    return null; // no dbstat in this build (Bun on Linux, and any SQLite without the vtab)
   }
 }
 
@@ -120,7 +150,7 @@ export function inspectDatabaseHealth(
   return {
     integrity,
     storage: { databaseBytes, pageSizeBytes, pageCount, freePages, freeBytes, freeRatio },
-    ftsBytes: scalar(db, "SELECT COALESCE(SUM(pgsize), 0) AS bytes FROM dbstat WHERE name GLOB 'chunks_fts*'", "bytes"),
+    ftsBytes: ftsIndexBytes(db),
     buckets,
     liveIndexedBytes: buckets.reduce((total, bucket) => total + bucket.liveIndexedBytes, 0),
     compactionEligible:
