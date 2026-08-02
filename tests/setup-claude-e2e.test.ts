@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { readServiceDefinition, serviceEnvEntry, supervisorStubs } from "./support/service-definition.ts";
+import { engineCliCommand } from "../src/engine/paths.ts";
 
 const ROOT = join(import.meta.dir, "..");
 
@@ -101,8 +102,10 @@ describe("fresh Claude Code setup", () => {
     expect(installed["wiki-save"]).toContain("`## 1. <label>`"); // the installed skill carries the structure contract
     expect(installed["wiki-save"]).toContain("supporting detail at `    -`");
     expect(installed["wiki-save"]).toContain("noun phrases or telegraphic endings");
+    // Quoted: this line is the definition an agent reads for how to run the engine, and a clone
+    // path with a space in it splits the bare form in half (paths.ts).
     expect(installed["wiki-doctor"]).toContain(
-      `bun ${ROOT}/src/cli.ts doctor --harness claude --fix`,
+      `${engineCliCommand(ROOT)} doctor --harness claude --fix`,
     );
     expect(installed["wiki-doctor"]).toContain(`bun ${ROOT}/src/daemon/wire.ts`);
     expect(installed["wiki-doctor"].indexOf("doctor --harness claude --fix")).toBeLessThan(
