@@ -27,7 +27,7 @@ import {
   writeOwnedCommand,
 } from "../engine/claude-commands.ts";
 import { RETIRED_CLAUDE_COMMANDS } from "../engine/install-history.ts";
-import { CLONE_ROOT, CLONE_ROOT_SHELL } from "../engine/paths.ts";
+import { CLONE_ROOT, CLONE_ROOT_SHELL, engineCliCommand } from "../engine/paths.ts";
 import { claudeConfigDirs } from "../engine/sources/claude.ts";
 
 const ROOT = CLONE_ROOT; // resolved from this file's location — path/name-agnostic
@@ -154,7 +154,14 @@ function apply(dryRun = false): number {
     console.log("  [wire] no ~/.claude* profile found — nothing Claude-specific to wire.");
     console.log("  (If your Claude config dir lives elsewhere, set CLAUDE_CONFIG_DIR and re-run.)");
     console.log("  Harness-neutral usage (Codex / any): inject cold-start with");
-    console.log(`    bun ${ROOT}/src/cli.ts context <repo>`);
+    // engineCliCommand, not a bare `bun <root>/src/cli.ts`: this line is printed for the reader to
+    // paste into a shell, so it is subject to the same quoting contract as the invocations the
+    // wirings substitute into generated pages (paths.ts). It was the last unquoted spelling left,
+    // and it reaches exactly the adopters who have no Claude profile — a Codex- or OpenCode-only
+    // install, where this is the ONLY instruction they get. A clone under `~/my llmwiki` (or the
+    // `C:\Users\First Last` that Windows hands out by default) truncated it at the space, and bun
+    // answered `Module not found ".../my"`.
+    console.log(`    ${engineCliCommand(ROOT)} context <repo>`);
     console.log("  from your harness's startup config (e.g. AGENTS.md), and run /wiki-* steps via the same CLI.");
     return 0;
   }
