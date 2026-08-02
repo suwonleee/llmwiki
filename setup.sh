@@ -318,12 +318,17 @@ echo "=== setup installed. ==="
 # telling a Windows adopter to run `llmwiki init` hands them a command that exists in none of the
 # shells they have open. The explicit interpreter spelling is correct everywhere; only longer.
 CLI="$BUN_Q ${ROOT_Q}/src/cli.ts"
-if [ "$USE_CODEX" -eq 1 ] || [ "$USE_OPENCODE" -eq 1 ]; then
-    case "$(uname -s)" in
-        MINGW*|MSYS*|CYGWIN*) ;;
-        *) CLI="llmwiki" ;;
-    esac
-fi
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        # These lines get pasted into whatever shell the reader has open, and on Windows that is
+        # usually PowerShell, not the Git Bash that ran setup. A `/c/Users/...` spelling is a Git
+        # Bash-only path; the native one works in all three shells, and `bun` is on the Windows PATH.
+        CLI="bun \"$(cygpath -m "$ROOT" 2>/dev/null || echo "$ROOT")/src/cli.ts\""
+        ;;
+    *)
+        if [ "$USE_CODEX" -eq 1 ] || [ "$USE_OPENCODE" -eq 1 ]; then CLI="llmwiki"; fi
+        ;;
+esac
 echo "  • Initialize a project: $CLI init <repo>"
 echo "  • Verify the installation anytime: $CLI doctor --harness $DOCTOR_HARNESS"
 echo "  • Engine-only project diagnosis: $CLI wiki-doctor <repo> (add --fix for safe derived-state repair)"

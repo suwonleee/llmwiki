@@ -14,6 +14,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { insertAfterFrontmatter } from "../src/engine/frontmatter.ts";
 import { inspectCodexInstall, inspectOpenCodeInstall } from "../src/engine/doctor.ts";
+import { ENGINE_CLI_TOKEN, engineCliCommand } from "../src/engine/paths.ts";
+import { renderOwnedCommand } from "../src/engine/claude-commands.ts";
 
 const ROOT = join(import.meta.dir, "..");
 const SKILLS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"] as const;
@@ -53,6 +55,39 @@ describe("insertAfterFrontmatter", () => {
       const out = insertAfterFrontmatter(crlf, MARKER);
       expect(/^---\r?\n/.test(out)).toBe(true);
       expect(out).toContain(MARKER.trim());
+    }
+  });
+});
+
+describe("the engine invocation a generated page carries", () => {
+  test("is quoted, so a clone path with a space survives", () => {
+    // `C:\Users\First Last` is what Windows gives anyone who typed their full name at setup. The
+    // unquoted form truncated there — bun answered `Module not found ".../First"` and every engine
+    // call in every skill failed.
+    expect(engineCliCommand("/home/me/my llmwiki")).toBe('bun "/home/me/my llmwiki/src/cli.ts"');
+  });
+
+  test("the token it replaces is the one the shipped skills actually use", () => {
+    // If skill/*.md ever spells the invocation differently, the substitution silently stops
+    // happening and every page ships `~/llmwiki` — a path that exists on nobody's machine.
+    for (const name of SKILLS) {
+      expect(readFileSync(join(ROOT, "skill", `${name}.md`), "utf8")).toContain(ENGINE_CLI_TOKEN);
+    }
+  });
+
+  test("a Claude command comes out with the quoted spelling too", () => {
+    const root = mkdtempSync(join(tmpdir(), "llmwiki-cli root-"));
+    try {
+      mkdirSync(join(root, "skill"), { recursive: true });
+      writeFileSync(
+        join(root, "skill", "wiki-save.md"),
+        `---\ndescription: d\n---\nrun \`${ENGINE_CLI_TOKEN} index <repo>\`\n`,
+      );
+      const rendered = renderOwnedCommand("wiki-save.md", root);
+      expect(rendered).toContain(`${engineCliCommand(root)} index <repo>`);
+      expect(rendered).not.toContain(ENGINE_CLI_TOKEN);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

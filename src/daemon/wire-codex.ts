@@ -24,7 +24,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { insertAfterFrontmatter } from "../engine/frontmatter.ts";
 import { RETIRED_CODEX_SKILLS } from "../engine/install-history.ts";
-import { CLONE_ROOT, CLONE_ROOT_SHELL } from "../engine/paths.ts";
+import { CLONE_ROOT, CLONE_ROOT_SHELL, ENGINE_CLI_TOKEN, engineCliCommand } from "../engine/paths.ts";
 import { envValueOutsideRepoFiles } from "../engine/env-policy.ts";
 
 const HOME = process.env.HOME?.trim() || homedir();
@@ -42,9 +42,7 @@ const LAUNCHER = join(BIN_DIR, "llmwiki");
 // that way: the skill loaded, ran its first command, and got CommandNotFoundException. The
 // explicit interpreter spelling is what the Claude wiring has always emitted; it needs no PATH
 // entry and works in every shell on every platform.
-const CLI_SOURCE_TOKEN = "bun ~/llmwiki/src/cli.ts";
-const CLI_INVOCATION =
-  process.platform === "win32" ? `bun ${CLONE_ROOT_SHELL}/src/cli.ts` : "llmwiki";
+const CLI_INVOCATION = process.platform === "win32" ? engineCliCommand() : "llmwiki";
 const MANAGED = "llmwiki-codex-managed";
 const OWNER_MARK = `${MANAGED} root=${CLONE_ROOT}`;
 const LAUNCHER_MARK = "# llmwiki launcher (llmwiki-managed)";
@@ -69,7 +67,7 @@ const TURN_MARK = "hooks/userpromptsubmit-inject.sh";
 // repo argument is omitted deliberately: in hook mode the engine already prefers the harness's own
 // cwd over the positional, and CLAUDE_PROJECT_DIR — the only reason the adapter passes one — does
 // not exist under Codex. Verified end to end: hooks report Completed and the wiki block arrives.
-const CLI_SHELL = `bun "${CLONE_ROOT_SHELL}/src/cli.ts"`;
+const CLI_SHELL = engineCliCommand();
 const SESSION_CMD =
   process.platform === "win32"
     ? `${CLI_SHELL} context --hook-event SessionStart`
@@ -325,7 +323,7 @@ function codexSkill(sourceName: (typeof SKILLS)[number]): string {
   body = body.replace(/^---(\r?\n)/, `---$1name: ${name}$1`);
   body = body
     .replaceAll("Read `~/llmwiki/skill/wiki-save.md`", "invoke `$wiki-save` before continuing")
-    .replaceAll(CLI_SOURCE_TOKEN, CLI_INVOCATION)
+    .replaceAll(ENGINE_CLI_TOKEN, CLI_INVOCATION)
     .replace(/^\$ARGUMENTS$/gm, "Use any text supplied with this skill invocation as arguments and task context.")
     .replaceAll("$CLAUDE_PROJECT_DIR", "$PWD")
     .replaceAll("~/llmwiki", CLONE_ROOT)

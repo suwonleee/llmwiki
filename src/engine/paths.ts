@@ -22,6 +22,25 @@ export const CLONE_ROOT_SHELL =
   process.platform === "win32" ? CLONE_ROOT.replaceAll("\\", "/") : CLONE_ROOT;
 
 /**
+ * How a generated skill or command body spells "run the engine".
+ *
+ * Quoted, always. This string is pasted into a page that an agent will hand to a shell, and a
+ * Windows home directory routinely contains a space — `C:\Users\First Last` is the default for
+ * anyone who typed their full name at setup. Unquoted, that truncated silently: bun answered
+ * `Module not found ".../First"` and every engine call in every skill failed on machines whose
+ * only distinguishing feature was a two-word account name. Double quotes are the one form
+ * PowerShell, cmd.exe and bash all read identically; the posix-shaped path is for the same reason
+ * CLONE_ROOT_SHELL exists, and is CLONE_ROOT itself off Windows.
+ */
+export function engineCliCommand(root: string = CLONE_ROOT): string {
+  const path = process.platform === "win32" ? root.replaceAll("\\", "/") : root;
+  return `bun "${path}/src/cli.ts"`;
+}
+
+/** The token in `skill/*.md` that engineCliCommand() replaces. */
+export const ENGINE_CLI_TOKEN = "bun ~/llmwiki/src/cli.ts";
+
+/**
  * Fold a path (or a whole config file's text) to one spelling before comparing.
  *
  * Two things differ purely by transport, never by meaning: JSON escaping (`C:\\clone` on disk for

@@ -14,7 +14,7 @@
 // A plain copyFileSync satisfies none of the three. Route every write through here.
 import { lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { CLONE_ROOT } from "./paths.ts";
+import { CLONE_ROOT, ENGINE_CLI_TOKEN, engineCliCommand } from "./paths.ts";
 
 export const OWNED_MARK = "<!-- installed by llmwiki (owned; removed by uninstall) -->";
 
@@ -69,6 +69,11 @@ export function commandFileState(profile: string, name: string): CommandFileStat
 export function renderOwnedCommand(name: string, root: string = CLONE_ROOT): string {
   assertCommandName(name);
   const body = readFileSync(join(root, "skill", name), "utf-8")
+    // The engine invocation is substituted first and QUOTED (paths.ts): the generic path
+    // replacement below would otherwise leave `bun <root>/src/cli.ts` bare, which a clone path
+    // containing a space splits in half.
+    .split(ENGINE_CLI_TOKEN)
+    .join(engineCliCommand(root))
     .split("~/llmwiki")
     .join(root)
     .split("$HOME/llmwiki")

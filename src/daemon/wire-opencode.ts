@@ -20,7 +20,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { insertAfterFrontmatter } from "../engine/frontmatter.ts";
 import { RETIRED_OPENCODE_COMMANDS } from "../engine/install-history.ts";
-import { CLONE_ROOT, CLONE_ROOT_SHELL } from "../engine/paths.ts";
+import { CLONE_ROOT, ENGINE_CLI_TOKEN, engineCliCommand } from "../engine/paths.ts";
 import { envValueOutsideRepoFiles } from "../engine/env-policy.ts";
 
 const HOME = process.env.HOME?.trim() || homedir();
@@ -34,9 +34,7 @@ const COMMANDS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-docto
 // See wire-codex.ts for the full reasoning: the ~/.local/bin launcher is a `#!/bin/sh` script, and
 // OpenCode runs the agent's shell commands through PowerShell on Windows — where a command body
 // that says `llmwiki …` fails on its very first line. Same substitution, same platform rule.
-const CLI_SOURCE_TOKEN = "bun ~/llmwiki/src/cli.ts";
-const CLI_INVOCATION =
-  process.platform === "win32" ? `bun ${CLONE_ROOT_SHELL}/src/cli.ts` : "llmwiki";
+const CLI_INVOCATION = process.platform === "win32" ? engineCliCommand() : "llmwiki";
 const MANAGED = "llmwiki-opencode-managed";
 const OWNER_MARK = `${MANAGED} root=${CLONE_ROOT}`;
 const PLUGIN_LEGACY_MARK = "llmwiki OpenCode plugin";
@@ -104,7 +102,7 @@ function commandBody(name: (typeof COMMANDS)[number]): string {
   let body = readFileSync(sourcePath, "utf8");
   body = body
     .replaceAll("Read `~/llmwiki/skill/wiki-save.md`", `Read \`${join(CLONE_ROOT, "skill", "wiki-save.md")}\``)
-    .replaceAll(CLI_SOURCE_TOKEN, CLI_INVOCATION)
+    .replaceAll(ENGINE_CLI_TOKEN, CLI_INVOCATION)
     .replaceAll("$CLAUDE_PROJECT_DIR", "the current OpenCode project directory")
     .replaceAll("~/llmwiki", CLONE_ROOT)
     .replaceAll("$HOME/llmwiki", CLONE_ROOT);
