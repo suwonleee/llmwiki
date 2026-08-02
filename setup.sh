@@ -311,15 +311,22 @@ if [ "$POST" -ne 0 ]; then
 fi
 
 echo "=== setup installed. ==="
+# How to spell the engine command in the closing instructions.
+#
+# The ~/.local/bin launcher that the Codex and OpenCode wirings install is a `#!/bin/sh` script.
+# On Windows only Git Bash can run it, and Git Bash puts ~/bin — not ~/.local/bin — on PATH, so
+# telling a Windows adopter to run `llmwiki init` hands them a command that exists in none of the
+# shells they have open. The explicit interpreter spelling is correct everywhere; only longer.
+CLI="$BUN_Q ${ROOT_Q}/src/cli.ts"
 if [ "$USE_CODEX" -eq 1 ] || [ "$USE_OPENCODE" -eq 1 ]; then
-    echo "  • Initialize a project: llmwiki init <repo>"
-    echo "  • Verify the installation anytime: llmwiki doctor --harness $DOCTOR_HARNESS"
-    echo "  • Engine-only project diagnosis: llmwiki wiki-doctor <repo> (add --fix for safe derived-state repair)"
-else
-    echo "  • Initialize a project: $BUN_Q ${ROOT_Q}/src/cli.ts init <repo>"
-    echo "  • Verify the installation anytime: $BUN_Q ${ROOT_Q}/src/cli.ts doctor --harness claude"
-    echo "  • Engine-only project diagnosis: $BUN_Q ${ROOT_Q}/src/cli.ts wiki-doctor <repo> (add --fix for safe derived-state repair)"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) ;;
+        *) CLI="llmwiki" ;;
+    esac
 fi
+echo "  • Initialize a project: $CLI init <repo>"
+echo "  • Verify the installation anytime: $CLI doctor --harness $DOCTOR_HARNESS"
+echo "  • Engine-only project diagnosis: $CLI wiki-doctor <repo> (add --fix for safe derived-state repair)"
 if [ "$USE_CODEX" -eq 1 ]; then
     echo "  • One-time Codex activation: start Codex, open /hooks, trust both llmwiki hooks."
     echo "  • Then work in a project and close the session with: \$wiki-save"

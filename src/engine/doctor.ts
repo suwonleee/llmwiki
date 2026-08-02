@@ -7,7 +7,7 @@
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 import {
   CLAUDE_COMMANDS,
   commandFileState,
@@ -95,6 +95,19 @@ const TURNCTX_CMD = `bash ${shellQuote(`${CLONE_ROOT_SHELL}/hooks/userpromptsubm
 // JSON escaping and `\` vs `/` cannot make a clone fail to recognize its own hook (paths.ts).
 const SESSIONSTART_SCRIPT = normalizeConfigPath(`${CLONE_ROOT_SHELL}/hooks/sessionstart-inject.sh`);
 const TURNCTX_SCRIPT = normalizeConfigPath(`${CLONE_ROOT_SHELL}/hooks/userpromptsubmit-inject.sh`);
+// Codex on Windows is wired WITHOUT the shell adapters (see wire-codex.ts for the measurement:
+// `bash` is not on the Windows PATH and Codex runs hook commands through PowerShell, so both the
+// bare name and a quoted absolute path produced "hook exited with code 1"). Recognition accepts
+// either spelling, so an install written before that branch existed still reads as wired instead
+// of sending someone to re-run setup over a hook that works.
+const CODEX_SESSION_CMDS = [
+  SESSIONSTART_CMD,
+  `bun "${CLONE_ROOT_SHELL}/src/cli.ts" context --hook-event SessionStart`,
+] as const;
+const CODEX_TURN_CMDS = [
+  TURNCTX_CMD,
+  `bun "${CLONE_ROOT_SHELL}/src/cli.ts" turn-context --hook-event UserPromptSubmit`,
+] as const;
 const WIRE_CLAUDE_CMD = `bun ${shellQuote(join(CLONE_ROOT, "src", "daemon", "wire.ts"))}`;
 const WIRE_CODEX_CMD = `bun ${shellQuote(join(CLONE_ROOT, "src", "daemon", "wire-codex.ts"))}`;
 const WIRE_OPENCODE_CMD = `bun ${shellQuote(join(CLONE_ROOT, "src", "daemon", "wire-opencode.ts"))}`;
@@ -140,6 +153,11 @@ export interface CodexInstallStatus {
   reviewRecords: boolean;
   missingSkills: string[];
   staleSkills: string[];
+  /** Installed, current, and unloadable: the file does not open with YAML frontmatter, so the
+   *  harness refuses it. Presence was never evidence of parseability — a CRLF checkout put the
+   *  ownership marker above the opening `---` and Codex rejected all five skills while this
+   *  report called them present. */
+  malformedSkills: string[];
   legacySkills: string[];
   launcher: "missing" | "managed" | "foreign";
   launcherOnPath: boolean;
@@ -150,15 +168,33 @@ export interface OpenCodeInstallStatus {
   plugin: "missing" | "current" | "stale" | "foreign";
   missingCommands: string[];
   staleCommands: string[];
+  /** Same defect class as CodexInstallStatus.malformedSkills. */
+  malformedCommands: string[];
   launcher: "missing" | "managed" | "foreign";
   launcherOnPath: boolean;
+}
+
+/**
+ * Does this generated page still open with YAML frontmatter?
+ *
+ * The one property every harness requires of a skill/command file and the one the writers can
+ * break by string surgery. Checked on the bytes, so an encoding that survived a round-trip through
+ * a different platform is judged the same way the harness will judge it.
+ */
+function opensWithFrontmatter(file: string): boolean {
+  try {
+    return /^---\r?\n/.test(readFileSync(file, "utf8"));
+  } catch {
+    return false;
+  }
 }
 
 function commandLocation(
   hooks: Record<string, any[]> | undefined,
   event: string,
-  expected: string,
+  expected: string | readonly string[],
 ): { group: number; hook: number } | null {
+  const accepted = (typeof expected === "string" ? [expected] : expected).map(normalizeConfigPath);
   const groups = hooks?.[event];
   if (!Array.isArray(groups)) return null;
   for (const [groupIndex, group] of groups.entries()) {
@@ -171,7 +207,7 @@ function commandLocation(
       if (
         hook?.type === "command" &&
         typeof hook?.command === "string" &&
-        normalizeConfigPath(hook.command) === normalizeConfigPath(expected)
+        accepted.includes(normalizeConfigPath(hook.command))
       ) {
         return { group: groupIndex, hook: hookIndex };
       }
@@ -199,6 +235,7 @@ export function inspectCodexInstall(
     reviewRecords: false,
     missingSkills: [],
     staleSkills: [],
+    malformedSkills: [],
     legacySkills: [],
     launcher: "missing",
     launcherOnPath: false,
@@ -210,8 +247,8 @@ export function inspectCodexInstall(
   } catch {
     parsed = null;
   }
-  const session = commandLocation(parsed?.hooks, "SessionStart", SESSIONSTART_CMD);
-  const turn = commandLocation(parsed?.hooks, "UserPromptSubmit", TURNCTX_CMD);
+  const session = commandLocation(parsed?.hooks, "SessionStart", CODEX_SESSION_CMDS);
+  const turn = commandLocation(parsed?.hooks, "UserPromptSubmit", CODEX_TURN_CMDS);
   result.sessionHook = session !== null;
   result.turnHook = turn !== null;
   if (session) {
@@ -243,6 +280,10 @@ export function inspectCodexInstall(
       return true;
     }
   });
+  result.malformedSkills = CODEX_SKILLS.filter((name) => {
+    const installed = join(home, ".agents", "skills", name, "SKILL.md");
+    return existsSync(installed) && !opensWithFrontmatter(installed);
+  });
   result.legacySkills = RETIRED_CODEX_SKILLS.filter((name) =>
     existsSync(join(home, ".agents", "skills", name, "SKILL.md")),
   );
@@ -253,7 +294,7 @@ export function inspectCodexInstall(
   } catch {
     result.launcher = "missing";
   }
-  result.launcherOnPath = (process.env.PATH ?? "").split(":").includes(dirname(launcher));
+  result.launcherOnPath = (process.env.PATH ?? "").split(delimiter).includes(dirname(launcher));
   return result;
 }
 
@@ -270,6 +311,7 @@ export function inspectOpenCodeInstall(
     plugin: "missing",
     missingCommands: [],
     staleCommands: [],
+    malformedCommands: [],
     launcher: "missing",
     launcherOnPath: false,
   };
@@ -302,6 +344,10 @@ export function inspectOpenCodeInstall(
       return true;
     }
   });
+  result.malformedCommands = OPENCODE_COMMANDS.filter((name) => {
+    const installed = join(commandsRoot, `${name}.md`);
+    return existsSync(installed) && !opensWithFrontmatter(installed);
+  });
   const launcher = join(binDir, "llmwiki");
   try {
     const content = readFileSync(launcher, "utf8");
@@ -309,7 +355,7 @@ export function inspectOpenCodeInstall(
   } catch {
     result.launcher = "missing";
   }
-  result.launcherOnPath = (process.env.PATH ?? "").split(":").includes(dirname(launcher));
+  result.launcherOnPath = (process.env.PATH ?? "").split(delimiter).includes(dirname(launcher));
   return result;
 }
 
@@ -918,6 +964,13 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
             `  [codex] ⚠️ missing skill(s): ${status.missingSkills.map((name) => `$${name}`).join(", ")}`,
           );
           issues += 1;
+        } else if (status.malformedSkills.length) {
+          console.log(
+            `  [codex] ❌ unloadable skill(s): ${status.malformedSkills.map((name) => `$${name}`).join(", ")} — ` +
+              "the file does not open with YAML frontmatter, so Codex refuses it. " +
+              `Re-run \`${WIRE_CODEX_CMD}\` from a clone with LF line endings (\`git add --renormalize .\`)`,
+          );
+          issues += 1;
         } else {
           console.log(`  [codex] ✅ skills present: ${CODEX_SKILLS.map((name) => `$${name}`).join(", ")}`);
         }
@@ -940,9 +993,16 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
           console.log(`  [codex] ✅ llmwiki command installed${status.launcherOnPath ? " + on PATH" : ""}`);
           if (!status.launcherOnPath) {
             const binDir = process.env.LLMWIKI_BIN_DIR?.trim() || join(HOME, ".local", "bin");
-            console.log(`  [codex] ⚠️ ${binDir} is not on PATH`);
-            console.log(`          export PATH=${shellQuote(binDir)}:"$PATH"`);
-            actions += 1;
+            if (process.platform === "win32") {
+              // Not an action item on Windows: the launcher is a /bin/sh script that only Git Bash
+              // can run, and the installed skills carry the explicit `bun <clone>/src/cli.ts`
+              // spelling precisely so they do not depend on it.
+              console.log(`  [codex] • \`llmwiki\` (${binDir}) is a /bin/sh launcher — Git Bash only; skills do not need it`);
+            } else {
+              console.log(`  [codex] ⚠️ ${binDir} is not on PATH`);
+              console.log(`          export PATH=${shellQuote(binDir)}:"$PATH"`);
+              actions += 1;
+            }
           }
         } else {
           console.log(
@@ -990,6 +1050,13 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
           `  [opencode] ⚠️ missing command(s): ${status.missingCommands.map((name) => `/${name}`).join(", ")}`,
         );
         issues += 1;
+      } else if (status.malformedCommands.length) {
+        console.log(
+          `  [opencode] ❌ malformed command(s): ${status.malformedCommands.map((name) => `/${name}`).join(", ")} — ` +
+            "the file does not open with YAML frontmatter. " +
+            `Re-run \`${WIRE_OPENCODE_CMD}\` from a clone with LF line endings (\`git add --renormalize .\`)`,
+        );
+        issues += 1;
       } else {
         console.log(`  [opencode] ✅ commands present: ${OPENCODE_COMMANDS.map((name) => `/${name}`).join(", ")}`);
       }
@@ -1004,9 +1071,13 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
         console.log(`  [opencode] ✅ llmwiki command installed${status.launcherOnPath ? " + on PATH" : ""}`);
         if (!status.launcherOnPath) {
           const binDir = process.env.LLMWIKI_BIN_DIR?.trim() || join(HOME, ".local", "bin");
-          console.log(`  [opencode] ⚠️ ${binDir} is not on PATH`);
-          console.log(`             export PATH=${shellQuote(binDir)}:"$PATH"`);
-          actions += 1;
+          if (process.platform === "win32") {
+            console.log(`  [opencode] • \`llmwiki\` (${binDir}) is a /bin/sh launcher — Git Bash only; commands do not need it`);
+          } else {
+            console.log(`  [opencode] ⚠️ ${binDir} is not on PATH`);
+            console.log(`             export PATH=${shellQuote(binDir)}:"$PATH"`);
+            actions += 1;
+          }
         }
       } else {
         console.log(

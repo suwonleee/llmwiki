@@ -105,7 +105,7 @@ function cmdInit(p: Parsed) {
     );
   }
   console.log(`✓ Initialized ${w.root}`);
-  console.log(`  docs/wiki/ + .llmwiki/index.db created; indexed ${neu} file(s)`);
+  console.log(`  docs/wiki/ created; indexed ${neu} file(s) into ${w.dbPath}`);
   console.log(`  categories scaffolded: ${scaffold.join(" · ")}`);
   if (cfg.privateDirs.length) console.log(`  private (local-only, auto-gitignored): ${cfg.privateDirs.join(" · ")}`);
   console.log(`  skeleton: L0 · overview · log templates + .gitignore(.llmwiki/) · .gitattributes · .mailmap (idempotent)`);
@@ -1385,9 +1385,20 @@ const handler = HANDLERS[parsed.cmd];
 if (!handler) {
   die(usage().trimEnd());
 }
+// A harness hook may now reach this CLI without going through hooks/*.sh — on Windows the Codex
+// wiring calls it directly, because `bash` is not on the Windows PATH and Codex runs hook commands
+// through PowerShell, where neither the bare name nor a quoted absolute path resolves (the hooks
+// only ever reported "exited with code 1"). Bypassing the adapter means carrying its two
+// guarantees here, or they are silently lost on exactly the platform that needed the bypass.
+const asHook = typeof parsed.flags["--hook-event"] === "string";
+// (1) An engine subprocess must not self-inject into its own WRITE/VERIFY prompt.
+if (asHook && (process.env.LLMWIKI_ENGINE_SUBPROCESS ?? "") !== "") process.exit(0);
 try {
   await handler(parsed);
 } catch (e) {
+  // (2) A hook never fails a session. Silence and exit 0 — the same fail-safe the shell adapters
+  //     spell as `set +e` … `exit 0`.
+  if (asHook) process.exit(0);
   // A refusal is a RESULT, not a crash. Both boundaries below are things a user can act on
   // (a symlinked wiki path, a state directory llmwiki did not create), so they get one clear
   // line and exit 2 instead of a stack trace.

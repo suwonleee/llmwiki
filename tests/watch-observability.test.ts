@@ -34,6 +34,10 @@ describe("capture sweep observability", () => {
       env: {
         ...process.env,
         HOME: join(dir, "home"),
+        // USERPROFILE too: node's homedir() reads HOME on POSIX but USERPROFILE on Windows, so a
+        // HOME-only override silently isolates nothing there — the sweep found this machine's real
+        // OpenCode database and reported five sessions for a fixture that has one.
+        USERPROFILE: join(dir, "home"),
         CLAUDE_CONFIG_DIR: join(dir, "claude"),
         CODEX_HOME: codexHome,
         LLMWIKI_STATE_DIR: stateDir,

@@ -21,7 +21,8 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
+import { insertAfterFrontmatter } from "../engine/frontmatter.ts";
 import { RETIRED_CODEX_SKILLS } from "../engine/install-history.ts";
 import { CLONE_ROOT, CLONE_ROOT_SHELL } from "../engine/paths.ts";
 import { envValueOutsideRepoFiles } from "../engine/env-policy.ts";
@@ -32,6 +33,18 @@ const HOOKS_PATH = join(CODEX_HOME, "hooks.json");
 const SKILLS_ROOT = join(HOME, ".agents", "skills");
 const BIN_DIR = process.env.LLMWIKI_BIN_DIR?.trim() || join(HOME, ".local", "bin");
 const LAUNCHER = join(BIN_DIR, "llmwiki");
+// How a generated skill body is told to call the engine.
+//
+// POSIX installs get the short `llmwiki` this wiring drops in ~/.local/bin. A native Windows
+// install must NOT: that launcher is a `#!/bin/sh` script, so Git Bash runs it while PowerShell
+// and cmd.exe cannot — and Codex and OpenCode both hand the agent's shell commands to PowerShell
+// there. Every `llmwiki …` line in a skill was therefore dead on arrival, and it presented exactly
+// that way: the skill loaded, ran its first command, and got CommandNotFoundException. The
+// explicit interpreter spelling is what the Claude wiring has always emitted; it needs no PATH
+// entry and works in every shell on every platform.
+const CLI_SOURCE_TOKEN = "bun ~/llmwiki/src/cli.ts";
+const CLI_INVOCATION =
+  process.platform === "win32" ? `bun ${CLONE_ROOT_SHELL}/src/cli.ts` : "llmwiki";
 const MANAGED = "llmwiki-codex-managed";
 const OWNER_MARK = `${MANAGED} root=${CLONE_ROOT}`;
 const LAUNCHER_MARK = "# llmwiki launcher (llmwiki-managed)";
@@ -43,9 +56,45 @@ const TURN_MARK = "hooks/userpromptsubmit-inject.sh";
 // CLONE_ROOT_SHELL, matching wire.ts and doctor.ts: these are bash commands stored in JSON
 // (hooks.json), and doctor recognizes an install by comparing this exact string. One spelling
 // across all three harnesses is what keeps that comparison from depending on the OS (paths.ts).
-const SESSION_CMD = `bash ${shellQuote(`${CLONE_ROOT_SHELL}/${SESSION_MARK}`)}`;
-const TURN_CMD = `bash ${shellQuote(`${CLONE_ROOT_SHELL}/${TURN_MARK}`)}`;
+// Windows does not go through the shell adapters at all.
+//
+// `bash` is never on the Windows PATH (Git's installer adds <root>\cmd, not <root>\bin), and Codex
+// runs a hook command through PowerShell — where the bare name does not resolve AND a quoted
+// absolute path is not a command either. Both spellings were measured against a live Codex: both
+// produced "hook exited with code 1", which is all Codex says, so cold-start and turn-context were
+// simply dead on native Windows with nothing in any log to say why.
+//
+// `bun` IS on PATH (it is how the engine runs at all), takes a double-quoted argument that
+// PowerShell, cmd.exe and bash all parse the same way, and needs no interpreter in front of it. The
+// repo argument is omitted deliberately: in hook mode the engine already prefers the harness's own
+// cwd over the positional, and CLAUDE_PROJECT_DIR — the only reason the adapter passes one — does
+// not exist under Codex. Verified end to end: hooks report Completed and the wiki block arrives.
+const CLI_SHELL = `bun "${CLONE_ROOT_SHELL}/src/cli.ts"`;
+const SESSION_CMD =
+  process.platform === "win32"
+    ? `${CLI_SHELL} context --hook-event SessionStart`
+    : `bash ${shellQuote(`${CLONE_ROOT_SHELL}/${SESSION_MARK}`)}`;
+const TURN_CMD =
+  process.platform === "win32"
+    ? `${CLI_SHELL} turn-context --hook-event UserPromptSubmit`
+    : `bash ${shellQuote(`${CLONE_ROOT_SHELL}/${TURN_MARK}`)}`;
 const SKILLS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"] as const;
+
+/**
+ * Is this handler one llmwiki owns?
+ *
+ * Both spellings count: the adapter script path (POSIX, and every install written before the
+ * Windows branch existed) and the direct CLI invocation this clone emits on Windows. Matching only
+ * the current platform's spelling would leave the other one behind on re-run — one dead hook plus
+ * one live duplicate, which is worse than either alone. Clone-agnostic on purpose, exactly as the
+ * script-path match has always been: re-pointing a machine at a new clone is the whole reason this
+ * strips before it writes.
+ */
+function isManagedHookCommand(command: unknown): boolean {
+  if (typeof command !== "string") return false;
+  if (command.includes(SESSION_MARK) || command.includes(TURN_MARK)) return true;
+  return command.includes("/src/cli.ts") && command.includes("--hook-event");
+}
 
 interface HookHandler {
   type?: string;
@@ -124,8 +173,7 @@ function stripManagedHooks(file: HooksFile): number {
     for (const group of groups) {
       const hooks = (group.hooks ?? []).filter((hook) => {
         const managed =
-          typeof hook.command === "string" &&
-          (hook.command.includes(SESSION_MARK) || hook.command.includes(TURN_MARK));
+          isManagedHookCommand(hook.command);
         if (managed) removed += 1;
         return !managed;
       });
@@ -164,11 +212,7 @@ function managedHookSnapshot(file: HooksFile): Record<string, HookGroup[]> {
   for (const event of ["SessionStart", "UserPromptSubmit"]) {
     const groups = file.hooks?.[event] ?? [];
     const managed = groups.flatMap((group) => {
-      const hooks = (group.hooks ?? []).filter(
-        (hook) =>
-          typeof hook.command === "string" &&
-          (hook.command.includes(SESSION_MARK) || hook.command.includes(TURN_MARK)),
-      );
+      const hooks = (group.hooks ?? []).filter((hook) => isManagedHookCommand(hook.command));
       return hooks.length ? [{ ...group, hooks }] : [];
     });
     if (managed.length) snapshot[event] = managed;
@@ -278,10 +322,10 @@ function writeJsonAtomic(path: string, value: unknown): boolean {
 function codexSkill(sourceName: (typeof SKILLS)[number]): string {
   const name = sourceName;
   let body = readFileSync(join(CLONE_ROOT, "skill", `${sourceName}.md`), "utf8");
-  body = body.replace(/^---\n/, `---\nname: ${name}\n`);
+  body = body.replace(/^---(\r?\n)/, `---$1name: ${name}$1`);
   body = body
     .replaceAll("Read `~/llmwiki/skill/wiki-save.md`", "invoke `$wiki-save` before continuing")
-    .replaceAll("bun ~/llmwiki/src/cli.ts", "llmwiki")
+    .replaceAll(CLI_SOURCE_TOKEN, CLI_INVOCATION)
     .replace(/^\$ARGUMENTS$/gm, "Use any text supplied with this skill invocation as arguments and task context.")
     .replaceAll("$CLAUDE_PROJECT_DIR", "$PWD")
     .replaceAll("~/llmwiki", CLONE_ROOT)
@@ -292,11 +336,8 @@ function codexSkill(sourceName: (typeof SKILLS)[number]): string {
   const marker =
     `\n<!-- ${OWNER_MARK} source_sha256=${skillSourceHash(sourceName)} -->\n` +
     "> Codex: treat the current working directory (`$PWD`) as the target repository. " +
-    "Use the installed `llmwiki` command; do not assume Claude-specific environment variables.\n";
-  const frontmatterEnd = body.indexOf("\n---\n", 4);
-  return frontmatterEnd >= 0
-    ? body.slice(0, frontmatterEnd + 5) + marker + body.slice(frontmatterEnd + 5)
-    : marker + body;
+    `Use \`${CLI_INVOCATION}\`; do not assume Claude-specific environment variables.\n`;
+  return insertAfterFrontmatter(body, marker);
 }
 
 function skillSourceHash(sourceName: (typeof SKILLS)[number]): string {
@@ -410,7 +451,13 @@ function apply(dryRun: boolean): number {
   console.log(`  [codex] ✅ skills installed: ${SKILLS.map((skill) => `$${skill}`).join(", ")}`);
   console.log(`  [codex] ✅ CLI installed: ${LAUNCHER}`);
   console.log("  [codex] ACTION REQUIRED: start Codex, open `/hooks`, and trust the two llmwiki hooks once.");
-  if (!(process.env.PATH ?? "").split(":").includes(BIN_DIR)) {
+  if (process.platform === "win32") {
+    // The bare command is a convenience here, never a dependency: the skills carry the explicit
+    // interpreter spelling, so say what this launcher is instead of prescribing a PATH edit that
+    // only helps in one of the three shells a Windows user has open.
+    console.log(`  [codex] • \`llmwiki\` is a /bin/sh launcher — Git Bash only (add ${BIN_DIR} to its PATH to use it)`);
+    console.log(`  [codex]    the installed skills call \`${CLI_INVOCATION}\`, which needs no PATH entry`);
+  } else if (!(process.env.PATH ?? "").split(delimiter).includes(BIN_DIR)) {
     console.log(`  [codex] ⚠️ add the CLI to PATH before using \`llmwiki\` in a new shell:`);
     console.log(`          export PATH=${shellQuote(BIN_DIR)}:"$PATH"`);
   }

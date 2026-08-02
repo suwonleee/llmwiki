@@ -97,6 +97,32 @@ function frontmatterBlock(content: string): string | null {
   return content.slice(start, end).replace(/^\r?\n+|\r?\n+$/g, "");
 }
 
+/**
+ * Insert `marker` immediately AFTER a page's YAML frontmatter — or at the very top when the page
+ * declares none.
+ *
+ * The harness wirings stamp an ownership marker into every page they generate, and that marker
+ * must land BELOW the frontmatter: a file that no longer opens with `---` is not a skill, it is a
+ * markdown file the harness refuses. Both wirings used to locate the boundary with
+ * `indexOf("\n---\n")`, which silently misses a CRLF source — and Git for Windows checks out CRLF
+ * by default. The fallback branch then prepended the marker, so on native Windows Codex rejected
+ * all five skills ("missing YAML frontmatter delimited by ---") while doctor still called them
+ * present. Accepting `\r\n` is the whole fix; output on LF input is byte-identical.
+ */
+export function insertAfterFrontmatter(body: string, marker: string): string {
+  const open = body.startsWith("---\r\n") ? 5 : body.startsWith("---\n") ? 4 : -1;
+  if (open === -1) return marker + body;
+  // A `---` only closes the block when it ends its own line, so keep looking past `----`, a
+  // horizontal rule inside a value, and anything else that merely starts with three dashes.
+  for (let at = body.indexOf("\n---", open - 1); at !== -1; at = body.indexOf("\n---", at + 1)) {
+    const after = at + 4;
+    if (body.startsWith("\r\n", after)) return body.slice(0, after + 2) + marker + body.slice(after + 2);
+    if (body.startsWith("\n", after)) return body.slice(0, after + 1) + marker + body.slice(after + 1);
+    if (after === body.length) return body + marker;
+  }
+  return marker + body;
+}
+
 function parseFields(block: string | null): Readonly<Record<string, FrontmatterValue>> {
   const fields: Record<string, FrontmatterValue> = {};
   if (block === null) return Object.freeze(fields);

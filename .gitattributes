@@ -1,0 +1,30 @@
+# Line endings are part of this repository's contract, not a local preference.
+#
+# Git for Windows checks out with core.autocrlf=true by default, and until this file existed a
+# Windows clone got CRLF for every tracked file. That is not cosmetic here, because the engine
+# generates its harness artifacts by string surgery over these very files:
+#
+#   - the Codex and OpenCode skill writers locate the end of a page's YAML frontmatter before
+#     stamping their ownership marker. A CRLF checkout made that search miss, the marker landed
+#     BEFORE the opening `---`, and Codex then refused to load ALL FIVE skills with "missing YAML
+#     frontmatter delimited by ---" — while `llmwiki doctor` reported them present, because it
+#     checked that the files existed and not that they parsed.
+#   - `skill/*.md` also had `name:` injected via /^---\n/, which a CRLF file never matches.
+#   - the shell scripts (setup.sh, daemon/*.sh, hooks/*.sh) have the same exposure with a wider
+#     blast radius. Git Bash tolerates a trailing CR today; other shells on the same machine
+#     (WSL, MSYS2, busybox) do not, and "it worked on my bash" is not a contract.
+#
+# The engine is also hardened against CRLF input, because this file cannot fix clones that already
+# exist — it only governs checkouts from here on. Both are needed: one keeps the bytes right, the
+# other survives bytes that are not.
+* text=auto eol=lf
+
+# Byte-exact regardless of platform.
+*.png binary
+*.zst binary
+*.db binary
+
+# Transcript fixtures are read by BYTE offset (see src/engine/extract.ts): a platform that
+# rewrote their line endings would move every watermark in the suite.
+tests/fixtures/**/*.jsonl -text
+tests/*.jsonl -text

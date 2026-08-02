@@ -17,9 +17,10 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
+import { insertAfterFrontmatter } from "../engine/frontmatter.ts";
 import { RETIRED_OPENCODE_COMMANDS } from "../engine/install-history.ts";
-import { CLONE_ROOT } from "../engine/paths.ts";
+import { CLONE_ROOT, CLONE_ROOT_SHELL } from "../engine/paths.ts";
 import { envValueOutsideRepoFiles } from "../engine/env-policy.ts";
 
 const HOME = process.env.HOME?.trim() || homedir();
@@ -30,6 +31,12 @@ const COMMANDS_ROOT = join(OPENCODE_ROOT, "commands");
 const BIN_DIR = process.env.LLMWIKI_BIN_DIR?.trim() || join(HOME, ".local", "bin");
 const LAUNCHER = join(BIN_DIR, "llmwiki");
 const COMMANDS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"] as const;
+// See wire-codex.ts for the full reasoning: the ~/.local/bin launcher is a `#!/bin/sh` script, and
+// OpenCode runs the agent's shell commands through PowerShell on Windows — where a command body
+// that says `llmwiki …` fails on its very first line. Same substitution, same platform rule.
+const CLI_SOURCE_TOKEN = "bun ~/llmwiki/src/cli.ts";
+const CLI_INVOCATION =
+  process.platform === "win32" ? `bun ${CLONE_ROOT_SHELL}/src/cli.ts` : "llmwiki";
 const MANAGED = "llmwiki-opencode-managed";
 const OWNER_MARK = `${MANAGED} root=${CLONE_ROOT}`;
 const PLUGIN_LEGACY_MARK = "llmwiki OpenCode plugin";
@@ -97,15 +104,12 @@ function commandBody(name: (typeof COMMANDS)[number]): string {
   let body = readFileSync(sourcePath, "utf8");
   body = body
     .replaceAll("Read `~/llmwiki/skill/wiki-save.md`", `Read \`${join(CLONE_ROOT, "skill", "wiki-save.md")}\``)
-    .replaceAll("bun ~/llmwiki/src/cli.ts", "llmwiki")
+    .replaceAll(CLI_SOURCE_TOKEN, CLI_INVOCATION)
     .replaceAll("$CLAUDE_PROJECT_DIR", "the current OpenCode project directory")
     .replaceAll("~/llmwiki", CLONE_ROOT)
     .replaceAll("$HOME/llmwiki", CLONE_ROOT);
   const marker = `\n<!-- ${OWNER_MARK} source_sha256=${hashFile(sourcePath)} -->\n`;
-  const frontmatterEnd = body.indexOf("\n---\n", 4);
-  return frontmatterEnd >= 0
-    ? body.slice(0, frontmatterEnd + 5) + marker + body.slice(frontmatterEnd + 5)
-    : marker + body;
+  return insertAfterFrontmatter(body, marker);
 }
 
 function launcherBody(): string {
@@ -260,7 +264,10 @@ function apply(dryRun: boolean): number {
   console.log(`  [opencode] ✅ plugin ${pluginChanged ? "installed" : "already current"}: ${PLUGIN}`);
   console.log(`  [opencode] ✅ commands installed: ${COMMANDS.map((name) => `/${name}`).join(", ")}`);
   console.log(`  [opencode] ✅ CLI installed: ${LAUNCHER}`);
-  if (!(process.env.PATH ?? "").split(":").includes(BIN_DIR)) {
+  if (process.platform === "win32") {
+    console.log(`  [opencode] • \`llmwiki\` is a /bin/sh launcher — Git Bash only (add ${BIN_DIR} to its PATH to use it)`);
+    console.log(`  [opencode]    the installed commands call \`${CLI_INVOCATION}\`, which needs no PATH entry`);
+  } else if (!(process.env.PATH ?? "").split(delimiter).includes(BIN_DIR)) {
     console.log("  [opencode] ⚠️ add the CLI to PATH before using `llmwiki` in a new shell:");
     console.log(`             export PATH=${shellQuote(BIN_DIR)}:"$PATH"`);
   }

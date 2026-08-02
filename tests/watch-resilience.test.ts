@@ -43,6 +43,9 @@ describe("capture sweep resilience", () => {
       env: {
         ...process.env,
         HOME: join(dir, "home"),
+        // See watch-observability.test.ts: homedir() reads USERPROFILE on Windows, so overriding
+        // HOME alone leaves the host's real harness data visible to the sweep.
+        USERPROFILE: join(dir, "home"),
         CLAUDE_CONFIG_DIR: join(dir, "claude"),
         CODEX_HOME: codexHome,
         LLMWIKI_STATE_DIR: stateDir,

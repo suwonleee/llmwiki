@@ -38,6 +38,33 @@ function wellKnownBinDirs(): string[] {
   ];
 }
 
+/**
+ * Where Git for Windows puts its bundled bash.
+ *
+ * `bash` is never on the Windows PATH: the Git installer adds `<root>\cmd` (git, gitk) and
+ * deliberately not `<root>\bin` (bash, sh) — putting a second `sh.exe` on a Windows PATH breaks
+ * other software. Claude Code hides this by resolving bash itself; Codex does not, so a hook
+ * spelled `bash '<script>'` died with "'bash' is not recognized" and Codex reported only
+ * "hook exited with code 1". The install root is derived from the git we already verified, which
+ * is also the git the same installer shipped.
+ */
+function windowsBashDirs(): string[] {
+  const dirs: string[] = [];
+  const git = locateGit().path;
+  if (git) {
+    // <root>\cmd\git.exe and <root>\bin\git.exe both point at <root>\bin\bash.exe
+    const root = dirname(dirname(git));
+    dirs.push(join(root, "bin"), join(root, "usr", "bin"));
+  }
+  const programFiles = process.env.ProgramFiles?.trim();
+  const programFilesX86 = process.env["ProgramFiles(x86)"]?.trim();
+  const localAppData = process.env.LOCALAPPDATA?.trim();
+  if (programFiles) dirs.push(join(programFiles, "Git", "bin"));
+  if (programFilesX86) dirs.push(join(programFilesX86, "Git", "bin"));
+  if (localAppData) dirs.push(join(localAppData, "Programs", "Git", "bin"));
+  return dirs;
+}
+
 function isExecutableFile(path: string): boolean {
   try {
     return statSync(path).isFile();
@@ -72,16 +99,22 @@ export interface ToolLocation {
   readonly tried: readonly string[];
 }
 
-function locate(binary: string, versionPrefix: string): ToolLocation {
+function locate(binary: string, versionPrefix: string, extraDirs: () => string[] = () => []): ToolLocation {
   const tried: string[] = [];
   const seen = new Set<string>();
+  // On Windows the executable carries an extension; the bare name is kept as a fallback so a
+  // POSIX-style install under MSYS/Cygwin still resolves.
+  const names = process.platform === "win32" ? [`${binary}.exe`, binary] : [binary];
   const consider = (dir: string): string | null => {
     if (!dir || seen.has(dir)) return null;
     seen.add(dir);
     tried.push(dir);
-    const candidate = join(dir, binary);
-    if (!isExecutableFile(candidate)) return null;
-    return identifies(candidate, versionPrefix) ? candidate : null;
+    for (const name of names) {
+      const candidate = join(dir, name);
+      if (!isExecutableFile(candidate)) continue;
+      if (identifies(candidate, versionPrefix)) return candidate;
+    }
+    return null;
   };
 
   // PATH first: whatever the surrounding environment resolved is the user's own choice, and on an
@@ -94,7 +127,7 @@ function locate(binary: string, versionPrefix: string): ToolLocation {
     const hit = consider(dir);
     if (hit) return { path: hit, tried };
   }
-  for (const dir of wellKnownBinDirs()) {
+  for (const dir of [...wellKnownBinDirs(), ...extraDirs()]) {
     const hit = consider(dir);
     if (hit) return { path: hit, tried };
   }
@@ -102,6 +135,7 @@ function locate(binary: string, versionPrefix: string): ToolLocation {
 }
 
 let gitCache: ToolLocation | null = null;
+let bashCache: ToolLocation | null = null;
 
 /** Resolve `git`, searching beyond PATH. Memoized for the life of the process. */
 export function locateGit(): ToolLocation {
@@ -109,9 +143,21 @@ export function locateGit(): ToolLocation {
   return gitCache;
 }
 
+/**
+ * Resolve `bash`, searching beyond PATH — the interpreter every generated hook command names.
+ *
+ * On POSIX this is `/bin/bash` and the search is a formality. On Windows it is the whole point:
+ * see windowsBashDirs() for why the bare name never resolves there, and what it cost.
+ */
+export function locateBash(): ToolLocation {
+  if (bashCache === null) bashCache = locate("bash", "gnu bash", windowsBashDirs);
+  return bashCache;
+}
+
 /** Test seam — a fixture that installs a fake git needs the next call to look again. */
 export function resetToolCache(): void {
   gitCache = null;
+  bashCache = null;
 }
 
 /**
@@ -162,8 +208,12 @@ if (import.meta.main) {
     const { path } = locateGit();
     if (path === null) process.exit(1);
     process.stdout.write(path + "\n");
+  } else if (arg === "--bash") {
+    const { path } = locateBash();
+    if (path === null) process.exit(1);
+    process.stdout.write(path + "\n");
   } else {
-    process.stderr.write("usage: tool-locate.ts --service-path | --git\n");
+    process.stderr.write("usage: tool-locate.ts --service-path | --git | --bash\n");
     process.exit(2);
   }
 }
