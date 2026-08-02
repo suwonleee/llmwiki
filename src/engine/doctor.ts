@@ -15,7 +15,7 @@ import {
   writeOwnedCommand,
 } from "./claude-commands.ts";
 import { RETIRED_CODEX_SKILLS } from "./install-history.ts";
-import { CLONE_ROOT } from "./paths.ts";
+import { CLONE_ROOT, CLONE_ROOT_SHELL, normalizeConfigPath } from "./paths.ts";
 import { claudeConfigDirs, claudeRetentionDays } from "./sources/claude.ts";
 import { EXPIRY_WARN_DAYS, healthReadOnly, pendingPastRetentionReadOnly } from "./capture.ts";
 import { effectiveStateRoot, probeStateRoot, planStateMigration } from "./state-dir.ts";
@@ -85,15 +85,16 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
-const SESSIONSTART_CMD = `bash ${shellQuote(`${CLONE_ROOT}/hooks/sessionstart-inject.sh`)}`;
+const SESSIONSTART_CMD = `bash ${shellQuote(`${CLONE_ROOT_SHELL}/hooks/sessionstart-inject.sh`)}`;
 // per-turn read-injection hook — same self-heal contract as SessionStart
-const TURNCTX_CMD = `bash ${shellQuote(`${CLONE_ROOT}/hooks/userpromptsubmit-inject.sh`)}`;
+const TURNCTX_CMD = `bash ${shellQuote(`${CLONE_ROOT_SHELL}/hooks/userpromptsubmit-inject.sh`)}`;
 // "wired to THIS clone" is matched on the bare script path, not the full command string:
 // wire.ts registers the hook unquoted while repairHook writes it shellQuoted, and both
 // spellings must pass — the path itself is the clone identity (the *_CMD forms above stay
-// for what repairHook writes).
-const SESSIONSTART_SCRIPT = `${CLONE_ROOT}/hooks/sessionstart-inject.sh`;
-const TURNCTX_SCRIPT = `${CLONE_ROOT}/hooks/userpromptsubmit-inject.sh`;
+// for what repairHook writes). Both sides go through normalizeConfigPath before comparison, so
+// JSON escaping and `\` vs `/` cannot make a clone fail to recognize its own hook (paths.ts).
+const SESSIONSTART_SCRIPT = normalizeConfigPath(`${CLONE_ROOT_SHELL}/hooks/sessionstart-inject.sh`);
+const TURNCTX_SCRIPT = normalizeConfigPath(`${CLONE_ROOT_SHELL}/hooks/userpromptsubmit-inject.sh`);
 const WIRE_CLAUDE_CMD = `bun ${shellQuote(join(CLONE_ROOT, "src", "daemon", "wire.ts"))}`;
 const WIRE_CODEX_CMD = `bun ${shellQuote(join(CLONE_ROOT, "src", "daemon", "wire-codex.ts"))}`;
 const WIRE_OPENCODE_CMD = `bun ${shellQuote(join(CLONE_ROOT, "src", "daemon", "wire-opencode.ts"))}`;
@@ -163,7 +164,17 @@ function commandLocation(
   for (const [groupIndex, group] of groups.entries()) {
     const handlers = Array.isArray(group?.hooks) ? group.hooks : [];
     for (const [hookIndex, hook] of handlers.entries()) {
-      if (hook?.type === "command" && hook?.command === expected) return { group: groupIndex, hook: hookIndex };
+      // Normalized equality, not raw: `\` vs `/` is a spelling difference, never a meaning one.
+      // An install wired before the engine settled on one spelling (or by hand) still names this
+      // clone's hook script, and reporting it as "some other clone's hook" would send the user
+      // re-running setup to fix a working install.
+      if (
+        hook?.type === "command" &&
+        typeof hook?.command === "string" &&
+        normalizeConfigPath(hook.command) === normalizeConfigPath(expected)
+      ) {
+        return { group: groupIndex, hook: hookIndex };
+      }
     }
   }
   return null;
@@ -751,8 +762,11 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
     }
     // key on the stable hook script filename, not the substring "llmwiki" — so the
     // check holds regardless of the clone's name/path (decision: path-agnostic setup).
+    // The clone-identity comparison runs on the normalized text: on disk this file is JSON, so a
+    // Windows path is stored with every separator doubled and matched nothing as written.
+    const norm = normalizeConfigPath(txt);
     const has = txt.includes("sessionstart-inject.sh") && txt.includes("SessionStart");
-    if (has && txt.includes(SESSIONSTART_SCRIPT)) {
+    if (has && norm.includes(SESSIONSTART_SCRIPT)) {
       console.log(`  [${name}] ✅ read-injection hook present`);
     } else if (has) {
       // script name found but pointing at a different clone — repairHook would only
@@ -770,7 +784,7 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
 
     // per-turn read-injection hook — same presence key + self-heal
     const hasTurn = txt.includes("userpromptsubmit-inject.sh") && txt.includes("UserPromptSubmit");
-    if (hasTurn && txt.includes(TURNCTX_SCRIPT)) {
+    if (hasTurn && norm.includes(TURNCTX_SCRIPT)) {
       console.log(`  [${name}] ✅ turn-context hook present`);
     } else if (hasTurn) {
       console.log(

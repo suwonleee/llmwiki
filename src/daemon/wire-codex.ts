@@ -23,7 +23,7 @@ import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { RETIRED_CODEX_SKILLS } from "../engine/install-history.ts";
-import { CLONE_ROOT } from "../engine/paths.ts";
+import { CLONE_ROOT, CLONE_ROOT_SHELL } from "../engine/paths.ts";
 import { envValueOutsideRepoFiles } from "../engine/env-policy.ts";
 
 const HOME = process.env.HOME?.trim() || homedir();
@@ -40,8 +40,11 @@ const BACKUP_ID = createHash("sha256").update(CLONE_ROOT).digest("hex").slice(0,
 const INSTALL_BACKUP = join(CODEX_HOME, `llmwiki-install-backup.${BACKUP_ID}.json`);
 const SESSION_MARK = "hooks/sessionstart-inject.sh";
 const TURN_MARK = "hooks/userpromptsubmit-inject.sh";
-const SESSION_CMD = `bash ${shellQuote(`${CLONE_ROOT}/${SESSION_MARK}`)}`;
-const TURN_CMD = `bash ${shellQuote(`${CLONE_ROOT}/${TURN_MARK}`)}`;
+// CLONE_ROOT_SHELL, matching wire.ts and doctor.ts: these are bash commands stored in JSON
+// (hooks.json), and doctor recognizes an install by comparing this exact string. One spelling
+// across all three harnesses is what keeps that comparison from depending on the OS (paths.ts).
+const SESSION_CMD = `bash ${shellQuote(`${CLONE_ROOT_SHELL}/${SESSION_MARK}`)}`;
+const TURN_CMD = `bash ${shellQuote(`${CLONE_ROOT_SHELL}/${TURN_MARK}`)}`;
 const SKILLS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"] as const;
 
 interface HookHandler {

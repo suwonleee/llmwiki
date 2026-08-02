@@ -27,7 +27,7 @@ import {
   writeOwnedCommand,
 } from "../engine/claude-commands.ts";
 import { RETIRED_CLAUDE_COMMANDS } from "../engine/install-history.ts";
-import { CLONE_ROOT } from "../engine/paths.ts";
+import { CLONE_ROOT, CLONE_ROOT_SHELL } from "../engine/paths.ts";
 import { claudeConfigDirs } from "../engine/sources/claude.ts";
 
 const ROOT = CLONE_ROOT; // resolved from this file's location — path/name-agnostic
@@ -39,8 +39,11 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
-const INJECT = `bash ${shellQuote(`${ROOT}/hooks/sessionstart-inject.sh`)}`;
-const TURN_INJECT = `bash ${shellQuote(`${ROOT}/hooks/userpromptsubmit-inject.sh`)}`;
+// CLONE_ROOT_SHELL, not ROOT: this string is a bash command that also has to round-trip through
+// settings.json, and one posix-shaped spelling is what keeps the written hook, doctor's
+// clone-identity check, and uninstall comparing the same bytes (paths.ts). Identical on POSIX.
+const INJECT = `bash ${shellQuote(`${CLONE_ROOT_SHELL}/hooks/sessionstart-inject.sh`)}`;
+const TURN_INJECT = `bash ${shellQuote(`${CLONE_ROOT_SHELL}/hooks/userpromptsubmit-inject.sh`)}`;
 
 // The ownership mark and the command list live in engine/claude-commands.ts — doctor's `--fix`
 // installs the same files, and a second copy of either would let the two installers drift.
@@ -169,7 +172,7 @@ function apply(dryRun = false): number {
   }
   for (const prof of profs) {
     const sp = join(prof, "settings.json");
-    const name = prof.split("/").pop()!;
+    const name = basename(prof);
     let settings: Settings;
     if (existsSync(sp)) {
       try {
@@ -219,7 +222,7 @@ function apply(dryRun = false): number {
     const cmds = CLAUDE_COMMANDS.map((s) => "/" + s.slice(0, -3)).join(", ");
     console.log(
       `  [${name}] ✅ old removed: ${removed}, re-pointed: ${repointed}, ` +
-        `SessionStart+UserPromptSubmit → ${ROOT.split("/").pop()}, installed (owned copy): ${cmds}`,
+        `SessionStart+UserPromptSubmit → ${basename(ROOT)}, installed (owned copy): ${cmds}`,
     );
   }
   console.log("✓ cutover applied (backups: settings.json.llmwiki-bak.*)");
@@ -262,7 +265,7 @@ function revert(): number {
   let commands = 0;
   let failures = 0;
   for (const prof of profiles()) {
-    const name = prof.split("/").pop()!;
+    const name = basename(prof);
     const sp = join(prof, "settings.json");
     if (existsSync(sp)) {
       let settings: Settings | null = null;

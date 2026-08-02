@@ -34,6 +34,8 @@ import {
 const SCHEMA_PATH = join(import.meta.dir, "schema.sql");
 const SCHEMA = readFileSync(SCHEMA_PATH, "utf-8");
 
+const WINDOWS = process.platform === "win32";
+
 const IGNORE_DIRS = new Set([
   ".llmwiki", ".git", "node_modules", "__pycache__", ".venv", "venv",
   ".idea", ".vscode", ".pytest_cache", ".mypy_cache",
@@ -216,8 +218,18 @@ export class WikiIndex {
     return db;
   }
 
+  // Callers pass NATIVE paths (indexFile's absolute path, registerTranscript's transcript path),
+  // and a native Windows path contains no `/` at all — so a `/`-only split returned the entire
+  // path as the "filename". Nothing failed loudly: `documents.filename` simply held
+  // `C:\repo\docs\wiki\page.md` where every consumer expects `page.md`. The damage is downstream
+  // and total — refs.ts keys byName on filename, so every `[[wikilink]]` and every `.jsonl`
+  // citation resolved to nothing (each link dangling, each page an orphan), and lint's L0/log/
+  // ledger exemptions match on the bare name, so machine-managed pages lost their exemptions.
+  //
+  // `\` is a legal character in a POSIX filename, so it is a separator only where the OS makes it
+  // one: this keeps POSIX behaviour byte-identical while making Windows correct.
   private basename(p: string): string {
-    const parts = p.split("/").filter(Boolean);
+    const parts = (WINDOWS ? p.split(/[/\\]/) : p.split("/")).filter(Boolean);
     return parts.length ? parts[parts.length - 1]! : p;
   }
 
@@ -418,8 +430,13 @@ export class WikiIndex {
     const contentHash = sha256(this.root, safeRelative, size);
 
     const existing = db
-      .query("SELECT id, content_hash, title FROM documents WHERE relative_path = ?")
-      .get(relative) as { id: string; content_hash: string | null; title: string | null } | null;
+      .query("SELECT id, content_hash, title, filename FROM documents WHERE relative_path = ?")
+      .get(relative) as {
+      id: string;
+      content_hash: string | null;
+      title: string | null;
+      filename: string | null;
+    } | null;
 
     let sourceContent: string | null = null;
     const capExempt = sourceKind(relative) === "wiki"; // wiki pages are never capped
@@ -448,10 +465,15 @@ export class WikiIndex {
         // heals here rather than waiting for the page's bytes to change (self-heal, same stance
         // as the citation graph) — one cheap UPDATE, and the row still counts as unchanged.
         if (existing.title !== title) db.run("UPDATE documents SET title=? WHERE id=?", [title, existing.id]);
+        // Same stance for filename, and it needs its own heal: filename is written on INSERT only,
+        // so an index built by a Windows engine that stored a full native path there would never
+        // recover — not on reindex either, because an existing row takes the UPDATE path below.
+        // Without this, every wikilink stays dangling on machines that indexed before the fix.
+        if (existing.filename !== name) db.run("UPDATE documents SET filename=? WHERE id=?", [name, existing.id]);
         return null;
       }
       db.run(
-        "UPDATE documents SET content=?, file_size=?, content_hash=?, mtime_ns=?, file_type=?, " +
+        "UPDATE documents SET filename=?, content=?, file_size=?, content_hash=?, mtime_ns=?, file_type=?, " +
           "description=CASE WHEN source_kind='wiki' THEN ? ELSE description END, " +
           "date=CASE WHEN source_kind='wiki' THEN ? ELSE date END, " +
           "tags=CASE WHEN source_kind='wiki' THEN ? ELSE tags END, " +
@@ -460,6 +482,7 @@ export class WikiIndex {
           "last_indexed_at=datetime('now'), updated_at=datetime('now'), version=version+1, " +
           "stale_since=NULL WHERE id=?",
         [
+          name,
           content,
           size,
           contentHash,
