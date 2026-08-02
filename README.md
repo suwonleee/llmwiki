@@ -315,11 +315,11 @@ transcripts are read in place from the harness's own store — llmwiki makes no 
 
 | | Required | Notes |
 |---|---|---|
-| **Bun ≥ 1.1** (1.2+ recommended) | ✔ required | Single binary (`curl -fsSL https://bun.sh/install \| bash`). Runs `.ts` directly, and `bun:sqlite` bundles FTS5 — zero build·`node_modules`. Running the engine and `bun test` work with no install; only `bun run typecheck` (tsc) needs a one-time `bun install` (dev-only). Below 1.2 there is no in-process zstd: Codex's compressed rollouts (`*.jsonl.zst`) are read only if a `zstd` binary is on `PATH`, and `llmwiki doctor` says which route it found. |
+| **Bun ≥ 1.1** (1.2+ recommended) | ✔ required | Single binary — POSIX: `curl -fsSL https://bun.sh/install \| bash`; native Windows: `irm bun.sh/install.ps1 \| iex` in PowerShell (the POSIX installer does not run there). Runs `.ts` directly, and `bun:sqlite` bundles FTS5 — zero build·`node_modules`. Running the engine and `bun test` work with no install; only `bun run typecheck` (tsc) needs a one-time `bun install` (dev-only). Below 1.2 there is no in-process zstd: Codex's compressed rollouts (`*.jsonl.zst`) are read only if a `zstd` binary is on `PATH`, and `llmwiki doctor` says which route it found. |
 | **git** | ✔ required | The capture loop asks git whether a directory is a worktree, and cannot distinguish "git is missing" from "not a worktree" — so without it the engine installs cleanly and captures nothing. It is searched for beyond `PATH` (Homebrew · MacPorts · Nix · `~/.local/bin`), baked into the daemon's service environment at install time, and reported by `llmwiki doctor` under `[deps]`. |
 | **Codex · OpenCode CLI** | their quick starts only | `codex` / `opencode` on `PATH`. Codex additionally needs lifecycle-hook support with the stable `hooks` feature enabled. Setup checks support — and any existing feature setting — before changing hooks, skills, or services. |
 | **LLM CLI** | optional, opt-in | Capture·read-injection·`/wiki-*`·`ingest` (capture-only, queues pending updates) work without it, and **nothing is sent anywhere by default**. `autoupdate·review` and `ingest`'s consolidation launch a generative subprocess only when you set `LLMWIKI_LLM_CMD` in your shell environment (e.g. `export LLMWIKI_LLM_CMD='claude -p {prompt} --model {model} --disallowedTools Write Edit NotebookEdit Bash'`). Unset → those passes report "unavailable" and skip; everything deterministic keeps working. |
-| **OS** | macOS / Linux / Windows | macOS=launchd, Linux=systemd (`--user`) falling back to cron+nohup, Windows=per-user Startup folder (unelevated; starts at logon, no restart-on-crash) — for the capture daemon AND for unattended update (`daemon/autoupdate-schedule.sh`). macOS and Linux are exercised in CI; the Windows path is verified by hand. Daemon details in [`daemon/README.md`](daemon/README.md) |
+| **OS** | macOS / Linux / Windows | macOS=launchd, Linux=systemd (`--user`) falling back to cron+nohup, Windows=per-user Startup folder (unelevated; starts at logon, no restart-on-crash) — for the capture daemon AND for unattended update (`daemon/autoupdate-schedule.sh`). macOS and Linux run the full suite in CI; Windows runs a platform-contract job (typecheck, LF checkout, and the generated harness pages/hooks) and the rest is verified by hand. Daemon details in [`daemon/README.md`](daemon/README.md) |
 
 ### Harness · OS notes (Claude Code / Codex / OpenCode / Windows)
 
@@ -335,9 +335,18 @@ transcripts are read in place from the harness's own store — llmwiki makes no 
     - capture reads the SQLite session store; `XDG_DATA_HOME`/`OPENCODE_DB` are preserved in the daemon environment
 - **Windows** — native or WSL2, both supported
     - Bun·`bun:sqlite` run natively (FTS5 trigram included), and path matching normalizes backslashes
-    - native Windows: install Bun and Git, then `./setup.sh --harness claude` from Git Bash — the
-      `.sh` scripts need it, and Claude Code runs the hook scripts through it without `bash` being
-      on the Windows `PATH`
+    - native Windows: install Bun and Git, then `./setup.sh --harness claude` (or `all`) from Git
+      Bash — the `.sh` scripts need it, and Claude Code runs the hook scripts through it without
+      `bash` being on the Windows `PATH`
+    - **Codex and OpenCode are wired without the shell adapters here.** `bash` is never on the
+      Windows `PATH` (Git's installer adds `<root>\cmd`, not `<root>\bin`) and both harnesses hand
+      the agent's shell commands to PowerShell, so a hook spelled `bash '<script>'` reported nothing
+      but "hook exited with code 1" and every `llmwiki …` line in a skill hit
+      `CommandNotFoundException`. On Windows the hook command and the skill bodies name
+      `bun <clone>/src/cli.ts` directly — no interpreter, no `PATH` entry
+    - the `llmwiki` launcher in `~/.local/bin` is a `#!/bin/sh` script: usable from Git Bash (which
+      does not put that directory on `PATH` — add it yourself), not from PowerShell or `cmd`.
+      Nothing the harnesses install depends on it
     - the capture daemon registers itself in your per-user **Startup folder** and runs hidden (no
       console window). That needs no elevation — a Task Scheduler `/SC ONLOGON` entry does, and a
       note-taking daemon is not worth an elevated installer. It starts with your session and does

@@ -1,8 +1,9 @@
 -- llmwiki per-repo index (SQLite + FTS5).
 -- Everything in this database is DERIVED state: markdown under docs/wiki/ is the source
--- of truth, and <repo>/.llmwiki/index.db can be deleted and rebuilt from disk at any time
--- (`llmwiki reindex`). Nothing durable lives here — the update watermark is kept in the
--- central capture queue (<clone>/.state/capture.db, engine/capture.ts), never per-repo.
+-- of truth, and this file can be deleted and rebuilt from disk at any time (`llmwiki reindex`).
+-- It lives in the engine's state root, one directory per project (`llmwiki state-path`), not in
+-- the repository. Nothing durable lives here — the update watermark is kept in the central
+-- capture queue (<state>/capture.db, engine/capture.ts), never per-repo.
 
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;

@@ -292,10 +292,10 @@ cd ~/llmwiki
 
 | | 필요 | 비고 |
 |---|---|---|
-| **Bun ≥ 1.1** | ✔ 필수 | 단일 바이너리 (`curl -fsSL https://bun.sh/install \| bash`). `.ts` 를 그대로 실행, `bun:sqlite` 가 FTS5 까지 번들 — 빌드·`node_modules` 0. 엔진 실행·`bun test` 는 무설치로 동작; `bun run typecheck`(tsc) 만 `bun install` 1회 필요 (dev 전용). |
+| **Bun ≥ 1.1** | ✔ 필수 | 단일 바이너리 — POSIX 는 `curl -fsSL https://bun.sh/install \| bash`, 네이티브 Windows 는 PowerShell 에서 `irm bun.sh/install.ps1 \| iex` (POSIX 설치 스크립트는 Windows 에서 동작하지 않는다). `.ts` 를 그대로 실행, `bun:sqlite` 가 FTS5 까지 번들 — 빌드·`node_modules` 0. 엔진 실행·`bun test` 는 무설치로 동작; `bun run typecheck`(tsc) 만 `bun install` 1회 필요 (dev 전용). |
 | **Codex · OpenCode CLI** | 각 빠른 시작에만 | `codex` / `opencode` 가 `PATH`에 있어야 함. Codex는 추가로 lifecycle hook 지원 + stable `hooks` 기능 활성 필요. setup은 훅·스킬·서비스 변경 전에 지원 여부와 기존 기능 설정을 확인. |
 | **LLM CLI** | 선택형·명시적 활성화 | 캡처·읽기 주입·`/wiki-*`·`ingest`(capture-only, 대기 목록만 기록)는 없어도 동작하고, 기본 상태에서는 아무것도 전송하지 않음. `LLMWIKI_LLM_CMD`를 셸 환경에 설정한 경우에만 `autoupdate·review`와 `ingest` 통합이 생성 서브프로세스를 실행 (Claude Code 권장값: `export LLMWIKI_LLM_CMD='claude -p {prompt} --model {model} --disallowedTools Write Edit NotebookEdit Bash'` — 프롬프트가 트랜스크립트 텍스트로 만들어지므로 툴 제한을 유지할 것). |
-| **OS** | macOS / Linux | macOS=launchd, Linux=systemd(`--user`), systemd 없으면 cron+nohup 폴백. 데몬 세부는 [`daemon/README.md`](../daemon/README.md) |
+| **OS** | macOS / Linux / Windows | macOS=launchd, Linux=systemd(`--user`), systemd 없으면 cron+nohup 폴백, Windows=사용자별 시작프로그램 폴더(권한 상승 없음; 로그온 시 시작, 크래시 재시작 없음). macOS·Linux 는 CI 에서 검증, Windows 는 CI 에서 typecheck·플랫폼 회귀 테스트가 돌고 나머지는 수동 검증. 데몬 세부는 [`daemon/README.md`](../daemon/README.md) |
 
 ### 하네스 · OS 노트 (Claude Code / Codex / OpenCode / Windows)
 
@@ -311,9 +311,17 @@ cd ~/llmwiki
     - 캡처는 SQLite 세션 저장소를 읽음 · `XDG_DATA_HOME`/`OPENCODE_DB`도 데몬 환경에 보존
 - **Windows** — 네이티브 · WSL2 모두 지원
     - Bun·`bun:sqlite`는 네이티브 동작(FTS5 trigram 포함) · 경로 매칭은 backslash 정규화
-    - 네이티브 Windows: Bun과 Git 설치 후 Git Bash에서 `./setup.sh --harness claude` — `.sh`
-      스크립트에 Git Bash가 필요하고, 훅 스크립트는 `bash`가 Windows `PATH`에 없어도 Claude Code가
-      직접 찾아 실행함
+    - 네이티브 Windows: Bun과 Git 설치 후 Git Bash에서 `./setup.sh --harness claude` (또는 `all`)
+      — `.sh` 스크립트에 Git Bash가 필요하고, 훅 스크립트는 `bash`가 Windows `PATH`에 없어도
+      Claude Code가 직접 찾아 실행함
+    - **Codex·OpenCode는 여기서 셸 어댑터를 거치지 않는다.** `bash`는 Windows `PATH`에 절대
+      올라오지 않고(Git 설치기가 `<root>\cmd`만 등록, `<root>\bin`은 제외), 두 하네스 모두 에이전트의
+      셸 명령을 PowerShell로 넘긴다. 그래서 `bash '<script>'` 훅은 "hook exited with code 1" 한 줄만
+      남기고 죽었고, 스킬 본문의 `llmwiki …` 는 전부 `CommandNotFoundException` 이었다. Windows에서는
+      훅 명령과 스킬 본문이 `bun <clone>/src/cli.ts` 를 직접 부른다 — 인터프리터도 `PATH` 등록도 불필요
+    - `~/.local/bin` 의 `llmwiki` 런처는 `#!/bin/sh` 스크립트다: Git Bash에서만 쓸 수 있고(그마저도
+      해당 디렉터리가 기본 `PATH`에 없어 직접 추가해야 함), PowerShell·`cmd`에서는 못 쓴다.
+      하네스가 설치하는 것들은 이 런처에 의존하지 않는다
     - 캡처 데몬은 사용자별 **시작프로그램 폴더**에 등록되어 창 없이 숨김 실행됨. 관리자 권한이
       필요 없음 — Task Scheduler `/SC ONLOGON`은 권한을 요구하는데, 메모용 데몬 하나에 관리자
       권한 설치를 요구하는 건 맞지 않음. 로그인 시 시작되지만 크래시 시 자동 재시작은 **없음**

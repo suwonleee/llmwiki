@@ -1,5 +1,5 @@
 // WikiIndex — synchronous SQLite index over a workspace (markdown = source of truth).
-// The index is derived state: delete .llmwiki/index.db and rebuild from disk anytime.
+// The index is derived state: delete it (see `llmwiki state-path`) and rebuild from disk anytime.
 // bun:sqlite-based. Methods that take a `db: Database` operate on an explicit
 // connection the caller opens/closes.
 import { Database } from "bun:sqlite";
