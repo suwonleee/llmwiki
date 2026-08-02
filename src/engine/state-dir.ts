@@ -666,15 +666,28 @@ export function bootstrapStateRoot(dir = effectiveStateRoot()): string {
   if (existing !== null && (!existing.isFile() || existing.isSymbolicLink())) {
     throw new StateRootError(`llmwiki daemon log path is not a regular file: ${logPath}`);
   }
-  const fd = openSync(
-    logPath,
-    fsConstants.O_WRONLY |
-      fsConstants.O_CREAT |
-      fsConstants.O_APPEND |
-      (POSIX ? fsConstants.O_NOFOLLOW : 0),
-    0o600,
-  );
-  closeSync(fd);
+  try {
+    const fd = openSync(
+      logPath,
+      fsConstants.O_WRONLY |
+        fsConstants.O_CREAT |
+        fsConstants.O_APPEND |
+        (POSIX ? fsConstants.O_NOFOLLOW : 0),
+      0o600,
+    );
+    closeSync(fd);
+  } catch (error) {
+    // The point of this open is to CREATE the redirection target privately before a shell's `>>`
+    // creates it with whatever the umask says. A file that is already there has already passed
+    // that gate — and on Windows the running daemon holds daemon.log open through cmd's `>>` in a
+    // share mode that denies every other writer, so re-running the installer while capture was up
+    // died with EBUSY on the one file whose existence proves the last install worked. Narrow on
+    // purpose: only a sharing violation, only on Windows, only when the path is already a regular
+    // file — a genuinely unwritable or missing log still fails here, where it is diagnosable.
+    const code = (error as NodeJS.ErrnoException).code;
+    const shared = !POSIX && existing !== null && (code === "EBUSY" || code === "EPERM");
+    if (!shared) throw error;
+  }
   reassertPrivateModes(root);
   return root;
 }

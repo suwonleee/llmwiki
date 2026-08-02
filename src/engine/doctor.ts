@@ -30,7 +30,7 @@ import {
   verifyHarnessPath,
   type Harness,
 } from "./harness-locate.ts";
-import { watchProcessRunning } from "./daemon-control.ts";
+import { DAEMON_WINDOWS_STARTUP, watchProcessRunning } from "./daemon-control.ts";
 import { autoConnect, harnessInstalled, renderHandoff } from "./harness-autoconnect.ts";
 import { locateGit } from "./tool-locate.ts";
 import { gitMissingDetail } from "./enrollment.ts";
@@ -693,8 +693,33 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
     }
   }
 
-  // daemon installed? (OS-aware: macOS launchd / Linux systemd / cron·nohup)
-  if (process.platform === "darwin") {
+  // daemon installed? (OS-aware: macOS launchd / Linux systemd / cron·nohup / Windows Startup)
+  if (process.platform === "win32") {
+    // Windows has no unelevated supervisor, so "installed" and "running" are genuinely two facts
+    // here and are reported as two. The failure this replaces was one line — `not installed` — on
+    // a machine that had a Startup entry AND a live daemon, because the Linux branch below looks
+    // for a systemd unit and then asks `ps`, and neither exists on Windows.
+    const running = watchProcessRunning();
+    const autostart = existsSync(DAEMON_WINDOWS_STARTUP);
+    if (autostart) console.log(`  [daemon] ✅ starts at logon: ${DAEMON_WINDOWS_STARTUP}`);
+    if (running && autostart) {
+      console.log("  [daemon] ✅ capture daemon running");
+    } else if (running) {
+      console.log(
+        "  [daemon] ⚠️ running, but nothing starts it at logon — capture works now and stops at the " +
+          "next sign-out; re-run daemon/install.sh to register it",
+      );
+    } else if (autostart) {
+      console.log(
+        "  [daemon] ⚠️ registered for logon but not running now — sign out and back in, or run " +
+          "daemon/install.sh to start it for this session",
+      );
+      issues += 1;
+    } else {
+      console.log("  [daemon] ⚠️ not installed — capture loop inactive. Run setup.sh, or see daemon/README.md.");
+      issues += 1;
+    }
+  } else if (process.platform === "darwin") {
     // What matters is whether capture is RUNNING, not which supervisor is holding it. macOS
     // without a usable launchd falls back to the same plain background process Linux uses, so the
     // check accepts that state too — reporting it honestly as degraded (it will not survive a

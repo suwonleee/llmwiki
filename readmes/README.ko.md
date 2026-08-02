@@ -309,9 +309,16 @@ cd ~/llmwiki
 - **OpenCode** — `./setup.sh --harness opencode`
     - 전역 `/wiki-*` custom command, clone 경로가 내장된 읽기 주입 플러그인, 사용자 CLI 설치
     - 캡처는 SQLite 세션 저장소를 읽음 · `XDG_DATA_HOME`/`OPENCODE_DB`도 데몬 환경에 보존
-- **Windows** — WSL2 권장
-    - Bun·`bun:sqlite`는 네이티브 동작 · 경로 매칭은 backslash 정규화
-    - 단 네이티브 Windows는 `.sh` 스크립트에 Git Bash 필요 + 데몬은 Task Scheduler/NSSM 수동 등록 (launchd/systemd/cron 부재)
+- **Windows** — 네이티브 · WSL2 모두 지원
+    - Bun·`bun:sqlite`는 네이티브 동작(FTS5 trigram 포함) · 경로 매칭은 backslash 정규화
+    - 네이티브 Windows: Bun과 Git 설치 후 Git Bash에서 `./setup.sh --harness claude` — `.sh`
+      스크립트에 Git Bash가 필요하고, 훅 스크립트는 `bash`가 Windows `PATH`에 없어도 Claude Code가
+      직접 찾아 실행함
+    - 캡처 데몬은 사용자별 **시작프로그램 폴더**에 등록되어 창 없이 숨김 실행됨. 관리자 권한이
+      필요 없음 — Task Scheduler `/SC ONLOGON`은 권한을 요구하는데, 메모용 데몬 하나에 관리자
+      권한 설치를 요구하는 건 맞지 않음. 로그인 시 시작되지만 크래시 시 자동 재시작은 **없음**
+      (Linux `cron @reboot` 폴백과 동일한 보장). `llmwiki doctor`는 "로그온 시 시작"과 "실행 중"을
+      별개의 사실로 각각 보고함
     - WSL2에서는 전부 무수정 동작 (launchd→systemd · bash · 경로) — Claude Code·Codex 공식 권장과도 일치
 
 ## 설치 / 사용

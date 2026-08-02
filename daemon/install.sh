@@ -183,6 +183,39 @@ if [ "$1" = "--uninstall" ]; then
             uninstall_failure "cron @reboot line could not be removed."
         fi
     fi
+    # Windows: Startup entry + its launcher, then the process — asking the engine for PIDs, since
+    # the `ps` path below cannot answer on MSYS and would report a live daemon as "unverifiable".
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            WIN_STARTUP_DIR="$(cygpath -F 7 2>/dev/null || echo "$APPDATA/Microsoft/Windows/Start Menu/Programs/Startup")"
+            for WIN_OWNED in "$WIN_STARTUP_DIR/llmwiki-daemon.vbs" "$STATE_REQUESTED/llmwiki-daemon.cmd"; do
+                [ -n "$WIN_OWNED" ] && [ -f "$WIN_OWNED" ] && rm -f "$WIN_OWNED" && echo "✓ removed $WIN_OWNED"
+            done
+            # STATE_REQUESTED is empty unless overridden, so ask the engine where state actually is
+            # rather than assuming — the launcher lives beside the queue, wherever that ended up.
+            WIN_STATE="$("$PY" "$ROOT/src/engine/state-bootstrap.ts" "$STATE_REQUESTED" 2>/dev/null || true)"
+            if [ -n "$WIN_STATE" ] && [ -f "$WIN_STATE/llmwiki-daemon.cmd" ]; then
+                rm -f "$WIN_STATE/llmwiki-daemon.cmd" && echo "✓ removed $WIN_STATE/llmwiki-daemon.cmd"
+            fi
+            WIN_PIDS_STATUS=0
+            WIN_PIDS="$("$PY" "$ROOT/src/engine/daemon-control.ts" --pids 2>/dev/null)" || WIN_PIDS_STATUS=$?
+            if [ "$WIN_PIDS_STATUS" -eq 2 ]; then
+                uninstall_failure "watch.ts process status could not be verified."
+            else
+                for WIN_PID in $WIN_PIDS; do
+                    taskkill //PID "$WIN_PID" //F >/dev/null 2>&1 || \
+                        uninstall_failure "running watch.ts process (pid $WIN_PID) could not be stopped."
+                done
+                [ -n "$WIN_PIDS" ] && echo "✓ stopped running watch.ts"
+            fi
+            if [ "$UNINSTALL_FAILURES" -gt 0 ]; then
+                echo "uninstall incomplete: $UNINSTALL_FAILURES daemon stop step(s) failed." >&2
+                exit 1
+            fi
+            echo "uninstall complete."
+            exit 0
+            ;;
+    esac
     # stray nohup process — enumerate with `ps` and match the path literally. `pgrep -f` treats
     # clone paths as regular expressions, so a perfectly valid path containing `[` can evade it.
     WATCH_STOP_STATUS=0
@@ -205,6 +238,114 @@ fi
 # Establish the exact same ownership boundary capture/OpenCode use before launchd/systemd/nohup
 # can create daemon.log through redirection. A foreign non-empty override fails closed.
 STATE="$("$PY" "$ROOT/src/engine/state-bootstrap.ts" "$STATE_REQUESTED")"
+
+# --- Windows (Git Bash / MSYS / Cygwin): Startup folder ----------------------
+#
+# This branch exists because every assumption below it is false here, and each one failed SILENTLY:
+#
+#   - `nohup` is not part of Git Bash. The unsupervised fallback ran it, the shell wrote
+#     "nohup: command not found" into daemon.log, and the script printed "✓ started watch.ts in
+#     background (pid …)" anyway — `$!` is the pid of a subshell that had already died. A green
+#     line over a dead capture loop is the exact failure this file's comments are written against.
+#   - SERVICE_PATH is a WINDOWS path list (`C:\a;C:\b`). Assigning it to a bash `PATH=` makes one
+#     nonexistent entry out of the whole list, so the daemon would not have found `git` — and a
+#     daemon that cannot run git reports every session as "not a git worktree" and skips it.
+#   - `ps -axo` is rejected by MSYS ps, so the duplicate-guard could not answer and refused to
+#     start anything at all.
+#
+# Task Scheduler is not the answer: `/SC ONLOGON` requires elevation ("Access is denied" for a
+# normal user), and a note-taking daemon does not justify an elevated installer. The per-user
+# Startup folder needs no rights, and gives the same guarantee as the Linux cron @reboot fallback —
+# starts with your session, does not restart on crash — which is how it is reported.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        STARTUP_DIR="$(cygpath -F 7 2>/dev/null || echo "$APPDATA/Microsoft/Windows/Start Menu/Programs/Startup")"
+        LAUNCHER_CMD="$STATE/llmwiki-daemon.cmd"
+        LAUNCHER_VBS="$STARTUP_DIR/llmwiki-daemon.vbs"
+
+        # Everything the daemon runs with is baked into the .cmd, exactly as the plist and the
+        # systemd unit do it — same reason (a service inherits a minimal environment), same list.
+        # Native Windows spellings throughout: this file is read by cmd.exe, not by bash.
+        W_PY="$(cygpath -w "$PY")"
+        W_WATCH="$(cygpath -w "$WATCH")"
+        W_STATE="$(cygpath -w "$STATE")"
+        W_HOME="$(cygpath -w "$HOME")"
+        W_CODEX_HOME="$(cygpath -w "$CODEX_STATE_HOME" 2>/dev/null || echo "$CODEX_STATE_HOME")"
+        W_CLAUDE_PROFILE="$CLAUDE_PROFILE"
+        [ -n "$W_CLAUDE_PROFILE" ] && W_CLAUDE_PROFILE="$(cygpath -w "$W_CLAUDE_PROFILE" 2>/dev/null || echo "$CLAUDE_PROFILE")"
+        W_OPENCODE_DATA_HOME="$OPENCODE_DATA_HOME"
+        [ -n "$W_OPENCODE_DATA_HOME" ] && W_OPENCODE_DATA_HOME="$(cygpath -w "$W_OPENCODE_DATA_HOME" 2>/dev/null || echo "$OPENCODE_DATA_HOME")"
+        W_OPENCODE_DB="$OPENCODE_DB_PATH"
+        [ -n "$W_OPENCODE_DB" ] && W_OPENCODE_DB="$(cygpath -w "$W_OPENCODE_DB" 2>/dev/null || echo "$OPENCODE_DB_PATH")"
+
+        mkdir -p "$STATE"
+        # SERVICE_PATH is already a Windows path list here — tool-locate.ts builds it for the
+        # platform it runs on — so it is written straight into the .cmd, never into a bash PATH.
+        {
+            printf '@echo off\r\n'
+            printf 'rem llmwiki capture daemon (%s) — generated by daemon/install.sh\r\n' "$ROOT"
+            printf 'set "PATH=%s"\r\n' "$SERVICE_PATH"
+            printf 'set "HOME=%s"\r\n' "$W_HOME"
+            printf 'set "CODEX_HOME=%s"\r\n' "$W_CODEX_HOME"
+            printf 'set "CLAUDE_CONFIG_DIR=%s"\r\n' "$W_CLAUDE_PROFILE"
+            printf 'set "XDG_DATA_HOME=%s"\r\n' "$W_OPENCODE_DATA_HOME"
+            printf 'set "OPENCODE_DB=%s"\r\n' "$W_OPENCODE_DB"
+            printf 'set "LLMWIKI_STATE_DIR=%s"\r\n' "$W_STATE"
+            printf '"%s" "%s" >> "%s\\daemon.log" 2>&1\r\n' "$W_PY" "$W_WATCH" "$W_STATE"
+        } > "$LAUNCHER_CMD"
+
+        # A .cmd in the Startup folder would flash a console window at every sign-in and keep one
+        # on screen for as long as the daemon lives. wscript runs the same file with the window
+        # hidden (0) and without waiting (False) — the standard unelevated way to do this.
+        mkdir -p "$STARTUP_DIR"
+        {
+            printf 'Rem llmwiki capture daemon (%s) — generated by daemon/install.sh\r\n' "$ROOT"
+            printf 'CreateObject("WScript.Shell").Run """%s""", 0, False\r\n' "$(cygpath -w "$LAUNCHER_CMD")"
+        } > "$LAUNCHER_VBS"
+
+        # Duplicate guard, asking the engine rather than a `ps` that cannot answer here.
+        WIN_PIDS_STATUS=0
+        WIN_PIDS="$("$PY" "$ROOT/src/engine/daemon-control.ts" --pids 2>/dev/null)" || WIN_PIDS_STATUS=$?
+        if [ "$WIN_PIDS_STATUS" -eq 2 ]; then
+            echo "🔴 could not determine whether a capture daemon is already running; refusing to start a duplicate." >&2
+            exit 1
+        fi
+        for WIN_PID in $WIN_PIDS; do
+            taskkill //PID "$WIN_PID" //F >/dev/null 2>&1 || true
+        done
+
+        # Start it for THIS session too, detached and hidden, through the file that will run at the
+        # next logon — so what starts now is byte-identical to what starts then.
+        cscript //nologo //B "$(cygpath -w "$LAUNCHER_VBS")" >/dev/null 2>&1 || \
+            wscript //nologo //B "$(cygpath -w "$LAUNCHER_VBS")" >/dev/null 2>&1 || true
+
+        # Verify; never assert. The daemon needs a moment to appear in the process table, and the
+        # whole point of this branch is that "we ran something" is not evidence it is running.
+        WIN_STARTED=0
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if "$PY" "$ROOT/src/engine/daemon-control.ts" --running >/dev/null 2>&1; then
+                WIN_STARTED=1
+                break
+            fi
+            sleep 1
+        done
+        echo "✓ registered logon startup: $LAUNCHER_VBS"
+        if [ "$WIN_STARTED" -eq 1 ]; then
+            echo "✓ started watch.ts (hidden, detached)"
+        else
+            echo "🔴 the capture daemon did not come up; it is NOT running." >&2
+            echo "   launcher: $LAUNCHER_CMD" >&2
+            echo "   log     : $STATE/daemon.log" >&2
+            exit 1
+        fi
+        echo "  runtime: $PY"
+        echo "  log    : $STATE/daemon.log"
+        printf '  check  : bun %q doctor\n' "$ROOT/src/cli.ts"
+        echo "  NOTE   : the Startup folder starts the daemon at sign-in but does not restart it if"
+        echo "           it crashes (same guarantee as the cron @reboot fallback on Linux)."
+        exit 0
+        ;;
+esac
 
 # --- macOS: launchd ----------------------------------------------------------
 if [ "$(uname)" = "Darwin" ]; then

@@ -74,6 +74,37 @@ With neither `systemctl` nor `crontab`, you get a one-shot run with no automatic
 Re-run `install.sh` after each boot, or supervise `bun <clone>/src/daemon/watch.ts` with your
 own process manager.
 
+## Windows (Git Bash / MSYS) — per-user Startup folder
+
+Run `bash <clone>/daemon/install.sh` from Git Bash. It writes two files it owns and nothing else:
+
+- `<state>/llmwiki-daemon.cmd` — the launcher, with `PATH`, `HOME`, `CODEX_HOME`,
+  `CLAUDE_CONFIG_DIR`, `XDG_DATA_HOME`, `OPENCODE_DB` and `LLMWIKI_STATE_DIR` baked in, exactly as
+  the launchd plist and the systemd unit bake them. A service inherits a minimal environment, and
+  a daemon that cannot find `git` reports every session as "not a git worktree" and skips it.
+- `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\llmwiki-daemon.vbs` — a two-line
+  launcher that runs the `.cmd` with the window hidden, so no console appears at sign-in.
+
+Why not Task Scheduler: `/SC ONLOGON` is refused for a non-admin ("Access is denied"), and asking
+for an elevated installer to run a note-taking daemon is the wrong trade. The Startup folder needs
+no rights and gives the same guarantee as the cron fallback above — **starts with your session,
+does not restart on crash**.
+
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='bun.exe'" | Select-Object ProcessId, CommandLine
+```
+
+```bash
+bun <clone>/src/engine/daemon-control.ts --running   # exit 0 = running, 1 = not
+bun <clone>/src/engine/daemon-control.ts --pids      # one pid per line
+tail -f "<state>/daemon.log"
+bash <clone>/daemon/install.sh --uninstall           # removes both files, stops the process
+```
+
+`ps`/`pgrep`/procfs do not answer here (MSYS `ps` rejects `-axo` and lists no native processes), so
+the engine reads command lines through WMI instead — one implementation, asked by both `doctor` and
+the installer.
+
 ---
 
 ## Health check / debugging

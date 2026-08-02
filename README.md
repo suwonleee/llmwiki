@@ -319,7 +319,7 @@ transcripts are read in place from the harness's own store — llmwiki makes no 
 | **git** | ✔ required | The capture loop asks git whether a directory is a worktree, and cannot distinguish "git is missing" from "not a worktree" — so without it the engine installs cleanly and captures nothing. It is searched for beyond `PATH` (Homebrew · MacPorts · Nix · `~/.local/bin`), baked into the daemon's service environment at install time, and reported by `llmwiki doctor` under `[deps]`. |
 | **Codex · OpenCode CLI** | their quick starts only | `codex` / `opencode` on `PATH`. Codex additionally needs lifecycle-hook support with the stable `hooks` feature enabled. Setup checks support — and any existing feature setting — before changing hooks, skills, or services. |
 | **LLM CLI** | optional, opt-in | Capture·read-injection·`/wiki-*`·`ingest` (capture-only, queues pending updates) work without it, and **nothing is sent anywhere by default**. `autoupdate·review` and `ingest`'s consolidation launch a generative subprocess only when you set `LLMWIKI_LLM_CMD` in your shell environment (e.g. `export LLMWIKI_LLM_CMD='claude -p {prompt} --model {model} --disallowedTools Write Edit NotebookEdit Bash'`). Unset → those passes report "unavailable" and skip; everything deterministic keeps working. |
-| **OS** | macOS / Linux | macOS=launchd, Linux=systemd (`--user`), falls back to cron+nohup if systemd is unavailable — for the capture daemon AND for unattended update (`daemon/autoupdate-schedule.sh`). Both are exercised on macOS and Linux in CI. Daemon details in [`daemon/README.md`](daemon/README.md) |
+| **OS** | macOS / Linux / Windows | macOS=launchd, Linux=systemd (`--user`) falling back to cron+nohup, Windows=per-user Startup folder (unelevated; starts at logon, no restart-on-crash) — for the capture daemon AND for unattended update (`daemon/autoupdate-schedule.sh`). macOS and Linux are exercised in CI; the Windows path is verified by hand. Daemon details in [`daemon/README.md`](daemon/README.md) |
 
 ### Harness · OS notes (Claude Code / Codex / OpenCode / Windows)
 
@@ -333,9 +333,16 @@ transcripts are read in place from the harness's own store — llmwiki makes no 
 - **OpenCode** — `./setup.sh --harness opencode`
     - installs global `/wiki-*` custom commands, a clone-pinned read-injection plugin, and the user CLI
     - capture reads the SQLite session store; `XDG_DATA_HOME`/`OPENCODE_DB` are preserved in the daemon environment
-- **Windows** — WSL2 recommended
-    - Bun·`bun:sqlite` run natively, and path matching normalizes backslashes
-    - native Windows still needs Git Bash for the `.sh` scripts, plus manual Task Scheduler/NSSM registration (no launchd/systemd/cron)
+- **Windows** — native or WSL2, both supported
+    - Bun·`bun:sqlite` run natively (FTS5 trigram included), and path matching normalizes backslashes
+    - native Windows: install Bun and Git, then `./setup.sh --harness claude` from Git Bash — the
+      `.sh` scripts need it, and Claude Code runs the hook scripts through it without `bash` being
+      on the Windows `PATH`
+    - the capture daemon registers itself in your per-user **Startup folder** and runs hidden (no
+      console window). That needs no elevation — a Task Scheduler `/SC ONLOGON` entry does, and a
+      note-taking daemon is not worth an elevated installer. It starts with your session and does
+      **not** restart on crash, the same guarantee as the Linux `cron @reboot` fallback; `llmwiki
+      doctor` reports "starts at logon" and "running" as the two separate facts they are
     - under WSL2 everything runs unmodified (launchd→systemd·bash·paths) — also the official Claude Code·Codex recommendation
 
 ## Install / Usage
