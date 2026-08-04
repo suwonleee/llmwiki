@@ -8,7 +8,7 @@ import { today } from "./engine/today.ts";
 import { MissingCliFlagValueError, parseCliArgs, type ParsedCliArgs as Parsed } from "./cli-args.ts";
 import { createMaintenanceHandlers } from "./commands/maintenance.ts";
 import * as excerpt from "./engine/excerpt.ts";
-import { rebuildReferenceGraph } from "./engine/refs.ts";
+import { rebuildReferenceGraph, referenceGraphCounts } from "./engine/refs.ts";
 import { effectiveKo, getConfig, isRepoKorean, CONFIG_BASENAME, CONFIGS_DIR } from "./engine/config.ts";
 import { Linter, formatReport } from "./engine/lint.ts";
 import * as update from "./engine/update.ts";
@@ -120,8 +120,13 @@ function cmdInit(p: Parsed) {
 function cmdIndex(p: Parsed) {
   const ws = p.positionals[0] ?? die("index <workspace> required");
   const w = idx(ws);
-  const [neu, updated] = w.indexAll();
-  const r = rebuildReferenceGraph(w);
+  const [neu, updated, removed] = w.indexAll();
+  // A true no-op (nothing added, changed, OR deleted — deletions rewire edges too) cannot have
+  // changed the reference graph, so reuse it instead of re-walking every page. This was the whole
+  // cost of a no-op `index`: content_hash already skipped the pages, then the graph rebuild
+  // re-parsed all of them anyway. Falls through to a rebuild when the stored graph is empty,
+  // because "empty" and "never built" look the same from here.
+  const r = neu + updated + removed === 0 ? referenceGraphCounts(w) ?? rebuildReferenceGraph(w) : rebuildReferenceGraph(w);
   console.log(`✓ Indexed: ${neu} new, ${updated} updated (unchanged skipped via content_hash)`);
   console.log(`  refs: ${r.citations} citation, ${r.links} link edge(s) across ${r.pages} page(s)`);
 }

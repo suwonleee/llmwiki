@@ -12,7 +12,7 @@
 // shape of "clone it in a different environment", which is the thing this engine is supposed to be
 // good at.
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { STATE_MARKER, ensureOwnedStateRoot, probeStateRoot, stateMarkerBytes } from "../src/engine/state-dir.ts";
@@ -74,6 +74,17 @@ describe("a state root whose clone moved", () => {
     ensureOwnedStateRoot(root);
     expect(readFileSync(join(root, STATE_MARKER), "utf-8")).toBe(first);
     expect(probeStateRoot(root).detail).toBe("owned");
+  });
+
+  test("recognizes and tightens a crash-leftover rotation temp after a move", () => {
+    const name = ".daemon.log.1.tmp-123-abc";
+    const root = movedStateRoot({ [name]: "partial private log\n" });
+    if (POSIX) chmodSync(join(root, name), 0o666);
+
+    ensureOwnedStateRoot(root);
+
+    expect(readFileSync(join(root, name), "utf-8")).toBe("partial private log\n");
+    if (POSIX) expect(statSync(join(root, name)).mode & 0o777).toBe(0o600);
   });
 });
 

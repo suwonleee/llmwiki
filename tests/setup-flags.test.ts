@@ -208,7 +208,25 @@ describe("setup command contract", () => {
     });
 
     expect(result.exitCode).toBe(1);
-    expect(new TextDecoder().decode(result.stderr)).toContain("OpenCode CLI not found");
+    const stderr = new TextDecoder().decode(result.stderr);
+    expect(stderr).toContain("OpenCode CLI not found");
+    expect(stderr).not.toContain("To set up only the harnesses that ARE ready");
+    expect(existsSync(join(home, ".config", "opencode"))).toBe(false);
+    expect(existsSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"))).toBe(false);
+  });
+
+  test("multi-harness preflight names the single-harness recovery path without mutating", () => {
+    rmSync(join(stubBin, "opencode"));
+
+    const result = run(["--harness", "all"]);
+
+    expect(result.exitCode).toBe(1);
+    const stderr = new TextDecoder().decode(result.stderr);
+    expect(stderr).toContain("OpenCode CLI not found");
+    expect(stderr).toContain("To set up only the harnesses that ARE ready");
+    expect(stderr).toContain("--harness codex|claude|opencode");
+    expect(existsSync(join(codexHome, "hooks.json"))).toBe(false);
+    expect(existsSync(join(home, ".claude", "commands"))).toBe(false);
     expect(existsSync(join(home, ".config", "opencode"))).toBe(false);
     expect(existsSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"))).toBe(false);
   });

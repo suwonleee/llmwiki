@@ -163,6 +163,18 @@ fi
 USE_CODEX=0
 USE_CLAUDE=0
 USE_OPENCODE=0
+
+# Every harness precondition below refuses the WHOLE run, on purpose: a half-installed setup is
+# worse than none. But when the run covers several harnesses and only one is unready, the person
+# is now blocked on a tool they may not even use — measured with three harnesses present and one
+# too old: nothing was installed for the other two, and the message named only the failure. State
+# the way forward wherever we refuse; the all-or-nothing behaviour itself stays.
+partial_harness_hint() {
+    if [ $((USE_CODEX + USE_CLAUDE + USE_OPENCODE)) -gt 1 ]; then
+        echo "   To set up only the harnesses that ARE ready, re-run with --harness codex|claude|opencode." >&2
+    fi
+}
+
 case "$HARNESS" in
     codex) USE_CODEX=1 ;;
     claude) USE_CLAUDE=1 ;;
@@ -177,14 +189,17 @@ esac
 
 if [ "$USE_CODEX" -eq 1 ] && ! command -v codex >/dev/null 2>&1; then
     echo "🔴 Codex CLI not found on PATH — install Codex first, then re-run setup." >&2
+    partial_harness_hint
     exit 1
 fi
 if [ "$USE_CLAUDE" -eq 1 ] && ! command -v claude >/dev/null 2>&1; then
     echo "🔴 Claude Code CLI not found on PATH — install Claude Code first, then re-run setup." >&2
+    partial_harness_hint
     exit 1
 fi
 if [ "$USE_OPENCODE" -eq 1 ] && ! command -v opencode >/dev/null 2>&1; then
     echo "🔴 OpenCode CLI not found on PATH — install OpenCode first, then re-run setup." >&2
+    partial_harness_hint
     exit 1
 fi
 if [ "$USE_OPENCODE" -eq 1 ]; then
@@ -199,6 +214,7 @@ if [ "$USE_OPENCODE" -eq 1 ]; then
     if ! printf '%s\n' "$OPENCODE_RUN_HELP" | grep -q -- '--command'; then
         echo "🔴 this OpenCode installation does not support global custom commands." >&2
         echo "   Update OpenCode, then re-run setup." >&2
+        partial_harness_hint
         exit 1
     fi
 fi
@@ -206,6 +222,7 @@ if [ "$USE_CODEX" -eq 1 ]; then
     if ! codex --help 2>/dev/null | grep -q -- '--dangerously-bypass-hook-trust'; then
         echo "🔴 this Codex installation does not support the required lifecycle hooks." >&2
         echo "   Update Codex, then re-run setup." >&2
+        partial_harness_hint
         exit 1
     fi
     CODEX_FEATURE_HOME="${CODEX_HOME:-${HOME:-}/.codex}"
@@ -213,6 +230,7 @@ if [ "$USE_CODEX" -eq 1 ]; then
         CODEX_HOOKS_LINE="$(codex features list 2>/dev/null | grep -E '^hooks[[:space:]]' || true)"
         if [ -n "$CODEX_HOOKS_LINE" ] && ! printf '%s\n' "$CODEX_HOOKS_LINE" | grep -Eq '[[:space:]]true$'; then
             echo "🔴 Codex lifecycle hooks are disabled. Run: codex features enable hooks" >&2
+            partial_harness_hint
             exit 1
         fi
     fi

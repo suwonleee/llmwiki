@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -6,13 +7,19 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import * as capture from "../src/engine/capture.ts";
+import { inspectDatabaseHealth } from "../src/engine/db-maintenance.ts";
+import { WikiIndex } from "../src/engine/db.ts";
+import { projectStatePath } from "../src/engine/project-state.ts";
 import { runWikiDoctor } from "../src/engine/wiki-doctor.ts";
+import { makeEnrolledRepo } from "./support/git-repo.ts";
 
 const ROOT = join(import.meta.dir, "..");
 const TODAY = "2026-07-24";
@@ -162,6 +169,166 @@ describe("wiki doctor engine", () => {
     const recovery = join(root, ".llmwiki", "recovery");
     expect(readdirSync(recovery).some((name) => name.startsWith("index.db.") && name.endsWith(".bak"))).toBe(true);
     expect(hash(page)).toBe(before);
+  });
+
+  for (const planted of ["index leaf", ".llmwiki ancestor"] as const) {
+    test(`fix refuses a symlinked legacy ${planted} without touching its external target or journals`, () => {
+      const { root } = repoWithPage();
+      const external = temp("llmwiki-wiki-doctor-external-");
+      const target = join(external, "index.db");
+      const wal = `${target}-wal`;
+      const shm = `${target}-shm`;
+      writeFileSync(target, "external database sentinel", "utf8");
+      writeFileSync(wal, "external wal sentinel", "utf8");
+      writeFileSync(shm, "external shm sentinel", "utf8");
+      const before = [target, wal, shm].map(hash);
+
+      if (planted === "index leaf") {
+        mkdirSync(join(root, ".llmwiki"));
+        symlinkSync(target, join(root, ".llmwiki", "index.db"));
+      } else {
+        symlinkSync(external, join(root, ".llmwiki"));
+      }
+
+      const report = runWikiDoctor(root, { fix: true, today: TODAY });
+
+      expect(report.findings.map((finding) => finding.code)).toContain("repair-failed");
+      expect(report.blockingErrors).toBeGreaterThan(0);
+      expect([target, wal, shm].map(hash)).toEqual(before);
+    });
+  }
+
+  test("check refuses a symlinked central index without touching its external target or journals", () => {
+    const root = makeEnrolledRepo("llmwiki-wiki-doctor-central-");
+    temporary.push(root);
+    const dir = join(root, "docs", "wiki", "4_insight");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "fixture.md"), validPage(), "utf8");
+    new WikiIndex(root).indexAll();
+
+    const databasePath = projectStatePath(root, "index.db");
+    rmSync(databasePath);
+    const external = temp("llmwiki-wiki-doctor-central-external-");
+    const target = join(external, "index.db");
+    const wal = `${target}-wal`;
+    const shm = `${target}-shm`;
+    writeFileSync(target, "external database sentinel", "utf8");
+    writeFileSync(wal, "external wal sentinel", "utf8");
+    writeFileSync(shm, "external shm sentinel", "utf8");
+    const before = [target, wal, shm].map(hash);
+    symlinkSync(target, databasePath);
+
+    const report = runWikiDoctor(root, { today: TODAY });
+
+    expect(report.index.status).toBe("unreadable");
+    expect(report.blockingErrors).toBeGreaterThan(0);
+    expect([target, wal, shm].map(hash)).toEqual(before);
+  });
+
+  for (const fix of [false, true] as const) {
+    test(`${fix ? "fix" : "check"} refuses a symlinked central project directory without touching its database or journals`, () => {
+      const root = makeEnrolledRepo(`llmwiki-wiki-doctor-central-parent-${fix ? "fix" : "check"}-`);
+      temporary.push(root);
+      const dir = join(root, "docs", "wiki", "4_insight");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "fixture.md"), validPage(), "utf8");
+      new WikiIndex(root).indexAll();
+
+      const databasePath = projectStatePath(root, "index.db");
+      const projectDir = dirname(databasePath);
+      const external = temp("llmwiki-wiki-doctor-central-parent-external-");
+      const externalProject = join(external, "project");
+      renameSync(projectDir, externalProject);
+      symlinkSync(externalProject, projectDir);
+
+      // Keep a real WAL session open so the regression proves doctor leaves all three SQLite
+      // files byte-identical. A readonly open is still allowed to update `-shm` unless the
+      // ancestor no-follow boundary rejects the path first.
+      const writer = new Database(join(externalProject, "index.db"));
+      writer.exec("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS doctor_journal_sentinel(value TEXT)");
+      const files = ["index.db", "index.db-wal", "index.db-shm"].map((name) => join(externalProject, name));
+      const before = files.map(hash);
+
+      const report = runWikiDoctor(root, { fix, today: TODAY });
+
+      expect(report.index.status).toBe("unreadable");
+      expect(report.blockingErrors).toBeGreaterThan(0);
+      expect(files.map(hash)).toEqual(before);
+      writer.close();
+    });
+  }
+
+  test("fix repairs same-cardinality pages_fts content drift that check mode cannot prove", () => {
+    const { root, page } = repoWithPage(
+      validPage().replace("Doctor fixture", "Alphawitness Doctor fixture"),
+    );
+    const second = join(root, "docs", "wiki", "4_insight", "second.md");
+    writeFileSync(second, validPage().replace("Doctor fixture", "Betawitness Doctor fixture"), "utf8");
+    expect(runWikiDoctor(root, { fix: true, today: TODAY }).blockingErrors).toBe(0);
+
+    const databasePath = join(root, ".llmwiki", "index.db");
+    const db = new Database(databasePath);
+    const rows = db
+      .query<
+        { rowid: number; title: string; description: string; filename: string; relative_path: string },
+        []
+      >(
+        "SELECT rowid, title, description, filename, relative_path FROM documents " +
+          "WHERE relative_path IN ('docs/wiki/4_insight/fixture.md', 'docs/wiki/4_insight/second.md') " +
+          "ORDER BY relative_path",
+      )
+      .all();
+    expect(rows).toHaveLength(2);
+    const [first, other] = rows;
+    for (const row of rows) {
+      db.run(
+        "INSERT INTO pages_fts(pages_fts, rowid, title, description, filename) " +
+          "VALUES('delete', ?, ?, ?, ?)",
+        [row.rowid, row.title, row.description, row.filename],
+      );
+    }
+    db.run("INSERT INTO pages_fts(rowid, title, description, filename) VALUES(?, ?, ?, ?)", [
+      first.rowid,
+      other.title,
+      other.description,
+      other.filename,
+    ]);
+    db.run("INSERT INTO pages_fts(rowid, title, description, filename) VALUES(?, ?, ?, ?)", [
+      other.rowid,
+      first.title,
+      first.description,
+      first.filename,
+    ]);
+    expect(inspectDatabaseHealth(db).integrity.ok).toBe(false);
+    db.close();
+
+    const databaseBeforeCheck = hash(databasePath);
+    const firstBeforeCheck = hash(page);
+    const secondBeforeCheck = hash(second);
+    const checked = runWikiDoctor(root, { today: TODAY });
+    expect(checked.mode).toBe("check");
+    expect(checked.actions).toEqual([]);
+    expect(hash(databasePath)).toBe(databaseBeforeCheck);
+    expect(hash(page)).toBe(firstBeforeCheck);
+    expect(hash(second)).toBe(secondBeforeCheck);
+
+    const fixed = runWikiDoctor(root, { fix: true, today: TODAY });
+    expect(fixed.index.status).toBe("current");
+    expect(fixed.blockingErrors).toBe(0);
+    expect(fixed.actions.some((action) => action.code === "index-recovered")).toBe(true);
+    expect(hash(page)).toBe(firstBeforeCheck);
+    expect(hash(second)).toBe(secondBeforeCheck);
+
+    const repaired = new Database(databasePath);
+    expect(inspectDatabaseHealth(repaired).integrity.ok).toBe(true);
+    const index = new WikiIndex(root);
+    expect(index.search(repaired, "alphawitness", 10, "wiki")[0]?.relative_path).toBe(
+      "docs/wiki/4_insight/fixture.md",
+    );
+    expect(index.search(repaired, "betawitness", 10, "wiki")[0]?.relative_path).toBe(
+      "docs/wiki/4_insight/second.md",
+    );
+    repaired.close();
   });
 
   test("preserves a malformed generated gap queue for evidence-aware recovery", () => {

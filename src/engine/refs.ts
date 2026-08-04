@@ -42,16 +42,19 @@ const _MD_LINK_HEAD_RE = /^\[([^\]]+)\]\([^)]*\)(.*)$/;
 // so the fix is durable across full rebuilds. Returns how many were newly registered.
 export function autoRegisterCitedTranscripts(w: WikiIndex): number {
   const conn = w.connect();
-  const all = w.listDocumentsWithContent(conn);
-  const existing = new Set(all.map((d) => String(d.filename).toLowerCase()));
   const wanted = new Set<string>();
-  for (const d of all) {
-    if (!String(d.relative_path).includes("docs/wiki/")) continue;
-    for (const m of String(d.content || "").matchAll(/^\[\^[^\]]+\]:\s*([^\s/]+\.jsonl)\s*$/gm)) {
-      if (!existing.has(m[1]!.toLowerCase())) wanted.add(m[1]!);
+  try {
+    const all = w.listDocumentsWithContent(conn);
+    const existing = new Set(all.map((d) => String(d.filename).toLowerCase()));
+    for (const d of all) {
+      if (!String(d.relative_path).includes("docs/wiki/")) continue;
+      for (const m of String(d.content || "").matchAll(/^\[\^[^\]]+\]:\s*([^\s/]+\.jsonl)\s*$/gm)) {
+        if (!existing.has(m[1]!.toLowerCase())) wanted.add(m[1]!);
+      }
     }
+  } finally {
+    conn.close();
   }
-  conn.close();
   for (const fn of wanted) w.registerTranscript(fn);
   return wanted.size;
 }
@@ -281,6 +284,42 @@ export function updateReferences(
  * Keeping one implementation prevents a repair path from producing a subtly different graph
  * than the everyday indexing path.
  */
+/**
+ * Read the already-materialized graph without rebuilding it — for the `index` no-op path, where
+ * not one page was added, changed, or deleted, so the edges cannot have changed either. Zero
+ * edges alone cannot answer "built or never built?" — the 'refs-built' marker (stamped by
+ * rebuildReferenceGraph) does. This matters most for exactly the wikis that look least like the
+ * author's: a NEW adopter's wiki has few or no [[links]] yet, and without the marker every
+ * `index` re-ran the full graph rebuild forever (measured: 9.7s per no-op at 2000 link-less
+ * pages, vs 0.3s for the indexing itself).
+ */
+export function referenceGraphCounts(index: WikiIndex): {
+  readonly citations: number;
+  readonly links: number;
+  readonly pages: number;
+} | null {
+  const conn = index.connect();
+  try {
+    // Edges are reusable only when a rebuild committed its completion marker. A non-empty graph
+    // can still be the residue of an older build after the indexed documents changed, so edge
+    // count is never a substitute for the marker.
+    const built = conn.query("SELECT 1 FROM index_build WHERE key = 'refs-built'").get() !== null;
+    if (!built) return null;
+    const byType = conn
+      .query("SELECT reference_type, COUNT(*) AS n FROM document_references GROUP BY reference_type")
+      .all() as { reference_type: string; n: number }[];
+    const citations = byType.find((r) => r.reference_type === "cites")?.n ?? 0;
+    const links = byType.find((r) => r.reference_type === "links_to")?.n ?? 0;
+    // Same population the rebuild reports: wiki pages, not sources or transcripts.
+    const pages = (
+      conn.query("SELECT COUNT(*) AS n FROM documents WHERE relative_path LIKE '%docs/wiki/%'").get() as { n: number }
+    ).n;
+    return { citations, links, pages };
+  } finally {
+    conn.close();
+  }
+}
+
 export function rebuildReferenceGraph(index: WikiIndex): {
   readonly citations: number;
   readonly links: number;
@@ -289,21 +328,48 @@ export function rebuildReferenceGraph(index: WikiIndex): {
 } {
   const transcriptsRegistered = autoRegisterCitedTranscripts(index);
   const conn = index.connect();
-  const docs = index
-    .listDocumentsWithContent(conn)
-    .filter((document) => String(document.relative_path).includes("docs/wiki/"));
-  let citations = 0;
-  let links = 0;
-  for (const document of docs) {
-    const [documentCitations, documentLinks] = updateReferences(
-      index,
-      conn,
-      document,
-      String(document.content ?? ""),
+  let transactionStarted = false;
+  try {
+    // Invalidate any older completion marker before starting. If this rebuild is interrupted,
+    // SQLite rolls its graph writes back, while the absent marker prevents a later no-op index
+    // from mistaking that older graph for the current documents' completed build.
+    conn.run("DELETE FROM index_build WHERE key = 'refs-built'");
+    conn.run("BEGIN IMMEDIATE");
+    transactionStarted = true;
+
+    const docs = index
+      .listDocumentsWithContent(conn)
+      .filter((document) => String(document.relative_path).includes("docs/wiki/"));
+    let citations = 0;
+    let links = 0;
+    for (const document of docs) {
+      const [documentCitations, documentLinks] = updateReferences(
+        index,
+        conn,
+        document,
+        String(document.content ?? ""),
+      );
+      citations += documentCitations;
+      links += documentLinks;
+    }
+    // Stamped in the same transaction as every edge: this marker means the complete graph was
+    // committed, never merely that a rebuild was attempted.
+    conn.run(
+      "INSERT INTO index_build (key, value) VALUES ('refs-built', '1') ON CONFLICT(key) DO UPDATE SET value = '1'",
     );
-    citations += documentCitations;
-    links += documentLinks;
+    conn.run("COMMIT");
+    transactionStarted = false;
+    return { citations, links, pages: docs.length, transcriptsRegistered };
+  } catch (error) {
+    if (transactionStarted) {
+      try {
+        conn.run("ROLLBACK");
+      } catch {
+        // Preserve the rebuild error. SQLite also rolls back an open transaction on close.
+      }
+    }
+    throw error;
+  } finally {
+    conn.close();
   }
-  conn.close();
-  return { citations, links, pages: docs.length, transcriptsRegistered };
 }

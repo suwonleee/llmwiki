@@ -219,3 +219,53 @@ describe("HQE-lite accumulate", () => {
     expect(merged["새용어"]).toBe(1);
   });
 });
+
+describe("josa strip + identity witness (2026-08-04 retrieval quality pass)", () => {
+  let root: string;
+  let wiki: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "llmwiki-idw-"));
+    wiki = join(root, "docs", "wiki");
+    mkdirSync(join(wiki, "5_topic"), { recursive: true });
+    mkdirSync(join(wiki, "3_decision"), { recursive: true });
+    // Hub page: the title names the topic; the BODY never repeats it unspaced.
+    writeFileSync(
+      join(wiki, "5_topic", "문서-허브.md"),
+      "---\ntitle: Q-INDEX 문서 허브 — 검색 품질 장치\ndescription: 문서 검색의 정체성 게이트\n---\n" +
+        "검색 후보의 스코프 감사와 본문 검증을 다룬다. 인용 대조는 결정적이다. ".repeat(10),
+    );
+    // Mention page: body repeats the topic words; must not beat the hub via filler terms.
+    writeFileSync(
+      join(wiki, "3_decision", "토큰회전-결정.md"),
+      "---\ntitle: 회의 토큰회전 운영 결정\ndescription: 만료 토큰 교체 기준\n---\n" +
+        "토큰회전 비용과 운영 위험을 비교했다. 배치 산출물은 교체 기준을 유지한다. ".repeat(10),
+    );
+    new WikiIndex(root).indexAll();
+  });
+
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  test("stripJosa: one nominal particle layer, original kept, verbs untouched", () => {
+    const terms = extractTerms("배포안을 검토하자");
+    expect(terms).toContain("배포안을"); // original survives — exact matches never lost
+    expect(terms).toContain("배포안"); // stripped variant added
+    expect(terms).not.toContain("검토하"); // 하자 is a verb ending, not a josa — untouched
+  });
+
+  test("josa-carrying prompt reaches the page that spells the bare noun", () => {
+    const out = buildTurnContext(root, "토큰회전을 미루면 어떻게 되지");
+    expect(out).toContain("토큰회전-결정.md");
+  });
+
+  test("spacing variant reaches the hub through the despaced identity", () => {
+    // Prompt says 문서허브 (unspaced); title says 문서 허브; body never says either unspaced.
+    const out = buildTurnContext(root, "문서허브를 손보자");
+    expect(out).toContain("문서-허브.md");
+  });
+
+  test("a 2-char identity word alone cannot clear the gate (filler stays silent)", () => {
+    const out = buildTurnContext(root, "내일 회의 몇 시더라");
+    expect(out).toBe(""); // 회의(2자) sits in a title, but identity promotion needs ≥3 dense chars
+  });
+});

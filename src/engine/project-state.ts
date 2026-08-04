@@ -50,7 +50,7 @@ import {
   writeSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { isAbsolute, join, relative as pathRelative, sep } from "node:path";
 
 import { MARKER_DIR, worktreeGitDir } from "./enrollment.ts";
 import { canonicalRoot, ensureRepoDir, readRepoFile, writeRepoFile } from "./repo-write.ts";
@@ -174,6 +174,50 @@ function mkdirPrivate(dir: string): void {
       /* best effort on exotic filesystems */
     }
   }
+}
+
+function isRealDirectory(dir: string): boolean {
+  try {
+    const stat = lstatSync(dir);
+    return stat.isDirectory() && !stat.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function ensureRealPrivateDirectory(dir: string): void {
+  try {
+    const stat = lstatSync(dir);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new ProjectStateError(`refusing to use a symlinked project-state directory: ${dir}`);
+    }
+  } catch (error) {
+    if (error instanceof ProjectStateError) throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    mkdirSync(dir, { mode: 0o700 });
+    if (!isRealDirectory(dir)) {
+      throw new ProjectStateError(`refusing to use a symlinked project-state directory: ${dir}`);
+    }
+  }
+  if (POSIX) chmodSync(dir, 0o700);
+}
+
+function centralDescendants(dir: string, target: string): string[] {
+  const nested = pathRelative(dir, target);
+  if (nested === "") return [];
+  if (nested === ".." || nested.startsWith(`..${sep}`) || isAbsolute(nested)) {
+    throw new ProjectStateError(`project-state path escapes its project directory: ${target}`);
+  }
+  const descendants: string[] = [];
+  let current = dir;
+  for (const segment of nested.split(sep)) {
+    if (segment === "" || segment === "." || segment === "..") {
+      throw new ProjectStateError(`invalid project-state path component: ${target}`);
+    }
+    current = join(current, segment);
+    descendants.push(current);
+  }
+  return descendants;
 }
 
 function isRegularFile(path: string): boolean {
@@ -360,12 +404,14 @@ export function ensureProjectStateDir(root: string, ...relative: string[]): stri
   // The ownership contract first, ALWAYS: creating projects/ in a directory that has no marker
   // yet turns the state root into something the next `ensureOwnedStateRoot` refuses to adopt —
   // a foreign entry of our own making, and capture stops with it.
-  ensureOwnedStateRoot(effectiveStateRoot());
-  mkdirPrivate(location.dir);
+  const stateRoot = ensureOwnedStateRoot(effectiveStateRoot());
+  const projects = join(stateRoot, PROJECTS_DIR_NAME);
+  ensureRealPrivateDirectory(projects);
+  ensureRealPrivateDirectory(location.dir);
   migrateLegacyState(root, location.dir);
   writeMeta(location.dir, canonicalRoot(root));
   const target = relative.length > 0 ? join(location.dir, ...relative) : location.dir;
-  mkdirPrivate(target);
+  for (const descendant of centralDescendants(location.dir, target)) ensureRealPrivateDirectory(descendant);
   return target;
 }
 
@@ -409,6 +455,33 @@ export function projectStateExists(root: string, ...relative: string[]): boolean
   try {
     lstatSync(projectStatePath(root, ...relative));
     return true;
+  } catch {
+    return false;
+  }
+}
+
+/** True only for a real non-symlink project-state file; read-only SQLite must not follow links. */
+export function projectStateIsRegularFile(root: string, ...relative: string[]): boolean {
+  try {
+    const location = resolveProjectStateLocation(root);
+    const dir = location?.dir ?? join(canonicalRoot(root), LEGACY_STATE_DIR);
+
+    if (location?.central) {
+      // lstatting only the leaf follows a planted `projects/<id>` symlink. Check every path owned
+      // by the central-state layout before SQLite receives the filename; even a readonly open may
+      // update an external `-shm` journal. The parent of the configured state root is outside this
+      // module's ownership boundary and may legitimately contain platform symlinks (for example
+      // macOS /var -> /private/var), so validation starts at the root itself.
+      const target = relative.length > 0 ? join(dir, ...relative) : dir;
+      const descendants = centralDescendants(dir, target);
+      const directories = [effectiveStateRoot(), projectsRoot(), dir, ...descendants.slice(0, -1)];
+      for (const directory of directories) {
+        if (!isRealDirectory(directory)) return false;
+      }
+    }
+
+    const stat = lstatSync(relative.length > 0 ? join(dir, ...relative) : dir);
+    return stat.isFile() && !stat.isSymbolicLink();
   } catch {
     return false;
   }

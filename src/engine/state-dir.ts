@@ -22,7 +22,9 @@ import {
   chmodSync,
   closeSync,
   constants as fsConstants,
+  fchmodSync,
   fstatSync,
+  ftruncateSync,
   fsyncSync,
   lstatSync,
   mkdirSync,
@@ -72,6 +74,7 @@ export const OWNED_FILES = [
   "capture.db-wal",
   "capture.db-shm",
   "daemon.log",
+  "daemon.log.1",
   "update-check.json",
   "harness-paths.json", // verified harness data locations (engine/harness-locate.ts)
 ] as const;
@@ -86,6 +89,10 @@ export const OWNED_FILES = [
 const LEGACY_OWNED_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*\.log$/;
 
 const POSIX = process.platform !== "win32";
+// A copy-truncate rotation can be killed after its private O_EXCL temp is durable but before the
+// atomic rename. The strict name is part of the ownership contract: these files are tightened,
+// recognized after a moved clone, and removed by --purge-data, while symlinks are never followed.
+const ROTATION_TEMP_RE = /^\.daemon\.log\.1\.tmp-\d+-[a-z0-9]+$/;
 let stateRootOverride: string | null = null;
 /** "" means the variable was unset before the first override; undefined means no override is active. */
 let savedStateDirEnv: string | undefined;
@@ -455,6 +462,10 @@ function unownedEntries(root: string, opts: { strictLogs?: boolean } = {}): stri
   const foreign: string[] = [];
   for (const name of entries) {
     const path = join(root, name);
+    if (ROTATION_TEMP_RE.test(name)) {
+      if (!isRegular(path)) foreign.push(name);
+      continue;
+    }
     if (name === EXPORT_DIR_NAME) {
       if (!looksLikeOurExportDir(path)) foreign.push(name);
       continue;
@@ -511,6 +522,11 @@ function enforcePrivateModes(root: string): void {
     entries = [];
   }
   for (const name of entries) {
+    if (ROTATION_TEMP_RE.test(name)) {
+      const path = join(root, name);
+      if (isRegular(path)) tighten(path, 0o600);
+      continue;
+    }
     if (!LEGACY_OWNED_FILE_RE.test(name) || (OWNED_FILES as readonly string[]).includes(name)) continue;
     const path = join(root, name);
     if (isRegular(path)) tighten(path, 0o600);
@@ -690,6 +706,86 @@ export function bootstrapStateRoot(dir = effectiveStateRoot()): string {
   }
   reassertPrivateModes(root);
   return root;
+}
+
+/**
+ * Copy-truncate daemon.log without ever following a planted symlink.
+ *
+ * The service shell keeps daemon.log open with O_APPEND, so the live path cannot be renamed: that
+ * would leave the service writing into the renamed inode forever. Instead we open the live file
+ * once, validate that descriptor, copy from that descriptor into an exclusive private temporary
+ * file, atomically replace only the daemon.log.1 directory entry, and truncate the same validated
+ * live descriptor. No path-based copy, chmod, or truncate is safe enough for this operation.
+ *
+ * Returns the number of bytes rotated, or null when the live log is absent or not oversized.
+ */
+export function rotateDaemonLog(root: string, thresholdBytes: number): number | null {
+  if (!isOwnedStateDir(root)) {
+    throw new StateRootError(`refusing to rotate a daemon log outside an owned state root: ${root}`);
+  }
+  const logPath = join(root, "daemon.log");
+  const rotatedPath = join(root, "daemon.log.1");
+  const before = lstatOrNull(logPath);
+  if (before === null) return null;
+  if (!before.isFile() || before.isSymbolicLink()) {
+    throw new StateRootError(`llmwiki daemon log path is not a regular file: ${logPath}`);
+  }
+
+  const liveFd = openSync(logPath, fsConstants.O_RDWR | (POSIX ? fsConstants.O_NOFOLLOW : 0));
+  let tempPath: string | null = null;
+  try {
+    const live = fstatSync(liveFd);
+    if (!live.isFile() || live.dev !== before.dev || live.ino !== before.ino) {
+      throw new StateRootError(`llmwiki daemon log changed while opening it: ${logPath}`);
+    }
+    if (live.size <= thresholdBytes) return null;
+
+    tempPath = join(root, `.daemon.log.1.tmp-${process.pid}-${Date.now().toString(36)}`);
+    const tempFd = openSync(
+      tempPath,
+      fsConstants.O_WRONLY |
+        fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        (POSIX ? fsConstants.O_NOFOLLOW : 0),
+      0o600,
+    );
+    try {
+      if (POSIX) fchmodSync(tempFd, 0o600);
+      const buffer = Buffer.allocUnsafe(64 * 1024);
+      let position = 0;
+      while (position < live.size) {
+        const count = readSync(liveFd, buffer, 0, Math.min(buffer.length, live.size - position), position);
+        if (count === 0) throw new Error(`daemon log became shorter while rotating: ${logPath}`);
+        let written = 0;
+        while (written < count) {
+          const n = writeSync(tempFd, buffer, written, count - written);
+          if (n === 0) throw new Error(`could not write rotated daemon log: ${rotatedPath}`);
+          written += n;
+        }
+        position += count;
+      }
+      fsyncSync(tempFd);
+    } finally {
+      closeSync(tempFd);
+    }
+
+    // rename replaces a planted daemon.log.1 symlink as a directory entry; it never opens or
+    // mutates that link's target. Only after the durable copy is installed do we truncate the
+    // already-open, already-validated live inode used by the service's append descriptor.
+    renameSync(tempPath, rotatedPath);
+    tempPath = null;
+    ftruncateSync(liveFd, 0);
+    return live.size;
+  } finally {
+    closeSync(liveFd);
+    if (tempPath !== null) {
+      try {
+        unlinkSync(tempPath);
+      } catch {
+        /* best-effort cleanup of our exclusive temporary file */
+      }
+    }
+  }
 }
 
 // ---- retention ------------------------------------------------------------------------------
@@ -939,6 +1035,15 @@ export function purgeOwnedState(dir: string): PurgeResult {
     }
   }
   for (const name of OWNED_FILES) {
+    const path = join(root, name);
+    if (!isRegular(path)) continue;
+    unlinkSync(path);
+    removed.push(name);
+  }
+  // A crash can strand the exclusive private copy used by rotateDaemonLog before rename. Treat
+  // only the exact engine-generated shape as owned, and only when it is a regular non-symlink.
+  for (const name of readdirSync(root)) {
+    if (!ROTATION_TEMP_RE.test(name)) continue;
     const path = join(root, name);
     if (!isRegular(path)) continue;
     unlinkSync(path);

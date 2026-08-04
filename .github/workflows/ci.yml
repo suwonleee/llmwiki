@@ -26,7 +26,7 @@ jobs:
           # newer Bun (in-process zstd is the one that already did) fails here rather than in the
           # field, where it presents as "Codex sessions are missing" and nothing else.
           - os: ubuntu-latest
-            bun: "1.2.0"
+            bun: "1.1.45"
     steps:
       - uses: actions/checkout@v4
 
@@ -90,6 +90,58 @@ jobs:
 
       - name: Frontmatter/marker regression
         run: bun test tests/harness-page-frontmatter.test.ts
+
+      # The wiring checks above prove the engine INSTALLS here. They say nothing about whether it
+      # RUNS — and the gap is not theoretical: on 2026-08-04 the incremental indexer crashed on
+      # every bun 1.2.x install ("undefined is not an object") because fstatSync fills `mtimeNs`
+      # on 1.3 and not on 1.2, while every macOS run passed. A Linux floor job caught that one.
+      # Windows has its own runtime surface (NTFS timestamps, native paths, no bash on PATH) and
+      # no job here would have noticed the same class of break, because the full suite cannot run
+      # on this platform. So: the smallest end-to-end that exercises the core loop for real.
+      - name: The engine's core loop runs here (init · index · search · turn-context)
+        shell: bash
+        run: |
+          set -eu
+          HOME="$(cygpath -m "$(mktemp -d)")"
+          export HOME
+          CLONE="$(pwd)"
+          REPO="$HOME/probe-repo"
+          mkdir -p "$REPO"
+          cd "$REPO"
+          git init -q
+          git config user.email ci@example.com
+          git config user.name ci
+          mkdir -p docs/wiki/5_topic
+          {
+            printf -- '---\ntitle: Windows probe page\ndescription: engine core smoke\ndate: 2026-01-01\ntags: [probe, topic]\nstatus: ready\n---\n\n'
+            for _ in 1 2 3 4 5 6 7 8 9 10; do printf 'windows probe body sentence for the chunker floor. '; done
+            printf '\n'
+          } > docs/wiki/5_topic/probe.md
+          git add -A && git commit -qm "docs: probe"
+
+          bun "$CLONE/src/cli.ts" init "$REPO"
+          bun "$CLONE/src/cli.ts" index "$REPO" | tee /tmp/idx1.txt
+          # An unchanged pass must report nothing new — this is the incremental contract.
+          bun "$CLONE/src/cli.ts" index "$REPO" | tee /tmp/idx2.txt
+          grep -q '0 new, 0 updated' /tmp/idx2.txt || {
+            echo "::error::a no-op index did not report 0 new / 0 updated on this platform"
+            exit 1
+          }
+          # …and a real edit must still be SEEN. The stat fast-path skips unread files by
+          # (size, mtime, name); a platform whose timestamps do not move would silently stop
+          # indexing edits, which looks exactly like a healthy wiki until someone searches.
+          printf 'an edit that must be noticed on this platform.\n' >> docs/wiki/5_topic/probe.md
+          bun "$CLONE/src/cli.ts" index "$REPO" | tee /tmp/idx3.txt
+          grep -q '1 updated' /tmp/idx3.txt || {
+            echo "::error::an edited page was not re-indexed — the stat fast-path is unsafe on this platform"
+            exit 1
+          }
+          bun "$CLONE/src/cli.ts" search "$REPO" "windows probe" | grep -q 'probe.md' || {
+            echo "::error::search found nothing for a page it just indexed"
+            exit 1
+          }
+          bun "$CLONE/src/cli.ts" turn-context "$REPO" --prompt "windows probe page" >/dev/null
+          echo "engine core loop ok"
 
       - name: The pages this engine generates are loadable here
         shell: bash

@@ -1,11 +1,11 @@
 // WikiIndex indexing / search / graph staleness.
 // Builds a throwaway workspace; index DB lives in <workspace>/.llmwiki/index.db.
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, utimesSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
-import { WikiIndex, ftsSanitize, ftsRelax } from "../src/engine/db.ts";
+import { WikiIndex, ftsSanitize, ftsRelax, ftsRelaxUnspaced } from "../src/engine/db.ts";
 import { updateReferences } from "../src/engine/refs.ts";
 
 describe("WikiIndex", () => {
@@ -83,6 +83,63 @@ describe("WikiIndex", () => {
     const [neu, updated] = idx.indexAll(conn);
     expect(neu).toBe(0);
     expect(updated).toBe(1);
+  });
+
+  test("document changes invalidate refs-built while a no-op pass preserves it", () => {
+    idx.indexAll(conn);
+    conn.run("INSERT INTO index_build (key, value) VALUES ('refs-built', '1')");
+    idx.indexAll(conn);
+    expect(conn.query("SELECT value FROM index_build WHERE key='refs-built'").get()).toEqual({ value: "1" });
+
+    writeFileSync(join(wiki, "b.md"), "# Beta\n\nchanged reference source ".repeat(30));
+    expect(idx.indexAll(conn)[1]).toBe(1);
+    expect(conn.query("SELECT value FROM index_build WHERE key='refs-built'").get()).toBeNull();
+  });
+
+  test("a graph-input update invalidates refs-built before indexAll can finish", () => {
+    idx.indexAll(conn);
+    conn.run("INSERT INTO index_build (key, value) VALUES ('refs-built', '1')");
+    const relative = "docs/wiki/b.md";
+    writeFileSync(join(root, relative), "# Beta\n\ninterrupted-pass replacement ".repeat(30));
+
+    // indexFile is one committed mutation inside the larger walk. The marker must already be
+    // absent at this point; deleting it only at indexAll's end left a process-exit crash window.
+    expect(idx.indexFile(conn, join(root, relative), relative, false)).toBe("updated");
+    expect(conn.query("SELECT value FROM index_build WHERE key='refs-built'").get()).toBeNull();
+
+    const added = "docs/wiki/added.md";
+    writeFileSync(join(root, added), "# Added\n\nnew graph input ".repeat(30));
+    conn.run("INSERT INTO index_build (key, value) VALUES ('refs-built', '1')");
+    expect(idx.indexFile(conn, join(root, added), added, false)).toBe("new");
+    expect(conn.query("SELECT value FROM index_build WHERE key='refs-built'").get()).toBeNull();
+
+    conn.run("INSERT INTO index_build (key, value) VALUES ('refs-built', '1')");
+    rmSync(join(root, added));
+    expect(idx.indexAll(conn)[2]).toBe(1);
+    expect(conn.query("SELECT value FROM index_build WHERE key='refs-built'").get()).toBeNull();
+
+    conn.run("INSERT INTO index_build (key, value) VALUES ('refs-built', '1')");
+    idx.registerTranscript(join(root, "transcript-fixture.jsonl"), "session-fixture");
+    expect(conn.query("SELECT value FROM index_build WHERE key='refs-built'").get()).toBeNull();
+  });
+
+  test("every document update invalidates the graph certificate as graph inputs evolve", () => {
+    idx.indexAll(conn);
+    const marker = () => conn.run("INSERT INTO index_build (key, value) VALUES ('refs-built', '1')");
+    const certificate = () => conn.query("SELECT value FROM index_build WHERE key='refs-built'").get();
+    const relative = "docs/wiki/a.md";
+
+    marker();
+    conn.run("UPDATE documents SET path='/moved/' WHERE relative_path=?", [relative]);
+    expect(certificate()).toBeNull();
+
+    marker();
+    conn.run("UPDATE documents SET title='Renamed target' WHERE relative_path=?", [relative]);
+    expect(certificate()).toBeNull();
+
+    marker();
+    conn.run("UPDATE documents SET status='failed' WHERE relative_path=?", [relative]);
+    expect(certificate()).toBeNull();
   });
 
   test("indexes derived frontmatter metadata without changing operational status", () => {
@@ -196,7 +253,13 @@ describe("WikiIndex", () => {
   });
 
   test("adds derived metadata columns to a legacy index before backfilling its rows", () => {
-    // Given: an index created before the derived metadata columns existed.
+    // Given: an index created before the derived metadata columns existed. Such an index predates
+    // pages_fts too — and its triggers name `description`, which would pin the very column this
+    // simulation is about to drop.
+    conn.exec("DROP TRIGGER IF EXISTS pages_fts_insert");
+    conn.exec("DROP TRIGGER IF EXISTS pages_fts_delete");
+    conn.exec("DROP TRIGGER IF EXISTS pages_fts_update");
+    conn.exec("DROP TABLE IF EXISTS pages_fts");
     conn.exec("ALTER TABLE documents DROP COLUMN description");
     conn.exec("ALTER TABLE documents DROP COLUMN knowledge_status");
     conn.exec("ALTER TABLE documents DROP COLUMN knowledge_tier");
@@ -243,6 +306,35 @@ describe("WikiIndex", () => {
       knowledge_status: "superseded",
       knowledge_tier: "protected",
     });
+  });
+
+  test("repairs an interrupted pages_fts creation and rebuilds existing documents atomically", () => {
+    idx.indexAll(conn);
+    conn.exec("DROP TRIGGER pages_fts_insert");
+    conn.exec("DROP TRIGGER pages_fts_delete");
+    conn.exec("DROP TRIGGER pages_fts_update");
+    conn.exec("DROP TABLE pages_fts");
+    // Residue from the old non-transactional path: the table exists, but its triggers, first
+    // rebuild, and durable completion marker do not.
+    conn.exec(
+      "CREATE VIRTUAL TABLE pages_fts USING fts5(" +
+        "title, description, filename, content='documents', content_rowid='rowid', tokenize='trigram')",
+    );
+    conn.run("DELETE FROM index_build WHERE key='pages-fts'");
+    conn.close();
+
+    conn = idx.connect();
+    const marker = conn.query("SELECT value FROM index_build WHERE key='pages-fts'").get() as { value: string };
+    const triggers = conn
+      .query("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'pages_fts_%'")
+      .all() as { name: string }[];
+    expect(marker.value).toBe("1");
+    expect(triggers.map((row) => row.name).sort()).toEqual([
+      "pages_fts_delete",
+      "pages_fts_insert",
+      "pages_fts_update",
+    ]);
+    expect((conn.query(`SELECT count(*) AS n FROM pages_fts WHERE pages_fts MATCH '"a.md"'`).get() as { n: number }).n).toBe(1);
   });
 
   test("links_to edge and staleness propagation", () => {
@@ -357,6 +449,145 @@ describe("search relaxation + superseded down-rank", () => {
     const rows = idx.search(conn, "캡처데몬 존재하지않는단어");
     expect(rows.length).toBeGreaterThan(0);
     expect(rows[0]!.relative_path).toBe("docs/wiki/daemon.md");
+    conn.close();
+  });
+
+  test("stat fast-path: a recent full-hash audit still skips a stat-identical file", () => {
+    // Same size, same nanosecond mtime, same basename → the bytes must not be read. Proven by
+    // swapping the bytes ON DISK while pinning stat: if the engine read the file, it would see
+    // the swap; the fast path means it must not.
+    const f = join(root, "docs", "wiki", "pinned.md");
+    const t0 = new Date("2026-01-02T03:04:05.000Z");
+    writeFileSync(f, "# P\n\noriginal-alpha-content ".repeat(20));
+    utimesSync(f, t0, t0);
+    const conn = idx.connect();
+    idx.indexAll(conn); // arming pass (full hash) — sets the stat-skip marker
+    expect(
+      (conn.query("SELECT value FROM index_build WHERE key='stat-skip'").get() as { value: string }).value,
+    ).toBe(WikiIndex.STAT_SKIP_VERSION);
+    expect(
+      Number((conn.query("SELECT value FROM index_build WHERE key='stat-full-hash-at'").get() as { value: string }).value),
+    ).toBeGreaterThan(0);
+    // Swap bytes, keep size and mtime identical.
+    writeFileSync(f, "# P\n\nswapped!-omega-content ".repeat(20));
+    utimesSync(f, t0, t0);
+    expect(idx.indexAll(conn)).toEqual([0, 0, 0]); // stat-identical → skipped, unread
+    // A real edit (mtime moves) is still seen — the fast path is stat-gated, not blind.
+    writeFileSync(f, "# P\n\ntruly-edited-content ".repeat(20));
+    expect(idx.indexAll(conn)[1]).toBe(1);
+    conn.close();
+  });
+
+  test("stat fast-path: a stale audit detects a same-size edit with its old mtime preserved", () => {
+    const f = join(root, "docs", "wiki", "audit.md");
+    const t0 = new Date("2026-01-02T03:04:05.000Z");
+    writeFileSync(f, "# A\n\noriginal-alpha-content ".repeat(20));
+    utimesSync(f, t0, t0);
+    const conn = idx.connect();
+    idx.indexAll(conn);
+    writeFileSync(f, "# A\n\nswapped!-omega-content ".repeat(20));
+    utimesSync(f, t0, t0);
+    conn.run("UPDATE index_build SET value='0' WHERE key='stat-full-hash-at'");
+
+    expect(idx.indexAll(conn)[1]).toBe(1);
+    expect(idx.search(conn, "swapped omega").some((row) => row.relative_path === "docs/wiki/audit.md")).toBe(true);
+    expect(
+      Number((conn.query("SELECT value FROM index_build WHERE key='stat-full-hash-at'").get() as { value: string }).value),
+    ).toBeGreaterThan(0);
+    conn.close();
+  });
+
+  test("stat fast-path: a just-written file is never trusted on stat alone (racily clean)", () => {
+    // Coarse-granularity filesystems (FAT/exFAT 2s, SMB/older NFS 1s) cannot resolve two writes
+    // inside one tick, so a same-size edit there is stat-identical to no edit. The guard is not
+    // "which filesystem is this" but "is this timestamp old enough to be decisive" — a file
+    // written moments ago is hashed no matter what stat says.
+    const f = join(root, "docs", "wiki", "fresh.md");
+    writeFileSync(f, "# F\n\nfirst-content-same-size ".repeat(20));
+    const conn = idx.connect();
+    idx.indexAll(conn); // arming pass; the file's mtime is "now"
+    // Same size, and pin the mtime to what it already is — the coarse-FS scenario, exactly.
+    const st = statSync(f, { bigint: true });
+    writeFileSync(f, "# F\n\nsecond-content-samesize ".repeat(20));
+    utimesSync(f, new Date(Number(st.mtimeMs)), new Date(Number(st.mtimeMs)));
+    expect(idx.indexAll(conn)[1]).toBe(1); // hashed anyway → the edit is seen
+    conn.close();
+  });
+
+  test("stat fast-path: an absent/zero mtime is never decisive", () => {
+    const f = join(root, "docs", "wiki", "zero.md");
+    writeFileSync(f, "# Z\n\nzero-mtime-content ".repeat(20));
+    const conn = idx.connect();
+    idx.indexAll(conn);
+    const epoch = new Date(0); // mounts that report no mtime land here
+    writeFileSync(f, "# Z\n\nchanged-samesize!! ".repeat(20));
+    utimesSync(f, epoch, epoch);
+    expect(idx.indexAll(conn)[1]).toBe(1); // 0 fails the decisiveness test → hashed
+    conn.close();
+  });
+
+  test("stat fast-path: a touched file hashes once, then skips (mtime heal)", () => {
+    const f = join(root, "docs", "wiki", "touched.md");
+    writeFileSync(f, "# T\n\nstable-content ".repeat(20));
+    const conn = idx.connect();
+    idx.indexAll(conn); // arming pass
+    const t1 = new Date("2026-03-04T05:06:07.000Z");
+    utimesSync(f, t1, t1); // touch: same bytes, new mtime
+    expect(idx.indexAll(conn)).toEqual([0, 0, 0]); // hash says unchanged…
+    const row = conn
+      .query("SELECT CAST(mtime_ns AS TEXT) AS t FROM documents WHERE relative_path='docs/wiki/touched.md'")
+      .get() as { t: string };
+    expect(row.t).toBe((BigInt(t1.getTime()) * 1000000n).toString()); // …and stat was healed for the next pass
+    conn.close();
+  });
+
+  test("ftsRelaxUnspaced: unspaced clauses decompose to windows + embedded identifiers", () => {
+    // A JA/ZH clause is ONE whitespace token, so ftsRelax cannot help; this stage windows it.
+    const ja = ftsRelaxUnspaced("watch.tsを再起動する手順");
+    expect(ja).toContain('"watch.ts"'); // the embedded identifier survives whole
+    expect(ja).toContain(" OR "); // windows joined for bm25 to rank
+    expect(ftsRelaxUnspaced("캡처 데몬 재시작")).toBeNull(); // Hangul is spaced — stage 1 territory
+    expect(ftsRelaxUnspaced("alpha bravo")).toBeNull(); // no unspaced run at all
+    expect(ftsRelaxUnspaced('"完全一致"を探す')).toBeNull(); // quoted → exact intent, same gate
+    expect(ftsRelaxUnspaced("索引更新失敗 AND watch.ts")).toBeNull(); // explicit boolean stays exact
+    expect(ftsRelaxUnspaced("索引更新失敗 16")).toBeNull(); // numeric identifier stays exact
+  });
+
+  test("raw search leaves identity candidate provenance to its caller", () => {
+    writeFileSync(
+      join(root, "docs", "wiki", "identity.md"),
+      "---\ntitle: Alpha Beta\ndescription: alpha beta identity\n---\n\n" + "alpha beta body ".repeat(20),
+    );
+    const conn = idx.connect();
+    idx.indexAll(conn);
+    const body = idx.search(conn, '"alpha" OR "beta"', 20, "wiki", true);
+    expect(body.length).toBeGreaterThan(0);
+    expect(body.every((row) => row.candidate_kind === "body")).toBe(true);
+    const identity = idx.identityCandidates(conn, ["alpha", "beta"]);
+    expect(identity.length).toBeGreaterThan(0);
+    expect(identity.every((row) => row.candidate_kind === "identity")).toBe(true);
+    conn.close();
+  });
+
+  test("unspaced natural-language query reaches the page (JA+EN, ZH+EN)", () => {
+    // Measured 2026-08-04: these four query shapes returned 0/4 while turn-context resolved all
+    // of them — the sanitize path quoted the whole clause as a verbatim phrase.
+    writeFileSync(
+      join(root, "docs", "wiki", "daemon-ja.md"),
+      "# T\n\nキャプチャデーモン(watch.ts)は launchd で常駐する。失敗したら再起動する。".repeat(10),
+    );
+    writeFileSync(
+      join(root, "docs", "wiki", "rebuild-zh.md"),
+      "# T\n\n索引更新失败时，先检查 index.db 然后运行 reindex 重建。".repeat(10),
+    );
+    const conn = idx.connect();
+    idx.indexAll(conn);
+    expect(idx.search(conn, "キャプチャデーモンが動かないので再起動したい")[0]?.relative_path).toBe(
+      "docs/wiki/daemon-ja.md",
+    );
+    expect(idx.search(conn, "watch.tsを再起動する手順")[0]?.relative_path).toBe("docs/wiki/daemon-ja.md");
+    expect(idx.search(conn, "索引更新失败了怎么办")[0]?.relative_path).toBe("docs/wiki/rebuild-zh.md");
+    expect(idx.search(conn, "index.db重建流程")[0]?.relative_path).toBe("docs/wiki/rebuild-zh.md");
     conn.close();
   });
 

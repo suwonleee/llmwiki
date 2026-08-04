@@ -2,7 +2,7 @@
 // leave the pending set but stay on the books; everything that can still condense — or is merely
 // too recently gone — stays pending.
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as capture from "../src/engine/capture.ts";
@@ -23,14 +23,14 @@ describe("capture prune", () => {
     writeFileSync(t, "x\n");
     capture.enqueue(t, "s1", "/repo/a", 1);
 
-    expect(capture.prune(0)).toEqual({ removed: 0, kept: 1 });
+    expect(capture.prune(0)).toEqual({ removed: 0, kept: 1, skippedEphemeral: 0 });
     expect(capture.stats()["pending"]).toBe(1);
   });
 
   test("a dead pending row inside the age guard is kept", () => {
     capture.enqueue(join(dir, "gone.jsonl"), "s1", "/repo/a", 1);
 
-    expect(capture.prune(30)).toEqual({ removed: 0, kept: 1 });
+    expect(capture.prune(30)).toEqual({ removed: 0, kept: 1, skippedEphemeral: 0 });
     expect(capture.stats()["pending"]).toBe(1);
   });
 
@@ -40,7 +40,7 @@ describe("capture prune", () => {
     // usually one the human chose not to keep, and the ledger is how that stays auditable later.
     capture.enqueue(join(dir, "gone.jsonl"), "s1", "/repo/a", 1);
 
-    expect(capture.prune(0)).toEqual({ removed: 1, kept: 0 });
+    expect(capture.prune(0)).toEqual({ removed: 1, kept: 0, skippedEphemeral: 0 });
 
     const stats = capture.stats();
     expect(stats["pending"]).toBeUndefined(); // it will never be condensed…
@@ -52,7 +52,7 @@ describe("capture prune", () => {
     capture.enqueue(t, "s1", "/repo/a", 1);
     writeFileSync(`${t}.zst`, "z");
 
-    expect(capture.prune(0)).toEqual({ removed: 0, kept: 1 });
+    expect(capture.prune(0)).toEqual({ removed: 0, kept: 1, skippedEphemeral: 0 });
   });
 
   test("distilled rows are the ledger — never pruned, file or no file", () => {
@@ -60,7 +60,57 @@ describe("capture prune", () => {
     capture.enqueue(t, "s1", "/repo/a", 1);
     capture.mark(t, 100, "distilled");
 
-    expect(capture.prune(0)).toEqual({ removed: 0, kept: 0 });
+    expect(capture.prune(0)).toEqual({ removed: 0, kept: 0, skippedEphemeral: 0 });
     expect(capture.stats()["distilled"]).toBe(1);
+  });
+
+  // The ephemeral-repo rule: a worktree under the OS temp root that no longer exists is gone by
+  // design (A/B fixtures, scratchpad clones), so its rows can never condense — measured at 44% of
+  // the real pending queue before this rule existed. `skipped`, not `lost`: the transcript may
+  // still be alive; what is gone is the wiki the session would have condensed into.
+
+  test("a deleted temp-root repo is skipped immediately — live transcript, no age guard", () => {
+    const t = join(dir, "alive.jsonl");
+    writeFileSync(t, "x\n");
+    capture.enqueue(t, "s1", join(dir, "deleted-fixture-repo"), 1); // dir is under tmpdir(); repo never created
+
+    expect(capture.prune(30)).toEqual({ removed: 0, kept: 0, skippedEphemeral: 1 });
+    const stats = capture.stats();
+    expect(stats["pending"]).toBeUndefined();
+    expect(stats["skipped"]).toBe(1); // on the books, never condensed
+  });
+
+  test("a temp-root repo that still exists is a live experiment — kept", () => {
+    const repo = join(dir, "running-fixture-repo");
+    mkdirSync(repo);
+    const t = join(dir, "alive.jsonl");
+    writeFileSync(t, "x\n");
+    capture.enqueue(t, "s1", repo, 1);
+
+    expect(capture.prune(0)).toEqual({ removed: 0, kept: 1, skippedEphemeral: 0 });
+  });
+
+  test("a missing repo OUTSIDE the temp root is never judged — unmounted volumes look identical", () => {
+    const t = join(dir, "alive.jsonl");
+    writeFileSync(t, "x\n");
+    capture.enqueue(t, "s1", "/Volumes/detached-disk/project", 1);
+
+    expect(capture.prune(0)).toEqual({ removed: 0, kept: 1, skippedEphemeral: 0 });
+    expect(capture.stats()["pending"]).toBe(1);
+  });
+
+  test("macOS-only temp aliases are not generalized to other platforms", () => {
+    const t = join(dir, "alive.jsonl");
+    writeFileSync(t, "x\n");
+    capture.enqueue(t, "s1", "/var/folders/llmwiki-deleted-fixture/repo", 1);
+
+    const result = capture.prune(30);
+    if (process.platform === "darwin") {
+      expect(result).toEqual({ removed: 0, kept: 0, skippedEphemeral: 1 });
+      expect(capture.stats()["skipped"]).toBe(1);
+    } else {
+      expect(result).toEqual({ removed: 0, kept: 1, skippedEphemeral: 0 });
+      expect(capture.stats()["pending"]).toBe(1);
+    }
   });
 });

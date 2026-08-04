@@ -1,7 +1,12 @@
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { basename, join, relative, resolve, sep } from "node:path";
-import { projectStateExists, projectStatePath, quarantineProjectState } from "./project-state.ts";
+import {
+  projectStateExists,
+  projectStateIsRegularFile,
+  projectStatePath,
+  quarantineProjectState,
+} from "./project-state.ts";
 import * as capture from "./capture.ts";
 import { COLD_INDEX_RELATIVE_PATH } from "./cold-index.ts";
 import { getConfig, type WikiConfig } from "./config.ts";
@@ -136,7 +141,23 @@ function inspectIndex(root: string, cfg: WikiConfig): IndexInspection {
 
   let db: Database | null = null;
   try {
-    db = new Database(projectStatePath(root, "index.db"), { readonly: true });
+    const databasePath = projectStatePath(root, "index.db");
+    if (!projectStateIsRegularFile(root, "index.db")) {
+      throw new Error("refusing to inspect a symlinked index database");
+    }
+    const relativeDatabasePath = relative(canonicalRoot(root), databasePath);
+    // A legacy in-repo state path must pass the repository's no-symlink reader boundary before
+    // SQLite sees it. Even a readonly SQLite open can update an external `-shm` file when either
+    // `.llmwiki` or `index.db` is a symlink.
+    if (
+      relativeDatabasePath !== "" &&
+      !relativeDatabasePath.startsWith(`..${sep}`) &&
+      relativeDatabasePath !== ".." &&
+      !repoFileExists(root, relativeDatabasePath)
+    ) {
+      throw new Error("refusing to inspect a symlinked legacy index database");
+    }
+    db = new Database(databasePath, { readonly: true });
     const rows = db
       .query<{ readonly relative_path: string; readonly content_hash: string | null }, []>(
         "SELECT relative_path, content_hash FROM documents WHERE source_kind='wiki'",
@@ -251,7 +272,14 @@ function derivedIndexNeedsRebuild(root: string): boolean {
   if (!projectStateExists(root, "index.db")) return false;
   let db: Database | null = null;
   try {
-    db = new Database(projectStatePath(root, "index.db"), { readonly: true });
+    // This probe runs only in --fix mode. FTS5's authoritative external-content
+    // `integrity-check` is issued through INSERT syntax, so a read-only handle can only fall
+    // back to comparing row counts and misses same-cardinality content/rowid corruption. Open
+    // the derived database writable here so inspectDatabaseHealth can run the real check. Go
+    // through WikiIndex.connect rather than opening projectStatePath directly: connect owns the
+    // verified no-symlink writer boundary for both central state and legacy in-repo `.llmwiki`.
+    // Check mode continues to inspect through a read-only handle in inspectIndex.
+    db = new WikiIndex(root).connect();
     return !inspectDatabaseHealth(db).integrity.ok;
   } catch {
     return true;

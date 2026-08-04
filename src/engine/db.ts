@@ -8,6 +8,7 @@ import { lstatSync, readFileSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative as relpath, resolve } from "node:path";
 import { storeChunks, chunkText, CHUNKER_VERSION } from "./chunker.ts";
+import { UNSPACED_CHAR, UNSPACED_RUN_RE, unspacedWindows } from "./segment.ts";
 import { stripEvidence } from "./refs.ts";
 import { ensureProjectStateDir, ensureProjectStatePath, projectStatePath } from "./project-state.ts";
 import { getConfig } from "./config.ts";
@@ -120,14 +121,50 @@ export function ftsSanitize(query: string): string {
 // Unlike basic-memory: token detection is Unicode (\p{L}\p{N}, not [A-Za-z0-9] — else CJK
 // queries never relax), and no prefix `*` (meaningless under the trigram tokenizer) and no
 // English stopword list (language-neutral; corpus <100k so over-expansion risk is low).
+/**
+ * Second-stage relax for queries carrying UNSPACED-script runs (Han · Kana · Thai …), where the
+ * first stage cannot even begin: ftsRelax OR-joins whitespace tokens, and an unspaced clause IS
+ * one whitespace token — "索引更新失败了怎么办" or "watch.tsを再起動する手順" arrive as a single
+ * quoted phrase, which a trigram MATCH treats as a verbatim substring no page contains (measured:
+ * 0/4 on mixed JA+EN / ZH+EN natural-language queries while turn-context, which windows its
+ * terms, resolved 4/4). Decomposition mirrors turn-context exactly, via the shared segment.ts:
+ * embedded ASCII identifiers survive whole (watch.ts · index.db), runs become word-sized windows,
+ * everything OR-joins and bm25 ranks — a window that straddles a particle simply matches nothing.
+ * Null unless an unspaced run is actually present AND decomposition yielded ≥2 terms, so every
+ * query that worked before takes exactly the path it took before.
+ */
+function blocksFtsRelaxation(query: string): boolean {
+  if (!query || query.includes('"')) return true;
+  const padded = ` ${query} `;
+  if (padded.includes(" AND ") || padded.includes(" OR ") || padded.includes(" NOT ")) return true;
+  return query.split(/\s+/).some((token) => /^\p{N}+$/u.test(token));
+}
+
+export function ftsRelaxUnspaced(query: string): string | null {
+  const q = (query || "").trim();
+  if (blocksFtsRelaxation(q)) return null;
+  if (!new RegExp(`[${UNSPACED_CHAR}]{3,}`, "u").test(q)) return null;
+  const terms: string[] = [];
+  const seen = new Set<string>();
+  const push = (t: string) => {
+    if ([...t].length < 3 || seen.has(t)) return; // trigram floor; ASCII idents below are ≥3 by regex
+    seen.add(t);
+    terms.push(t);
+  };
+  for (const m of q.matchAll(/[A-Za-z_][A-Za-z0-9_./-]{2,}/g)) push(m[0]!);
+  for (const m of q.matchAll(UNSPACED_RUN_RE)) for (const w of unspacedWindows(m[0]!)) push(w);
+  if (terms.length < 2) return null;
+  return terms
+    .slice(0, 12)
+    .map((t) => `"${t.replace(/"/g, '""')}"`)
+    .join(" OR ");
+}
+
 export function ftsRelax(query: string): string | null {
   const q = (query || "").trim();
-  if (!q || q.includes('"')) return null;
-  const padded = ` ${q} `;
-  if (padded.includes(" AND ") || padded.includes(" OR ") || padded.includes(" NOT ")) return null;
+  if (blocksFtsRelaxation(q)) return null;
   const tokens = q.split(/\s+/).filter((t) => /[\p{L}\p{N}]/u.test(t));
   if (tokens.length < 2) return null;
-  if (tokens.some((t) => /^\p{N}+$/u.test(t))) return null;
   return tokens.map((t) => `"${t.replace(/"/g, '""')}"`).join(" OR ");
 }
 
@@ -165,6 +202,12 @@ export class WikiIndex {
   // so pages edited together never mark each other (flushStaleness).
   private readonly _updatedInPass = new Set<string>();
   static SOURCE_FILE_CAP = 5000;
+  // Version of the stat fast-path's row semantics (see indexAll) — bump to force one full hash
+  // pass on every existing index, e.g. when title/filename derivation changes again.
+  static STAT_SKIP_VERSION = "1";
+  // Stat identity is a fast-path hint, not proof: an editor can preserve both size and an old
+  // mtime. Periodically re-hash every file so such edits are bounded rather than missed forever.
+  static FULL_HASH_INTERVAL_MS = 24 * 60 * 60 * 1000;
   // Per-file content cap for SOURCE files. Large data files
   // (multi-MB yaml/json fixtures) bloat the trigram index ~5-6x their raw size while
   // adding little search value. Over the cap the file is registered metadata-only
@@ -206,6 +249,7 @@ export class WikiIndex {
     this.migrateFts(db); // must run BEFORE exec(SCHEMA): drop the old-tokenizer table first
     db.exec(SCHEMA); // idempotent (IF NOT EXISTS) → any command self-initializes
     this.migrateFrontmatterMetadata(db);
+    this.ensurePagesFts(db); // strictly AFTER the metadata migration — its triggers name description
     this.migrateChunker(db);
     const ws = db.query("SELECT 1 FROM workspace LIMIT 1").get();
     if (!ws) {
@@ -255,6 +299,63 @@ export class WikiIndex {
         "INSERT INTO index_build (key, value) VALUES ('chunker', ?) " +
           "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         [CHUNKER_VERSION],
+      );
+      db.exec("COMMIT");
+    } catch (e) {
+      try {
+        db.exec("ROLLBACK");
+      } catch {
+        /* already rolled back */
+      }
+      throw e;
+    }
+  }
+
+  // Page-identity full-text index: title · description · filename. The chunk index ranks by BODY
+  // prose, which can bury a hub below pages that merely mention its title in a Related list.
+  // Created HERE and not in schema.sql, strictly after
+  // migrateFrontmatterMetadata: the triggers name documents.description, a column that migration
+  // may still have to ADD on a legacy index — declared in the schema, the triggers would either
+  // fail or pin a column mid-migration. An external-content FTS table starts empty and its
+  // triggers only see future writes, so first creation is followed by one 'rebuild' backfill —
+  // without it, a project indexed before pages_fts existed would silently stay body-only forever.
+  private ensurePagesFts(db: Database): void {
+    const version = "1";
+    const requiredObjects = ["pages_fts", "pages_fts_insert", "pages_fts_delete", "pages_fts_update"] as const;
+    const objects = new Set(
+      db
+        .query<{ readonly name: string }, [string, string, string, string]>(
+          "SELECT name FROM sqlite_master WHERE name IN (?, ?, ?, ?)",
+        )
+        .all(...requiredObjects)
+        .map((row) => row.name),
+    );
+    const marked =
+      (db.query("SELECT value FROM index_build WHERE key='pages-fts'").get() as { value: string } | null)?.value ===
+      version;
+    if (marked && requiredObjects.every((name) => objects.has(name))) return;
+
+    // The table, all three maintenance triggers, first backfill, and completion marker are one
+    // unit. If creation is interrupted SQLite rolls the whole unit back; databases left by the
+    // older non-transactional implementation have no marker and are rebuilt on the next connect.
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.exec(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(" +
+          "title, description, filename, content='documents', content_rowid='rowid', tokenize='trigram');" +
+          "CREATE TRIGGER IF NOT EXISTS pages_fts_insert AFTER INSERT ON documents BEGIN " +
+          "INSERT INTO pages_fts(rowid, title, description, filename) VALUES (new.rowid, new.title, new.description, new.filename); END;" +
+          "CREATE TRIGGER IF NOT EXISTS pages_fts_delete AFTER DELETE ON documents BEGIN " +
+          "INSERT INTO pages_fts(pages_fts, rowid, title, description, filename) VALUES ('delete', old.rowid, old.title, old.description, old.filename); END;" +
+          "CREATE TRIGGER IF NOT EXISTS pages_fts_update AFTER UPDATE ON documents BEGIN " +
+          "INSERT INTO pages_fts(pages_fts, rowid, title, description, filename) VALUES ('delete', old.rowid, old.title, old.description, old.filename); " +
+          "INSERT INTO pages_fts(rowid, title, description, filename) VALUES (new.rowid, new.title, new.description, new.filename); END;",
+      );
+      db.exec("INSERT INTO pages_fts(pages_fts) VALUES('rebuild')");
+      db.run(
+        "INSERT INTO index_build (key, value) VALUES ('pages-fts', ?) " +
+          "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [version],
       );
       db.exec("COMMIT");
     } catch (e) {
@@ -320,21 +421,31 @@ export class WikiIndex {
       const content = row.content ?? (row.knowledge_tier === "cold" ? readColdPageBody(this.root, row.relative_path) : "");
       const metadata = parseFrontmatter(content);
       const tags = JSON.stringify(metadata.tags);
+      // Title and filename heal here — at connect, from the STORED content — and not only in
+      // indexFile: the stat fast-path skips a byte-identical file without reading it, and a heal
+      // that lives behind a read is a heal the fast path silently starves (the contract test
+      // "repairs its titles without a content change" caught exactly that).
+      const title = resolveDocumentTitle(metadata, row.relative_path);
+      const filename = this.basename(row.relative_path);
       db.run(
-        "UPDATE documents SET description=?, date=?, tags=?, knowledge_status=?, knowledge_tier=? " +
-          "WHERE id=? AND (description IS NOT ? OR date IS NOT ? OR tags IS NOT ? OR knowledge_status IS NOT ? OR knowledge_tier IS NOT ?)",
+        "UPDATE documents SET description=?, date=?, tags=?, knowledge_status=?, knowledge_tier=?, title=?, filename=? " +
+          "WHERE id=? AND (description IS NOT ? OR date IS NOT ? OR tags IS NOT ? OR knowledge_status IS NOT ? OR knowledge_tier IS NOT ? OR title IS NOT ? OR filename IS NOT ?)",
         [
           metadata.description,
           metadata.date,
           tags,
           metadata.status,
           metadata.tier,
+          title,
+          filename,
           row.id,
           metadata.description,
           metadata.date,
           tags,
           metadata.status,
           metadata.tier,
+          title,
+          filename,
         ],
       );
     }
@@ -342,13 +453,35 @@ export class WikiIndex {
 
   // ---- indexing (incremental via content_hash) --------------------------
 
-  indexAll(conn: Database | null = null): [number, number] {
+  indexAll(conn: Database | null = null): [number, number, number] {
     const own = conn === null;
     const db = conn ?? this.connect();
     let neu = 0;
     let updated = 0;
     let removed = 0;
     const seen = new Set<string>();
+
+    // Stat fast-path arming. indexFile may skip a row on stat identity alone (no read, no hash),
+    // but the per-row self-heals (title-from-frontmatter, Windows filename) need CONTENT once for
+    // rows written by older engines — and a heal blocked by the fast path would stay blocked
+    // forever, because healing is exactly what makes the row look current. So a DB indexed before
+    // this marker existed gets ONE full hash pass (heals included), and the marker arms the fast
+    // path between periodic audits. Bump STAT_SKIP_VERSION when derived-row semantics change
+    // again — same pattern, same reason as CHUNKER_VERSION.
+    const statSkipArmed =
+      (db.query("SELECT value FROM index_build WHERE key = 'stat-skip'").get() as { value: string } | null)
+        ?.value === WikiIndex.STAT_SKIP_VERSION;
+    const lastFullHashValue = (
+      db.query("SELECT value FROM index_build WHERE key = 'stat-full-hash-at'").get() as { value: string } | null
+    )?.value;
+    const lastFullHashAt = Number(lastFullHashValue);
+    const now = Date.now();
+    const fullHashDue =
+      !Number.isFinite(lastFullHashAt) ||
+      lastFullHashAt <= 0 ||
+      lastFullHashAt > now ||
+      now - lastFullHashAt >= WikiIndex.FULL_HASH_INTERVAL_MS;
+    const statSkip = statSkipArmed && !fullHashDue;
 
     const wikiOnly = this.root === resolve(homedir());
     if (wikiOnly) {
@@ -381,7 +514,7 @@ export class WikiIndex {
         sourceCount += 1;
       }
       seen.add(relative);
-      const r = this.indexFile(db, join(this.root, relativeNative), relative);
+      const r = this.indexFile(db, join(this.root, relativeNative), relative, statSkip);
       if (r === "new") neu += 1;
       else if (r === "updated") updated += 1;
     }
@@ -402,8 +535,28 @@ export class WikiIndex {
     }
     this.writeColdIndex(db);
     if (updated > 0 || removed > 0) this.optimizeFts(db);
+    // The pass above visited every file; a full-hash pass arms the bounded stat fast path.
+    if (!statSkipArmed) {
+      db.run(
+        "INSERT INTO index_build (key, value) VALUES ('stat-skip', ?) " +
+          "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [WikiIndex.STAT_SKIP_VERSION],
+      );
+    }
+    if (!statSkip) {
+      db.run(
+        "INSERT INTO index_build (key, value) VALUES ('stat-full-hash-at', ?) " +
+          "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [String(now)],
+      );
+    }
+    // refs-built invalidation is performed by schema triggers in the SAME SQLite statement as
+    // each graph-input mutation. Doing it here after the walk left a crash window in which a
+    // committed document update still carried the old graph's completion marker.
     if (own) db.close();
-    return [neu, updated];
+    // `removed` is in the tuple so callers can tell a true no-op from a deletion-only pass —
+    // the reference graph changes on deletions too, and "0 new, 0 updated" alone hid that.
+    return [neu, updated, removed];
   }
 
   isVirtual(relative: string): boolean {
@@ -414,7 +567,7 @@ export class WikiIndex {
     db.run("INSERT INTO chunks_fts(chunks_fts) VALUES('optimize')");
   }
 
-  indexFile(db: Database, full: string, relative: string): "new" | "updated" | null {
+  indexFile(db: Database, full: string, relative: string, statSkip = false): "new" | "updated" | null {
     const name = this.basename(full);
     const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
     let safeRelative: string;
@@ -427,16 +580,55 @@ export class WikiIndex {
     if (metadata === null) return null;
     const size = metadata.size;
     const mtimeNs = metadata.mtimeNs;
-    const contentHash = sha256(this.root, safeRelative, size);
 
+    // mtime_ns as TEXT, never as a JS number: nanoseconds since the epoch (~1.7e18) exceed
+    // 2^53, so a number read is silently lossy and the stat comparison below would never be
+    // equal — a fast path that never fires looks exactly like a working one.
     const existing = db
-      .query("SELECT id, content_hash, title, filename FROM documents WHERE relative_path = ?")
+      .query(
+        "SELECT id, content_hash, title, filename, file_size, CAST(mtime_ns AS TEXT) AS mtime_txt " +
+          "FROM documents WHERE relative_path = ?",
+      )
       .get(relative) as {
       id: string;
       content_hash: string | null;
       title: string | null;
       filename: string | null;
+      file_size: number | null;
+      mtime_txt: string | null;
     } | null;
+
+    // Stat fast-path: same size, same nanosecond mtime, same basename, and a hash on record —
+    // the bytes are not read at all. Until this branch, a no-op `index` read and hashed EVERY
+    // file every pass (content_hash can only say "unchanged" after paying for the content):
+    // measured 1.0s on an 868-file fixture and 2.8s at 1000 pages, ×4 per autoupdate run.
+    // Armed only after one full pass under the current row semantics (indexAll's marker), so the
+    // per-row self-heals below are never starved. A row whose hash was cleared (chunker
+    // migration) or never computed keeps taking the full path.
+    // Racily-clean guard (the rule git applies to its own index, for the same reason). Stat
+    // identity is only evidence of "unchanged" when the clock that produced the mtime can
+    // RESOLVE a change: on FAT/exFAT (2s), SMB and older NFS (1s), two same-size writes inside one
+    // tick share a timestamp, so a real edit is indistinguishable from no edit. Measured here:
+    // APFS gives nanoseconds, but a Windows USB stick or a mounted share does not, and those are
+    // ordinary places to keep a wiki. So a file whose mtime is younger than the coarsest
+    // granularity we might be sitting on is always hashed. A future mtime (clock skew on a share)
+    // and a zero mtime (mounts that do not report one) fail the same test — both mean "this
+    // timestamp cannot be trusted", and the cost of distrust is one hash of one recently-touched
+    // file, which is the set most likely to have changed anyway.
+    const RACY_WINDOW_NS = 2_000_000_000n; // 2s — the coarsest common filesystem granularity
+    const nowNs = BigInt(Date.now()) * 1_000_000n;
+    const mtimeIsDecisive = mtimeNs > 0n && mtimeNs <= nowNs - RACY_WINDOW_NS;
+    const statIdentical =
+      statSkip &&
+      mtimeIsDecisive &&
+      existing !== null &&
+      existing.content_hash !== null &&
+      existing.file_size === size &&
+      existing.mtime_txt === mtimeNs.toString() &&
+      existing.filename === name;
+    if (statIdentical) return null;
+
+    const contentHash = sha256(this.root, safeRelative, size);
 
     let sourceContent: string | null = null;
     const capExempt = sourceKind(relative) === "wiki"; // wiki pages are never capped
@@ -470,6 +662,12 @@ export class WikiIndex {
         // recover — not on reindex either, because an existing row takes the UPDATE path below.
         // Without this, every wikilink stays dangling on machines that indexed before the fix.
         if (existing.filename !== name) db.run("UPDATE documents SET filename=? WHERE id=?", [name, existing.id]);
+        // A touched file (same bytes, new mtime — git checkout, cp -p, editors that save-then-
+        // revert) would fail the stat fast-path on every future pass and pay the hash forever;
+        // record what stat says now, so the next pass can skip on it.
+        if (existing.mtime_txt !== mtimeNs.toString() || existing.file_size !== size) {
+          db.run("UPDATE documents SET mtime_ns=?, file_size=? WHERE id=?", [mtimeNs, size, existing.id]);
+        }
         return null;
       }
       db.run(
@@ -607,8 +805,16 @@ export class WikiIndex {
     db.close();
   }
 
-  reindex(): [number, number] {
+  reindex(): [number, number, number] {
     const db = this.connect();
+    // Resync both external-content indexes BEFORE deleting their content rows. On a drifted
+    // index the DELETE below fires the FTS delete-trigger for a row the index does not hold,
+    // SQLite raises SQLITE_CORRUPT_VTAB, and the one command whose purpose is rebuilding derived
+    // state dies on exactly the state it exists to rebuild (measured with a delete-all'd
+    // chunks_fts). 'rebuild' rewrites each index from its content table, making the trigger
+    // deletes coherent again; on a healthy index it is a cheap no-op-shaped rewrite.
+    db.run("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')");
+    db.run("INSERT INTO pages_fts(pages_fts) VALUES('rebuild')");
     db.run("DELETE FROM document_chunks");
     db.run("DELETE FROM document_references");
     db.run("DELETE FROM documents WHERE source_kind != 'transcript'");
@@ -753,7 +959,9 @@ export class WikiIndex {
       // the same SQL/ranking. Sanitized (natural-language) queries only — raw callers own
       // their query semantics (turn-context already builds its own OR query).
       if (rows.length === 0 && !raw && process.env.LLMWIKI_SEARCH_RELAX !== "off") {
-        const relaxed = ftsRelax(query); // env kill-switch: A/B measurement + safety valve
+        // Same stage, two decompositions: whitespace tokens first (ftsRelax), unspaced-run
+        // windows when whitespace has nothing to offer (ftsRelaxUnspaced) — same kill-switch.
+        const relaxed = ftsRelax(query) ?? ftsRelaxUnspaced(query);
         if (relaxed && relaxed !== match) rows = this._matchRows(db, relaxed, limit, kind);
       }
     }
@@ -765,6 +973,28 @@ export class WikiIndex {
     // this engine's own wiki (304 chunks): 0.5-1.3ms.
     if (rows.length === 0 && !raw && tokens.length > 0 && !tokens.every(ftsMatchable)) {
       rows = this._substringRows(db, tokens, limit, kind);
+    }
+
+    // Title boost (P0-5), LAST so it never perturbs the chunk pipeline's own gates (relax fires on
+    // "chunk match found nothing", not on "a title matched"): a WIKI page whose IDENTITY (title ·
+    // description · filename) contains EVERY query token outranks any body mention — the
+    // hub-vs-mention distinction. Two routes to the same AND-over-all-tokens judgment: FTS when
+    // every token clears the trigram floor; identity SUBSTRING otherwise, because Korean 2-char
+    // content words (본문·계약·병합) fall below the floor — an FTS query without them degenerates
+    // to its one surviving term (measured: "worker 본문 생성 계약" became MATCH "worker" and put
+    // worker.py above the hub page), and a query made ONLY of such words ("위키 유무 ab 실측")
+    // has no MATCH at all yet still deserves its hub. Prepended; dedupeByPage's first-win keeps
+    // identity hits on top. Raw callers own their candidate semantics: turn-context appends its
+    // OR identity candidates explicitly after the below-floor fallback. Prepending identity rows
+    // here as well made the same page arrive through two indistinguishable identity paths and
+    // inflated its hit count. Kill-switch mirrors LLMWIKI_SEARCH_RELAX.
+    if (!raw && process.env.LLMWIKI_SEARCH_TITLE_BOOST !== "off") {
+      const titled = tokens.length > 0 && !tokens.every(ftsMatchable)
+          ? this._titleRowsLike(db, tokens, limit)
+          : match
+            ? this._titleRows(db, match, limit)
+            : [];
+      if (titled.length) rows = [...titled, ...rows];
     }
     return rows.map(WikiIndex.row);
   }
@@ -797,9 +1027,81 @@ export class WikiIndex {
     );
   }
 
+  // Page-identity hits (pages_fts): one row per PAGE, shaped like a chunk row so every caller
+  // downstream (dedupeByPage, turn-context's per-page union) consumes it unchanged. `content`
+  // carries the description — for a hub page that is the best snippet a reader can get, and for
+      // turn-context it is text the scorer can legitimately count terms against. Wiki pages ONLY:
+      // identity is a hub signal, and boosting source files by filename can put an implementation
+      // file above the page that actually owns the concept.
+  _titleRows(db: Database, match: string, limit: number): DocRow[] {
+    const sql =
+      "SELECT d.description AS content, NULL AS header_breadcrumb, d.relative_path, d.title, d.source_kind, " +
+      "'identity' AS candidate_kind, rank AS score " +
+      "FROM documents d JOIN pages_fts fts ON d.rowid = fts.rowid " +
+      "WHERE pages_fts MATCH ? AND d.status != 'failed' AND d.source_kind = 'wiki' " +
+      WikiIndex._orderBy("rank");
+    try {
+      return db.query(sql).all(match, limit) as DocRow[];
+    } catch (e: any) {
+      // Same absorb-to-empty contract as _matchRows: a query-shape problem must never crash search.
+      if (/syntax error|unterminated string|no such column|malformed MATCH|fts5/i.test(String(e?.message || e))) {
+        return [];
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * OR-semantics identity candidates for turn-context: wiki pages whose title/description/filename
+   * contains ANY of the terms — checked against a whitespace/hyphen-stripped copy too, because
+   * Korean compound spacing can make a prompt say "문서허브" while the title says "문서 허브",
+   * and neither trigram MATCH nor plain substring can bridge that. This only SUPPLIES candidates;
+   * the caller's scorer still applies the witness/score gate, so recall added here cannot become
+   * noise on its own. One short string per page — a scan over pages, never chunks.
+   */
+  identityCandidates(db: Database, tokens: readonly string[], limit = 12): DocRow[] {
+    const clean = tokens.filter((t) => t.trim().length > 0);
+    if (!clean.length) return [];
+    const hay = "lower(coalesce(d.title,'') || ' ' || coalesce(d.description,'') || ' ' || d.filename)";
+    const hayNS = `replace(replace(${hay}, ' ', ''), '-', '')`;
+    const params: any[] = [];
+    const ors = clean.map((t) => {
+      const like = `%${t.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+      params.push(like, like);
+      return `(${hay} LIKE ? ESCAPE '\\' OR ${hayNS} LIKE ? ESCAPE '\\')`;
+    });
+    const sql =
+      "SELECT d.description AS content, NULL AS header_breadcrumb, d.relative_path, d.title, d.source_kind, " +
+      "'identity' AS candidate_kind, NULL AS score " +
+      "FROM documents d " +
+      `WHERE (${ors.join(" OR ")}) AND d.status != 'failed' AND d.source_kind = 'wiki' ` +
+      WikiIndex._orderBy("length(coalesce(d.title,'')), d.relative_path");
+    params.push(limit);
+    return db.query(sql).all(...params) as DocRow[];
+  }
+
+  // The identity judgment for queries the trigram index cannot fully represent: every token —
+  // including the sub-floor ones — must appear as a substring of title/description/filename.
+  // Mirrors _substringRows' philosophy on the identity surface; ~one row per page, so the scan is
+  // hundreds of rows, not chunks.
+  _titleRowsLike(db: Database, tokens: readonly string[], limit: number): DocRow[] {
+    const hay = "lower(coalesce(d.title,'') || ' ' || coalesce(d.description,'') || ' ' || d.filename)";
+    const params: any[] = tokens.map((t) => `%${t.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
+    const sql =
+      "SELECT d.description AS content, NULL AS header_breadcrumb, d.relative_path, d.title, d.source_kind, " +
+      "'identity' AS candidate_kind, NULL AS score " +
+      "FROM documents d " +
+      `WHERE ${tokens.map(() => `${hay} LIKE ? ESCAPE '\\'`).join(" AND ")} ` +
+      "AND d.status != 'failed' AND d.source_kind = 'wiki' " +
+      WikiIndex._orderBy("length(coalesce(d.title,'')), d.relative_path");
+    params.push(limit);
+    return db.query(sql).all(...params) as DocRow[];
+  }
+
   _matchRows(db: Database, match: string, limit: number, kind: string | null): DocRow[] {
     let sql =
-      "SELECT dc.content, dc.header_breadcrumb, d.relative_path, d.title, d.source_kind, rank AS score " +
+      "SELECT dc.content, dc.header_breadcrumb, d.relative_path, d.title, d.source_kind, " +
+      "'body' AS candidate_kind, rank AS score " +
       "FROM document_chunks dc JOIN chunks_fts fts ON dc.rowid = fts.rowid " +
       "JOIN documents d ON dc.document_id = d.id " +
       "WHERE chunks_fts MATCH ? AND d.status != 'failed' ";
@@ -831,7 +1133,8 @@ export class WikiIndex {
     // would match every chunk in the wiki.
     const params: any[] = tokens.map((t) => `%${t.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
     let sql =
-      "SELECT dc.content, dc.header_breadcrumb, d.relative_path, d.title, d.source_kind, NULL AS score " +
+      "SELECT dc.content, dc.header_breadcrumb, d.relative_path, d.title, d.source_kind, " +
+      "'body' AS candidate_kind, NULL AS score " +
       "FROM document_chunks dc JOIN documents d ON dc.document_id = d.id " +
       `WHERE ${tokens.map(() => "dc.content LIKE ? ESCAPE '\\'").join(" AND ")} AND d.status != 'failed' `;
     if (kind) {

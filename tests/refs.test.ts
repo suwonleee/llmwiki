@@ -4,7 +4,7 @@ import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseCitationFilename, stripCode, parseWikiLinks, autoRegisterCitedTranscripts } from "../src/engine/refs.ts";
+import { parseCitationFilename, stripCode, parseWikiLinks, autoRegisterCitedTranscripts, rebuildReferenceGraph, referenceGraphCounts } from "../src/engine/refs.ts";
 import { WikiIndex } from "../src/engine/db.ts";
 
 describe("autoRegisterCitedTranscripts (durable provenance self-heal)", () => {
@@ -178,5 +178,124 @@ describe("parseWikiLinks", () => {
     expect(links).not.toContain("http://example.com");
     expect(links).not.toContain("pic.png");
     expect(links).not.toContain("incode");
+  });
+});
+
+describe("referenceGraphCounts (no-op index reuses the graph)", () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "llmwiki-refcounts-"));
+    mkdirSync(join(root, "docs", "wiki", "3_decision"), { recursive: true });
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  const page = (body: string) =>
+    "---\ntitle: t\ndescription: d\ndate: 2026-06-20\ntags: [a,b]\nstatus: ready\n---\n\n" + body;
+
+  test("reports the stored graph byte-for-byte as the rebuild that made it", () => {
+    writeFileSync(join(root, "docs", "wiki", "3_decision", "a.md"), page("see [[3_decision/b]]\n"));
+    writeFileSync(join(root, "docs", "wiki", "3_decision", "b.md"), page("plain\n"));
+    const w = new WikiIndex(root);
+    w.indexAll();
+    const built = rebuildReferenceGraph(w);
+
+    const reused = referenceGraphCounts(w);
+    expect(reused).toEqual({ citations: built.citations, links: built.links, pages: built.pages });
+  });
+
+  test("an empty graph reads as null — indistinguishable from never-built, so the caller rebuilds", () => {
+    writeFileSync(join(root, "docs", "wiki", "3_decision", "a.md"), page("no links at all\n"));
+    const w = new WikiIndex(root);
+    w.indexAll();
+    // Graph never materialized (and this wiki has no edges anyway): the reuse path must decline.
+    expect(referenceGraphCounts(w)).toBeNull();
+  });
+
+  test("a completed linkless rebuild marks the zero-edge graph as reusable", () => {
+    writeFileSync(join(root, "docs", "wiki", "3_decision", "a.md"), page("no links at all\n"));
+    const w = new WikiIndex(root);
+    w.indexAll();
+
+    expect(rebuildReferenceGraph(w)).toEqual({ citations: 0, links: 0, pages: 1, transcriptsRegistered: 0 });
+    expect(referenceGraphCounts(w)).toEqual({ citations: 0, links: 0, pages: 1 });
+  });
+
+  test("an interrupted rebuild restores the prior graph but invalidates reuse until a complete rebuild", () => {
+    const a = join(root, "docs", "wiki", "3_decision", "a.md");
+    const b = join(root, "docs", "wiki", "3_decision", "b.md");
+    const c = join(root, "docs", "wiki", "3_decision", "c.md");
+    writeFileSync(a, page("see [[3_decision/b]]\n"));
+    writeFileSync(b, page("plain\n"));
+    writeFileSync(c, page("plain\n"));
+    const w = new WikiIndex(root);
+    w.indexAll();
+    rebuildReferenceGraph(w);
+
+    const before = w.connect();
+    let oldEdge: { source: string; target: string };
+    try {
+      oldEdge = before
+        .query(
+          "SELECT s.filename AS source, t.filename AS target " +
+            "FROM document_references r " +
+            "JOIN documents s ON s.id = r.source_document_id " +
+            "JOIN documents t ON t.id = r.target_document_id",
+        )
+        .get() as { source: string; target: string };
+      expect(oldEdge).toEqual({ source: "a.md", target: "b.md" });
+      expect(before.query("SELECT value FROM index_build WHERE key = 'refs-built'").get()).toEqual({ value: "1" });
+    } finally {
+      before.close();
+    }
+
+    // The new graph would contain two edges. Fail deterministically after the first insert, when
+    // a non-transactional rebuild would already have exposed a mixed old/new graph.
+    writeFileSync(a, page("see [[3_decision/c]]\n"));
+    writeFileSync(b, page("also see [[3_decision/c]]\n"));
+    expect(w.indexAll()).toEqual([0, 2, 0]);
+    const originalUpsert = w.upsertReference.bind(w);
+    let upserts = 0;
+    w.upsertReference = (db, sourceId, targetId, refType, locator) => {
+      upserts += 1;
+      if (upserts === 2) throw new Error("simulated interrupted refs rebuild");
+      originalUpsert(db, sourceId, targetId, refType, locator);
+    };
+    try {
+      expect(() => rebuildReferenceGraph(w)).toThrow("simulated interrupted refs rebuild");
+    } finally {
+      w.upsertReference = originalUpsert;
+    }
+
+    const after = w.connect();
+    try {
+      const edges = after
+        .query(
+          "SELECT s.filename AS source, t.filename AS target " +
+            "FROM document_references r " +
+            "JOIN documents s ON s.id = r.source_document_id " +
+            "JOIN documents t ON t.id = r.target_document_id " +
+            "ORDER BY source, target",
+        )
+        .all();
+      expect(edges).toEqual([oldEdge!]);
+      expect(after.query("SELECT value FROM index_build WHERE key = 'refs-built'").get()).toBeNull();
+    } finally {
+      after.close();
+    }
+
+    // A positive edge count without the completion marker is still untrusted.
+    expect(referenceGraphCounts(w)).toBeNull();
+    expect(rebuildReferenceGraph(w)).toEqual({ citations: 0, links: 2, pages: 3, transcriptsRegistered: 0 });
+    expect(referenceGraphCounts(w)).toEqual({ citations: 0, links: 2, pages: 3 });
+  });
+
+  test("a deletion-only pass reports removed>0, so the caller knows to rebuild", () => {
+    const p = join(root, "docs", "wiki", "3_decision", "a.md");
+    writeFileSync(p, page("x\n"));
+    const w = new WikiIndex(root);
+    expect(w.indexAll()[0]).toBe(1); // new
+    rmSync(p);
+    const [neu, updated, removed] = w.indexAll();
+    expect([neu, updated, removed]).toEqual([0, 0, 1]); // not a no-op — edges may have died with it
   });
 });

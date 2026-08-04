@@ -25,6 +25,7 @@ import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { WikiIndex } from "./db.ts";
+import { UNSPACED_ONLY_RE, UNSPACED_RUN_RE, unspacedWindows } from "./segment.ts";
 import { isRepoKorean, effectiveKo, getConfig } from "./config.ts";
 import { COLD_INDEX_RELATIVE_PATH } from "./cold-index.ts";
 
@@ -43,16 +44,8 @@ const HEADS = {
 // `src/engine/db.ts` stays one term instead of being cut at every separator.
 const ASCII_RE = /[A-Za-z_][A-Za-z0-9_./-]{3,}/g;
 
-// Scripts written without spaces between words. A run of these is a whole CLAUSE, not a word,
-// and a clause is a literal substring no page will ever contain — so runs are sliced into
-// word-sized windows below rather than queried whole. Hangul is deliberately absent: Korean
-// puts spaces between words, so its runs already arrive word-sized.
-// Script_Extensions, not Script: the prolonged-sound mark "ー" that ends マイグレーション is
-// Script=Common, so a plain Script= class breaks the run in half at exactly the wrong place.
-const UNSPACED_CHAR =
-  "\\p{scx=Han}\\p{scx=Hiragana}\\p{scx=Katakana}\\p{scx=Thai}\\p{scx=Lao}\\p{scx=Khmer}\\p{scx=Myanmar}";
-const UNSPACED_RUN_RE = new RegExp(`[${UNSPACED_CHAR}]{3,}`, "gu");
-const UNSPACED_ONLY_RE = new RegExp(`^[${UNSPACED_CHAR}]+$`, "u");
+// Unspaced-script handling (runs → word-sized windows) lives in segment.ts, shared with
+// search()'s relax path — one segmentation, measured against the same fixtures, two callers.
 
 // Any other script's words. \p{M} keeps combining marks attached, so "überhaupt" and Vietnamese
 // "ngôn" survive whole — the ASCII pattern above cannot even start on ü, and used to hand back
@@ -64,21 +57,25 @@ const UNSPACED_ONLY_RE = new RegExp(`^[${UNSPACED_CHAR}]+$`, "u");
 // matches are produced and then dropped by that same floor, so the default path is unchanged.
 const WORD_RE = /[\p{L}\p{N}][\p{L}\p{M}\p{N}_]{1,}/gu;
 
-// Window size for unspaced scripts — about a word in Han/Kana/Thai, and short enough to occur
-// inside a page. Overlapping windows so a word straddling two of them is still covered.
-const UNSPACED_WINDOW = 4;
-const UNSPACED_MAX_WINDOWS = 8;
+// Nominal josa, longest first — the particles a Korean prompt glues onto exactly the noun the
+// retrieval needs. Scoring compares by SUBSTRING, so a suffixed form such as "배포안을" matches
+// no page that contains only "배포안". Keep the generic regression shape here; never publish a
+// real user's prompt or corpus evidence in this public implementation.
+// Suffix-strip is not stemming: only case particles come off, one layer, and the ORIGINAL token is
+// always kept too — this can only add recall, never lose an exact match. Verb endings are left
+// alone on purpose (stripping 하자/보자 would need real morphology to stay honest).
+const JOSA_SUFFIXES = [
+  "에서는", "에서도", "으로는", "으로도",
+  "에서", "에게", "으로", "까지", "부터", "처럼", "보다", "조차", "마저", "이나", "라도", "와는", "과는",
+  "은", "는", "이", "가", "을", "를", "에", "의", "도", "로", "와", "과", "만",
+] as const;
 
-function unspacedWindows(run: string): string[] {
-  const chars = [...run];
-  if (chars.length <= UNSPACED_WINDOW + 1) return [run];
-  // Spread the windows over the whole run: a fixed stride would cover only its head.
-  const stride = Math.max(2, Math.ceil((chars.length - UNSPACED_WINDOW) / (UNSPACED_MAX_WINDOWS - 1)));
-  const out: string[] = [];
-  for (let i = 0; i + UNSPACED_WINDOW <= chars.length; i += stride) {
-    out.push(chars.slice(i, i + UNSPACED_WINDOW).join(""));
+export function stripJosa(t: string): string | null {
+  if (/^[\x00-\x7F]+$/.test(t)) return null; // particles are a dense-script phenomenon
+  for (const j of JOSA_SUFFIXES) {
+    if (t.length > j.length && t.endsWith(j)) return t.slice(0, t.length - j.length);
   }
-  return out;
+  return null;
 }
 
 export function extractTerms(prompt: string, denseFloor = 3): string[] {
@@ -89,11 +86,21 @@ export function extractTerms(prompt: string, denseFloor = 3): string[] {
     // 3 is the FTS5 trigram matching floor; Latin gets 4, because that is what keeps the
     // "the/and/for" class out without a stopword list. A dense script needs no such margin —
     // three characters of Hangul or Han are already a content word.
-    if ([...t].length < (/^[\x00-\x7F]+$/.test(t) ? 4 : denseFloor)) return;
-    const key = t.toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-    terms.push(t);
+    if ([...t].length >= (/^[\x00-\x7F]+$/.test(t) ? 4 : denseFloor)) {
+      const key = t.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        terms.push(t);
+      }
+    }
+    const stripped = stripJosa(t);
+    if (stripped && [...stripped].length >= denseFloor) {
+      const key = stripped.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        terms.push(stripped);
+      }
+    }
   };
   for (const m of prompt.matchAll(ASCII_RE)) add(m[0]!);
   for (const m of prompt.matchAll(UNSPACED_RUN_RE)) for (const w of unspacedWindows(m[0]!)) add(w);
@@ -269,6 +276,15 @@ export function buildTurnContext(repo: string, prompt: string, sessionId = ""): 
       if (!rows.length && subFloor.length) {
         rows = w.searchBelowFloor(db, [...queryTerms, ...subFloor], 40, "wiki");
       }
+      // Identity candidates ride along LAST, after both body passes have said their piece — this
+      // block must never preempt the below-floor gate above (it keys on "body found nothing", and
+      // an identity row is not a body hit). They exist because a hub page whose BODY never repeats
+      // its own title (or spells it with different spacing) is invisible to both passes above, so
+      // it could never be scored at all. Appended, not prepended — the scorer owns the order, and
+      // the witness/score gate still decides whether anything is said.
+      if (queryTerms.length || subFloor.length) {
+        rows = [...rows, ...w.identityCandidates(db, [...new Set([...queryTerms, ...subFloor])])];
+      }
     } finally {
       db.close();
     }
@@ -282,7 +298,10 @@ export function buildTurnContext(repo: string, prompt: string, sessionId = ""): 
     // page a substring pass found, leaving the recall it just bought unused.
     const scoreTerms = [...queryTerms, ...subFloor];
     const curSet = new Set([...terms, ...subFloor].map((t) => t.toLowerCase()));
-    const byPage = new Map<string, { title: string; terms: Set<string>; cur: number; hits: number }>();
+    const byPage = new Map<
+      string,
+      { title: string; terms: Set<string>; idTerms: Set<string>; cur: number; hits: number }
+    >();
     for (const r of rows) {
       const rel = String(r.relative_path ?? "");
       const base = rel.split("/").pop() ?? "";
@@ -292,21 +311,49 @@ export function buildTurnContext(repo: string, prompt: string, sessionId = ""): 
          l0Basenames.has(base) ||
          rel.includes(`/${cfg.queueDir}/`)
        ) continue;
+      const fresh = !byPage.has(rel);
       const e =
-        byPage.get(rel) ?? { title: String(r.title ?? base), terms: new Set<string>(), cur: 0, hits: 0 };
-      e.hits += 1;
-      const content = String(r.content ?? "").toLowerCase();
+        byPage.get(rel) ??
+        { title: String(r.title ?? base), terms: new Set<string>(), idTerms: new Set<string>(), cur: 0, hits: 0 };
+      // A term in the page's IDENTITY (title/filename/description) is a stronger witness than one
+      // in a body chunk — it is the hub-vs-mention distinction. Query helpers label provenance
+      // explicitly: identity rows can contribute identity terms, but never inflate the body-hit
+      // tie-breaker. The identity haystack carries a whitespace-stripped copy, so "문서허브" can
+      // match "문서 허브". Chunks are not despaced — this is a title privilege, not fuzzy body
+      // matching.
+      const identityCandidate = r.candidate_kind === "identity";
+      if (!identityCandidate) e.hits += 1;
+      const content = identityCandidate ? "" : String(r.content ?? "").toLowerCase();
+      let identity = "";
+      if (fresh) {
+        const idBase = `${e.title} ${base}`.toLowerCase();
+        identity = `${idBase} ${idBase.replace(/[\s-]+/g, "")}`;
+      }
+      if (identityCandidate) {
+        const description = String(r.content ?? "").toLowerCase();
+        identity += ` ${description} ${description.replace(/[\s-]+/g, "")}`;
+      }
       for (const t of scoreTerms) {
         const lt = t.toLowerCase();
-        if (!content.includes(lt)) continue;
+        const inIdentity = identity.includes(lt);
+        if (!content.includes(lt) && !inIdentity) continue;
         if (!e.terms.has(lt) && curSet.has(lt)) e.cur += 1;
         e.terms.add(lt);
+        // Identity promotion is reserved for terms at or above the trigram floor (3 dense / 4
+        // Latin). A 2-char word in a title is everyday vocabulary, not a topic — promoting it let
+        // "내일 회의 몇 시더라" clear the gate off one title's "회의" (measured filler FP).
+        if (inIdentity && [...t].length >= (/^[\x00-\x7F]+$/.test(t) ? 4 : 3)) e.idTerms.add(lt);
       }
       byPage.set(rel, e);
     }
 
-    const score = (e: { terms: Set<string> }) =>
-      [...e.terms].reduce((s, t) => s + termWeight(t), 0);
+    // An identity-matched term is specific regardless of its length: a compact identifier can be
+    // weight 1 by the length rule, so a prompt about exactly one topic could never clear the ≥2 gate even
+    // when a page's TITLE names that topic — the gate meant to stop filler was stopping hubs.
+    // Identity carries the same authority here as in search's title boost, and only identity:
+    // body mentions keep the length-based weight that was measured against filler.
+    const score = (e: { terms: Set<string>; idTerms: Set<string> }) =>
+      [...e.terms].reduce((s, t) => s + (e.idTerms.has(t) ? 2 : termWeight(t)), 0);
     // One gate for both paths. A stricter bar for sub-floor-only evidence was tried and measured on
     // this wiki (91 chunks): it cost a relevant prompt and removed no noise, because the one filler
     // prompt that qualifies clears either bar. Corpus frequency was tried as a filter too and is

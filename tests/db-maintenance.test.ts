@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +8,7 @@ import {
   compactDatabase,
   DEFAULT_DB_COMPACTION_POLICY,
   ftsIndexBytes,
+  ftsSyncMessages,
   inspectDatabaseHealth,
 } from "../src/engine/db-maintenance.ts";
 
@@ -230,5 +232,93 @@ describe("WikiIndex maintenance", () => {
     expect(health.integrity.ok).toBeFalse();
     expect(result).toMatchObject({ kind: "refused", reason: "integrity_failed" });
     expect(pagesAfter).toBe(pagesBefore);
+  });
+});
+
+describe("external-content FTS drift (silent-quality-regression guard)", () => {
+  let root: string;
+  let idx: WikiIndex;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "llmwiki-drift-"));
+    const wiki = join(root, "docs", "wiki");
+    mkdirSync(wiki, { recursive: true });
+    writeFileSync(join(wiki, "hub.md"), "---\ntitle: Hub Page\ndescription: d\n---\n\n" + "hub body content ".repeat(40));
+    idx = new WikiIndex(root);
+    const conn = idx.connect();
+    idx.indexAll(conn);
+    conn.close();
+  });
+
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  test("a drifted pages_fts fails integrity on a writable connection", () => {
+    const conn = idx.connect();
+    conn.exec("INSERT INTO pages_fts(pages_fts) VALUES('delete-all')");
+    const report = inspectDatabaseHealth(conn);
+    conn.close();
+    expect(report.integrity.ok).toBe(false);
+    expect(report.integrity.messages.join(" ")).toContain("pages_fts");
+  });
+
+  test("a read-only probe still sees the drift (docsize, not the content-table echo)", () => {
+    // COUNT(*) on an external-content FTS answers from the CONTENT table — measured: a
+    // delete-all'd index read as clean through that probe. _docsize is the indexed truth.
+    let conn = idx.connect();
+    conn.exec("INSERT INTO pages_fts(pages_fts) VALUES('delete-all')");
+    conn.close();
+    const { Database } = require("bun:sqlite");
+    const ro = new Database(join(String(idx.dbPath)), { readonly: true });
+    const report = inspectDatabaseHealth(ro);
+    ro.close();
+    expect(report.integrity.ok).toBe(false);
+    expect(report.integrity.messages.join(" ")).toContain("pages_fts indexes 0 row(s)");
+  });
+
+  test("a read-only legacy database may omit pages_fts", () => {
+    const conn = idx.connect();
+    conn.exec("DROP TRIGGER pages_fts_insert; DROP TRIGGER pages_fts_delete; DROP TRIGGER pages_fts_update; DROP TABLE pages_fts");
+    conn.close();
+    const ro = new Database(join(String(idx.dbPath)), { readonly: true });
+    const report = inspectDatabaseHealth(ro);
+    ro.close();
+    expect(report.integrity.ok).toBe(true);
+  });
+
+  test("an unexpected primary FTS error fails integrity closed", () => {
+    const conn = idx.connect();
+    conn.exec("DROP TRIGGER chunks_fts_insert; DROP TRIGGER chunks_fts_delete; DROP TRIGGER chunks_fts_update; DROP TABLE chunks_fts");
+    const report = inspectDatabaseHealth(conn);
+    conn.close();
+    expect(report.integrity.ok).toBe(false);
+    expect(report.integrity.messages.join(" ")).toContain("fts integrity check failed for chunks_fts");
+  });
+
+  test("an unexpected read-only fallback error fails integrity closed", () => {
+    const fake = {
+      run: () => {
+        throw new Error("attempt to write a readonly database");
+      },
+      query: () => ({
+        get: () => {
+          throw new Error("disk I/O error");
+        },
+      }),
+    } as unknown as Database;
+    expect(ftsSyncMessages(fake, "chunks_fts", "document_chunks")).toEqual([
+      "fts readonly fallback failed for chunks_fts: disk I/O error",
+    ]);
+  });
+
+  test("reindex repairs the drift — triggers repopulate both FTS tables", () => {
+    let conn = idx.connect();
+    conn.exec("INSERT INTO pages_fts(pages_fts) VALUES('delete-all')");
+    conn.exec("INSERT INTO chunks_fts(chunks_fts) VALUES('delete-all')");
+    expect(inspectDatabaseHealth(conn).integrity.ok).toBe(false);
+    conn.close();
+    idx.reindex();
+    conn = idx.connect();
+    expect(inspectDatabaseHealth(conn).integrity.ok).toBe(true);
+    conn.close();
   });
 });

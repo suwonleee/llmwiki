@@ -4,7 +4,8 @@
 // reads its slice by repo path and advances the watermark here.
 import { Database } from "bun:sqlite";
 import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
+import { tmpdir } from "node:os";
 import { captureBucket } from "./wiki-root.ts";
 import {
   EXPORT_TTL_DAYS,
@@ -1066,14 +1067,53 @@ export function pruneExports(ttlDays = EXPORT_TTL_DAYS, now = Date.now()): { pai
   return { pairs: expired.length, rows };
 }
 
-export function prune(olderThanDays = 30): { removed: number; kept: number } {
+// Worktrees under the OS temp root are ephemeral BY LOCATION: A/B fixtures, scratchpad clones,
+// simulation repos. When such a directory is gone it is gone by design — no /wiki-save will ever
+// run there, so its pending rows can only sit in the queue forever. Measured before this rule
+// existed: 193 of 425 pending rows (44%) pointed at deleted /tmp experiment repos. Nothing outside
+// these roots is ever judged this way — a missing repo on an unmounted volume (/Volumes/…) or a
+// temporarily moved project stays pending, because "missing right now" is not evidence there.
+// `tmpdir()` is the platform's own answer. Add only the aliases the current OS actually uses:
+// POSIX `/tmp` remains temporary even when TMPDIR points elsewhere, while `/private/tmp` and
+// `/var/folders` are macOS-specific. Treating those absolute names as temporary on every OS could
+// auto-skip a durable or temporarily detached repository merely because its path looked familiar.
+const EPHEMERAL_ROOTS = [
+  ...new Set(
+    [
+      tmpdir(),
+      ...(process.platform === "darwin" ? ["/tmp", "/private/tmp", "/var/folders"] : []),
+      ...(process.platform === "linux" ? ["/tmp"] : []),
+    ].map((r) => resolve(r)),
+  ),
+];
+
+function isEphemeralRepoPath(repo: string): boolean {
+  const p = resolve(repo);
+  return EPHEMERAL_ROOTS.some((root) => p === root || p.startsWith(root + sep));
+}
+
+export function prune(olderThanDays = 30): { removed: number; kept: number; skippedEphemeral: number } {
   const db = connect();
   const rows = db
-    .query("SELECT transcript_path, first_seen FROM capture_queue WHERE status='pending'")
-    .all() as { transcript_path: string; first_seen: string | null }[];
+    .query("SELECT transcript_path, first_seen, repo FROM capture_queue WHERE status='pending'")
+    .all() as { transcript_path: string; first_seen: string | null; repo: string | null }[];
   const cutoffMs = Date.now() - olderThanDays * 86_400_000;
   let removed = 0;
+  // Destination-gone first, no age guard: deletion of a temp-root worktree is definitive the
+  // moment it happens (unlike a missing transcript, where the age guard buys time for a rotation
+  // race). `skipped`, not `lost` — the transcript may well still exist; what is gone is any wiki
+  // for the session to condense into.
+  let skippedEphemeral = 0;
+  const remaining: typeof rows = [];
   for (const r of rows) {
+    if (r.repo && isEphemeralRepoPath(r.repo) && !existsSync(r.repo)) {
+      db.run("UPDATE capture_queue SET status='skipped' WHERE transcript_path = ?", [r.transcript_path]);
+      skippedEphemeral++;
+      continue;
+    }
+    remaining.push(r);
+  }
+  for (const r of remaining) {
     const alive =
       existsSync(r.transcript_path) ||
       (!r.transcript_path.endsWith(".zst") && existsSync(`${r.transcript_path}.zst`));
@@ -1087,7 +1127,7 @@ export function prune(olderThanDays = 30): { removed: number; kept: number } {
     db.run("UPDATE capture_queue SET status='lost' WHERE transcript_path = ?", [r.transcript_path]);
     removed++;
   }
-  const kept = rows.length - removed;
+  const kept = rows.length - removed - skippedEphemeral;
   // Hints outlive nothing: once the harness has deleted the transcript there is no session left to
   // route, and the row is only a path→repository pair we were told about. Dropping them here keeps
   // the table the same size as "sessions that still exist", not "sessions that ever existed".
@@ -1098,5 +1138,5 @@ export function prune(olderThanDays = 30): { removed: number; kept: number } {
     if (!alive) db.run("DELETE FROM route_hint WHERE transcript_path = ?", [h.transcript_path]);
   }
   db.close();
-  return { removed, kept };
+  return { removed, kept, skippedEphemeral };
 }

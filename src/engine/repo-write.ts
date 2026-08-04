@@ -225,10 +225,25 @@ export function repoFileMetadata(root: string, relativePath: string): RepoFileMe
   if (fd === null) return null;
   try {
     const st = fstatSync(fd, { bigint: true });
+    // `mtimeNs` is not guaranteed by every supported runtime, even when bigint stats are asked
+    // for: bun 1.2.x fills it on statSync and leaves it UNDEFINED on fstatSync (fixed by 1.3).
+    // The declared type said bigint, so a caller that trusted it crashed with "undefined is not
+    // an object" on the floor runtime while passing on the author's machine — a type contract is
+    // not a runtime contract. Derived from mtimeMs when absent (bun 1.2 reports it as a number
+    // carrying sub-millisecond digits, 1.3 as a bigint), and 0n when nothing usable exists, which
+    // callers read as "this timestamp is not decisive" rather than as a time.
+    const mtimeMs = Number(st.mtimeMs);
+    const rawNs: unknown = st.mtimeNs;
+    const mtimeNs =
+      typeof rawNs === "bigint"
+        ? rawNs
+        : Number.isFinite(mtimeMs)
+          ? BigInt(Math.round(mtimeMs * 1_000_000))
+          : 0n;
     return {
       size: Number(st.size),
-      mtimeMs: Number(st.mtimeMs),
-      mtimeNs: st.mtimeNs,
+      mtimeMs,
+      mtimeNs,
     };
   } catch {
     return null;

@@ -107,7 +107,10 @@ export function createMaintenanceHandlers(dependencies: MaintenanceDependencies)
         die("capture-prune [--older-than <days>] — days must be a non-negative number");
       }
       const result = capture.prune(days);
-      console.log(`✓ capture queue pruned: ${result.removed} expired row(s) recorded as lost (kept as an audit ledger, never deleted), ${result.kept} pending kept (age guard ${days}d)`);
+      console.log(
+        `✓ capture queue pruned: ${result.removed} expired row(s) recorded as lost (kept as an audit ledger, never deleted), ` +
+          `${result.skippedEphemeral} deleted temp-repo row(s) marked skipped, ${result.kept} pending kept (age guard ${days}d)`,
+      );
       // The queue is metadata; the OpenCode exports are conversation TEXT and expire on their own
       // clock (30 days by the newest member of an export/meta pair). The daemon does this daily —
       // doing it here too means the explicit maintenance path is not weaker than the automatic one.

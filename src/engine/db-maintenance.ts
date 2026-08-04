@@ -108,6 +108,62 @@ export function ftsIndexBytes(db: Database): number | null {
   }
 }
 
+/**
+ * External-content FTS sync — the drift PRAGMA integrity_check cannot see. chunks_fts and
+ * pages_fts hold no text of their own; when they fall out of step with their content tables the
+ * database is page-perfect and search is silently WRONG (stale ranking, missing hub hits) — a
+ * quality regression indistinguishable from working until someone measures it. Reported as an
+ * integrity failure because everything downstream then does the right thing already: db-health
+ * says failed, compact refuses (VACUUM cannot fix this), and `wiki-doctor --fix` rebuilds the
+ * derived index, whose reinserts re-fire the triggers and repopulate both tables.
+ *
+ * The FTS 'integrity-check' command is an INSERT, so a read-only connection (wiki-doctor's
+ * precheck probe) cannot run it — there the countable half of the question stands in: a row-count
+ * mismatch is the common drift shape (a missed trigger), and "cannot check" must never read as
+ * "drifted", so an absent table (a legacy DB the next real connect will backfill) reports clean.
+ */
+export function ftsSyncMessages(db: Database, fts: string, contentTable: string): string[] {
+  try {
+    db.run(`INSERT INTO ${fts}(${fts}, rank) VALUES('integrity-check', 1)`);
+    return [];
+  } catch (e: any) {
+    const message = String(e?.message ?? e);
+    if (/malformed|corrupt/i.test(message)) {
+      return [`fts drift: ${fts} is out of sync with ${contentTable} — run wiki-doctor --fix to rebuild the derived index`];
+    }
+    if (fts === "pages_fts" && /no such table:\s*(?:main\.)?pages_fts\b/i.test(message)) {
+      return []; // legacy database; WikiIndex.connect creates and backfills this optional index
+    }
+    if (!/attempt to write a readonly database/i.test(message)) {
+      return [`fts integrity check failed for ${fts}: ${message}`];
+    }
+    try {
+      // NOT `COUNT(*) FROM ${fts}`: an external-content FTS answers table scans from its CONTENT
+      // table, so that count matches by construction even when the index is empty — measured: a
+      // delete-all'd pages_fts read as clean through this probe. The `_docsize` shadow table has
+      // one row per document actually IN the index, and plain reads work on a read-only handle.
+      const a = (db.query(`SELECT COUNT(*) AS c FROM ${fts}_docsize`).get() as { c: number }).c;
+      const b = (db.query(`SELECT COUNT(*) AS c FROM ${contentTable}`).get() as { c: number }).c;
+      return a === b ? [] : [`fts drift: ${fts} indexes ${a} row(s) for ${b} ${contentTable} row(s) — run wiki-doctor --fix`];
+    } catch (fallbackError: any) {
+      const fallbackMessage = String(fallbackError?.message ?? fallbackError);
+      if (fts === "pages_fts" && /no such table:\s*(?:main\.)?pages_fts(?:_docsize)?\b/i.test(fallbackMessage)) {
+        try {
+          const exists = db
+            .query<{ readonly present: number }, [string]>(
+              "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?) AS present",
+            )
+            .get(fts)?.present;
+          if (exists === 0) return []; // legacy database; the whole optional FTS table is absent
+        } catch (existenceError: any) {
+          return [`fts readonly fallback failed for ${fts}: ${String(existenceError?.message ?? existenceError)}`];
+        }
+      }
+      return [`fts readonly fallback failed for ${fts}: ${fallbackMessage}`];
+    }
+  }
+}
+
 function inspectIntegrity(db: Database): DatabaseHealthReport["integrity"] {
   const messages = db
     .query<IntegrityRow, []>("PRAGMA integrity_check")
@@ -118,7 +174,14 @@ function inspectIntegrity(db: Database): DatabaseHealthReport["integrity"] {
     .query<ForeignKeyRow, []>("PRAGMA foreign_key_check")
     .all()
     .map((row) => `foreign key: ${row.table} row ${row.rowid} references ${row.parent} (${row.fkid})`);
-  return { ok: messages.length === 0 && foreignKeyMessages.length === 0, messages: [...messages, ...foreignKeyMessages] };
+  const ftsMessages = [
+    ...ftsSyncMessages(db, "chunks_fts", "document_chunks"),
+    ...ftsSyncMessages(db, "pages_fts", "documents"),
+  ];
+  return {
+    ok: messages.length === 0 && foreignKeyMessages.length === 0 && ftsMessages.length === 0,
+    messages: [...messages, ...foreignKeyMessages, ...ftsMessages],
+  };
 }
 
 export function inspectDatabaseHealth(

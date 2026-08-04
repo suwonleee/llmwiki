@@ -64,6 +64,22 @@ CREATE INDEX IF NOT EXISTS idx_documents_relative_path ON documents(relative_pat
 CREATE INDEX IF NOT EXISTS idx_documents_path ON documents(path);
 CREATE INDEX IF NOT EXISTS idx_documents_source_kind ON documents(source_kind);
 
+-- `refs-built` certifies that document_references was derived from the CURRENT document rows.
+-- Invalidate it inside the same SQLite statement transaction as every graph-input mutation, so
+-- a process exit after an INSERT/UPDATE/DELETE can never leave an old graph falsely certified.
+-- Invalidate on every UPDATE. The graph already consumes filename, title, path, relative_path,
+-- status and content, and a narrow column list is too easy to leave stale as resolution evolves.
+CREATE TRIGGER IF NOT EXISTS refs_built_invalidate_insert AFTER INSERT ON documents BEGIN
+    DELETE FROM index_build WHERE key = 'refs-built';
+END;
+CREATE TRIGGER IF NOT EXISTS refs_built_invalidate_delete AFTER DELETE ON documents BEGIN
+    DELETE FROM index_build WHERE key = 'refs-built';
+END;
+CREATE TRIGGER IF NOT EXISTS refs_built_invalidate_update
+AFTER UPDATE ON documents BEGIN
+    DELETE FROM index_build WHERE key = 'refs-built';
+END;
+
 -- ~512-token chunks per document (see chunker.ts) — the unit of full-text search.
 -- header_breadcrumb carries the markdown heading trail ("Guide > Setup > macOS") so a
 -- search hit can show where in the page it landed.
@@ -105,6 +121,11 @@ CREATE TRIGGER IF NOT EXISTS chunks_fts_update AFTER UPDATE ON document_chunks B
     INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES('delete', old.rowid, old.content);
     INSERT INTO chunks_fts(rowid, content) VALUES (new.rowid, new.content);
 END;
+
+-- The page-identity full-text index (pages_fts: title · description · filename) is NOT declared
+-- here: its triggers reference documents.description, a column the frontmatter-metadata migration
+-- may still have to ADD on a legacy index — so db.ts creates it (ensurePagesFts) strictly after
+-- that migration has run. Rationale and DDL live beside that code.
 
 -- Directed edges of the citation/link graph (refs.ts materializes these from page
 -- footnotes and [[wiki links]]): 'cites' = footnote to a source/transcript,

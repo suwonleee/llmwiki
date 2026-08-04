@@ -31,6 +31,7 @@ import {
   expiredExportPairs,
   isOwnedStateDir,
   purgeOwnedState,
+  rotateDaemonLog,
   stateMarkerBytes,
 } from "../src/engine/state-dir.ts";
 
@@ -126,6 +127,10 @@ describe("state root ownership", () => {
     ensureOwnedStateRoot(root);
     const pair = modernExportPair(root);
     const exportDir = join(root, "opencode-export");
+    const rotatedLog = join(root, "daemon.log.1");
+    const rotationTemp = join(root, ".daemon.log.1.tmp-123-abc");
+    writeFileSync(rotatedLog, "older private log\n", { mode: 0o666 });
+    writeFileSync(rotationTemp, "interrupted private copy\n", { mode: 0o666 });
     for (const path of [root, exportDir]) chmodSync(path, 0o777);
     for (const path of [join(root, STATE_MARKER), pair.jsonl, pair.meta]) chmodSync(path, 0o666);
 
@@ -135,6 +140,8 @@ describe("state root ownership", () => {
     expect(mode(join(root, STATE_MARKER))).toBe(0o600);
     expect(mode(pair.jsonl)).toBe(0o600);
     expect(mode(pair.meta)).toBe(0o600);
+    expect(mode(rotatedLog)).toBe(0o600);
+    expect(mode(rotationTemp)).toBe(0o600);
   });
 
   test("a repository .env cannot redirect machine-local state", () => {
@@ -338,12 +345,71 @@ describe("state root ownership", () => {
   });
 });
 
+describe("daemon log rotation", () => {
+  test("refuses to rotate a log in a state root llmwiki does not own", () => {
+    const root = join(scratch(), "foreign");
+    mkdirSync(root);
+    const live = join(root, "daemon.log");
+    writeFileSync(live, "FOREIGN LOG MUST SURVIVE\n");
+
+    expect(() => rotateDaemonLog(root, 0)).toThrow(StateRootError);
+    expect(readFileSync(live, "utf-8")).toBe("FOREIGN LOG MUST SURVIVE\n");
+    expect(existsSync(join(root, "daemon.log.1"))).toBe(false);
+  });
+
+  test("rotates only above the threshold, preserves content, truncates live, and creates mode 0600", () => {
+    const root = join(scratch(), "state");
+    ensureOwnedStateRoot(root);
+    const live = join(root, "daemon.log");
+    const rotated = join(root, "daemon.log.1");
+    const content = "private daemon inventory\n".repeat(8);
+    writeFileSync(live, content, { mode: 0o600 });
+
+    expect(rotateDaemonLog(root, Buffer.byteLength(content))).toBeNull();
+    expect(readFileSync(live, "utf-8")).toBe(content);
+    expect(existsSync(rotated)).toBe(false);
+
+    expect(rotateDaemonLog(root, Buffer.byteLength(content) - 1)).toBe(Buffer.byteLength(content));
+    expect(readFileSync(rotated, "utf-8")).toBe(content);
+    expect(readFileSync(live, "utf-8")).toBe("");
+    if (POSIX) expect(mode(rotated)).toBe(0o600);
+  });
+
+  test("never follows planted live or rotated symlinks", () => {
+    if (!POSIX) return;
+    const root = join(scratch(), "state");
+    ensureOwnedStateRoot(root);
+    const live = join(root, "daemon.log");
+    const rotated = join(root, "daemon.log.1");
+    const liveTarget = join(scratch(), "live-target.txt");
+    const rotatedTarget = join(scratch(), "rotated-target.txt");
+    writeFileSync(liveTarget, "LIVE TARGET MUST SURVIVE\n");
+    writeFileSync(rotatedTarget, "ROTATED TARGET MUST SURVIVE\n");
+
+    symlinkSync(liveTarget, live);
+    expect(() => rotateDaemonLog(root, 0)).toThrow(StateRootError);
+    expect(readFileSync(liveTarget, "utf-8")).toBe("LIVE TARGET MUST SURVIVE\n");
+    expect(existsSync(rotated)).toBe(false);
+
+    unlinkSync(live);
+    const content = "real daemon log\n";
+    writeFileSync(live, content, { mode: 0o600 });
+    symlinkSync(rotatedTarget, rotated);
+    expect(rotateDaemonLog(root, 0)).toBe(Buffer.byteLength(content));
+    expect(lstatSync(rotated).isSymbolicLink()).toBe(false);
+    expect(readFileSync(rotated, "utf-8")).toBe(content);
+    expect(readFileSync(rotatedTarget, "utf-8")).toBe("ROTATED TARGET MUST SURVIVE\n");
+    expect(readFileSync(live, "utf-8")).toBe("");
+  });
+});
+
 describe("owned-state purge", () => {
   function ownedRootWithContent(): string {
     const root = join(scratch(), "state");
     ensureOwnedStateRoot(root);
     writeFileSync(join(root, "capture.db"), "db");
     writeFileSync(join(root, "daemon.log"), "log");
+    writeFileSync(join(root, "daemon.log.1"), "older log");
     mkdirSync(join(root, "opencode-export"));
     writeFileSync(
       join(root, "opencode-export", "ses_1.jsonl"),
@@ -364,6 +430,7 @@ describe("owned-state purge", () => {
     expect(result.error).toBeUndefined();
     expect(result.removed).toContain("capture.db");
     expect(result.removed).toContain("daemon.log");
+    expect(result.removed).toContain("daemon.log.1");
     expect(result.removed).toContain(STATE_MARKER);
     expect(result.rootRemoved).toBe(true);
     expect(existsSync(root)).toBe(false);
@@ -392,6 +459,41 @@ describe("owned-state purge", () => {
     expect(result.error).toContain("does not own");
     expect(result.removed).toEqual([]);
     expect(existsSync(join(root, "capture.db"))).toBe(true);
+  });
+
+  test("purge never follows a planted daemon.log.1 symlink", () => {
+    if (!POSIX) return;
+    const root = ownedRootWithContent();
+    const target = join(scratch(), "rotation-target.txt");
+    writeFileSync(target, "DO NOT DELETE\n");
+    unlinkSync(join(root, "daemon.log.1"));
+    symlinkSync(target, join(root, "daemon.log.1"));
+
+    const result = purgeOwnedState(root);
+
+    expect(readFileSync(target, "utf-8")).toBe("DO NOT DELETE\n");
+    expect(lstatSync(join(root, "daemon.log.1")).isSymbolicLink()).toBe(true);
+    expect(result.removed).not.toContain("daemon.log.1");
+    expect(result.retained).toContain("daemon.log.1");
+  });
+
+  test("purge removes a crash-leftover rotation temp but never follows a lookalike symlink", () => {
+    if (!POSIX) return;
+    const root = ownedRootWithContent();
+    const leftover = ".daemon.log.1.tmp-123-abc";
+    const planted = ".daemon.log.1.tmp-456-def";
+    const target = join(scratch(), "rotation-temp-target.txt");
+    writeFileSync(join(root, leftover), "PRIVATE PARTIAL LOG\n", { mode: 0o600 });
+    writeFileSync(target, "DO NOT DELETE\n");
+    symlinkSync(target, join(root, planted));
+
+    const result = purgeOwnedState(root);
+
+    expect(result.removed).toContain(leftover);
+    expect(existsSync(join(root, leftover))).toBe(false);
+    expect(readFileSync(target, "utf-8")).toBe("DO NOT DELETE\n");
+    expect(lstatSync(join(root, planted)).isSymbolicLink()).toBe(true);
+    expect(result.retained).toContain(planted);
   });
 
   test("purge never follows a symlink out of the export directory", () => {

@@ -27,7 +27,7 @@ describe("chunker version migration", () => {
 
   test("an unchanged wiki is not re-chunked when the counting rule is the same", () => {
     const conn = idx.connect();
-    expect(idx.indexAll(conn)).toEqual([0, 0]);
+    expect(idx.indexAll(conn)).toEqual([0, 0, 0]);
     conn.close();
   });
 
@@ -47,7 +47,7 @@ describe("chunker version migration", () => {
 
     // …and it settles: the marker is current again, so the next open is a no-op.
     conn = idx.connect();
-    expect(idx.indexAll(conn)).toEqual([0, 0]);
+    expect(idx.indexAll(conn)).toEqual([0, 0, 0]);
     conn.close();
   });
 });

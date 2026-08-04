@@ -8,6 +8,7 @@
 // size polling, 30s); uses chokidar for instant capture only if it happens to be installed.
 import { existsSync } from "node:fs";
 import * as capture from "../engine/capture.ts";
+import { rotateDaemonLog } from "../engine/state-dir.ts";
 import { reassertClaudeReadHooks } from "../engine/doctor.ts";
 import { checkEngineUpdate } from "../engine/update-check.ts";
 import { runProjectMaintenance } from "../engine/project-maintenance.ts";
@@ -290,6 +291,40 @@ function pruneExportsIfDue(force = false): void {
     if (pairs) log(`retention: removed ${pairs} expired OpenCode export pair(s), ${rows} pending row(s)`);
   } catch (e) {
     log(`retention FAILED (will retry tomorrow): ${e}`);
+  }
+  // Queue retention on the same clock. Until this line, `capture.prune()` only ran when a human
+  // typed `llmwiki capture-prune` — which meant tombstoning existed as a command nobody runs while
+  // the pending set silently accumulated dead rows (measured: 425 pending, 44% of them pointing at
+  // deleted /tmp experiment repos, oldest past the harness's own retention window). Same fail-safe
+  // shape as above: a broken prune costs one day, never the sweep.
+  try {
+    const { removed, skippedEphemeral } = capture.prune();
+    if (removed || skippedEphemeral) {
+      log(`retention: queue prune — ${removed} lost tombstone(s), ${skippedEphemeral} ephemeral-repo skip(s)`);
+    }
+  } catch (e) {
+    log(`queue prune FAILED (will retry tomorrow): ${e}`);
+  }
+  rotateDaemonLogIfOversized();
+}
+
+// daemon.log has no rotation anywhere else: the service definitions append via `>>` forever, and
+// the measured result was 11.7MB in two months on one machine. Copy-truncate, NOT rename: the
+// shell holds the append-mode fd from that `>>`, so renaming would divert every subsequent line
+// into the rotated file, while truncating in place lets O_APPEND writes continue at the new EOF.
+// One generation kept (daemon.log.1) — this is an operational log, not an audit ledger; the audit
+// ledger is capture.db, which is exactly why THIS file is safe to rotate and that one is not.
+const LOG_ROTATE_BYTES = 5 * 1024 * 1024;
+
+function rotateDaemonLogIfOversized(): void {
+  try {
+    const size = rotateDaemonLog(capture.stateDir(), LOG_ROTATE_BYTES);
+    if (size === null) return;
+    log(`rotated daemon.log (${size} bytes → daemon.log.1)`);
+  } catch (e) {
+    // Windows can refuse the truncate while cmd holds the handle; a fat log is not worth a dead
+    // daemon, and the failure is visible right here in the log it failed to rotate.
+    log(`log rotation FAILED (will retry tomorrow): ${e}`);
   }
 }
 
