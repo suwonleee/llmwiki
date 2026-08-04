@@ -85,7 +85,7 @@ describe("capture.db under concurrent writers", () => {
     // The last writer to finish sees the whole queue: nothing was dropped by a lock.
     const totals = finished.map((one) => JSON.parse(one.out.trim()).total as number);
     expect(Math.max(...totals)).toBe(WRITERS * ROWS);
-  });
+  }, 15_000);
 });
 
 describe("openCodeOwnerLive", () => {

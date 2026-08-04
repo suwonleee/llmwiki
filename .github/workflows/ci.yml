@@ -35,9 +35,13 @@ jobs:
           bun-version: ${{ matrix.bun }}
 
       - name: Install dependencies
+        # Bun 1.1 predates the current text lockfile format. Runtime commands and tests intentionally
+        # need no node_modules (README contract); only typecheck needs the dev dependency install.
+        if: matrix.bun != '1.1.45'
         run: bun install --frozen-lockfile
 
       - name: Typecheck
+        if: matrix.bun != '1.1.45'
         run: bun tsc --noEmit
 
       - name: Shell syntax

@@ -1,8 +1,8 @@
 // Fixtures must compress through whichever zstd this runtime actually has — the same ladder the
 // engine climbs to DECOMPRESS (Bun API → node:zlib → the `zstd` binary; sources/codex.ts). Bun
-// gained zstdCompressSync after 1.2.0, and the CI floor job runs on 1.2.0 precisely to prove the
-// engine's older tiers work there — fixtures written only through the newest API failed that
-// floor for a reason the engine does not share.
+// gained zstdCompressSync after 1.2.0, and the CI floor job runs on 1.1.45 precisely to prove the
+// engine's older external-binary tier works there. Fixtures written only through the newest API
+// failed that floor for a reason the engine does not share.
 export function zstdCompressFixture(plain: Buffer): Buffer {
   try {
     const b: any = globalThis.Bun;
