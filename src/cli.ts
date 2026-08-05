@@ -66,7 +66,9 @@ import { verifyDistillFiles } from "./engine/distill.ts";
 import { runArm, loadArm, judgeArms } from "./engine/compare.ts";
 import { CLONE_ROOT } from "./engine/paths.ts";
 import { existsSync, readFileSync, statSync, type Stats } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { exportHermesSession, hermesDbPath, hermesSessions } from "./engine/hermes-export.ts";
 import { ensureProjectStateDir, resolveProjectStateLocation } from "./engine/project-state.ts";
 
 // User-facing CLI output adapts to LLMWIKI_LANG (default English, Korean when set) — same
@@ -559,6 +561,34 @@ async function cmdIngest(p: Parsed) {
   if (r.reason) console.log(`      reason: ${String(r.reason).slice(0, 160)}`);
   if (r.verify_note) console.log(`      ⚠️ ${ko ? "2차검증" : "2nd-pass verify"}: ${String(r.verify_note).slice(0, 160)}`);
   if (r.lint_errors) console.log(`      ⚠️ lint: ${JSON.stringify(r.lint_errors)}`);
+}
+
+// Hermes write loop. Hermes is not a capture source (see src/engine/hermes-export.ts for why the
+// daemon deliberately does not watch it), so a session is filed in two explicit steps: export the
+// transcript out of Hermes' own store, then hand the file to the existing drop-a-source path.
+// Printing the follow-up command rather than running it keeps the ingest decision — and its
+// --commit — with the caller.
+async function cmdHermesExport(p: Parsed) {
+  const repo = p.positionals[0] ?? die("hermes-export <repo> [--session <id>] [--out <file>] [--list] required");
+  if (!hermesDbPath()) die("no Hermes state database found (looked for $HERMES_HOME/state.db, default ~/.hermes)");
+  const sessions = hermesSessions(repo);
+  if (!sessions.length) die(`no Hermes session recorded for ${repo}`);
+
+  if (p.flags["--list"]) {
+    console.log(`=== hermes sessions for ${repo} (${sessions.length}) ===`);
+    for (const s of sessions.slice(0, 20)) {
+      console.log(`  ${s.id}  ${s.messages} msg  ${s.title ?? ""}`.trimEnd());
+    }
+    return;
+  }
+
+  const wanted = (p.flags["--session"] as string) ?? sessions[0]!.id;
+  const out = (p.flags["--out"] as string) ?? join(tmpdir(), `hermes-${wanted}.md`);
+  const result = exportHermesSession(wanted, out);
+  if (!result) die(`nothing to export for session ${wanted} (unrouted, empty, or fully screened)`);
+  console.log(`=== hermes-export ${result.sessionId} → ${result.path} ===`);
+  console.log(`  repo: ${result.repo} · turns: ${result.turns}${result.redacted ? " · credential-shaped material screened" : ""}`);
+  console.log(`  next: llmwiki ingest ${result.repo} ${result.path} --commit`);
 }
 
 // Register session transcript(s) as citable provenance sources so decision/insight pages can
@@ -1459,6 +1489,7 @@ const HANDLERS: Record<string, (p: Parsed) => void | Promise<void>> = {
   skeleton: cmdSkeleton,
   autoupdate: cmdAutoupdate,
   ingest: cmdIngest,
+  "hermes-export": cmdHermesExport,
   consolidate: cmdConsolidate,
   "distill-verify": cmdDistillVerify,
   topics: cmdTopics,

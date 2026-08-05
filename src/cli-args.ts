@@ -9,7 +9,7 @@ const VALUE_FLAG_NAMES = [
   "--write-model", "--verify-model", "--source", "--dest", "--model", "--date", "--min-pages",
   "--repo", "--max-pages", "--prompt", "--corpus", "--label",
   "--page", "--result", "--question", "--harness", "--older-than", "--review",
-  "--hook-event", "--transcript",
+  "--hook-event", "--transcript", "--out",
 ] as const;
 
 const VALUE_FLAGS = new Set<string>(VALUE_FLAG_NAMES);

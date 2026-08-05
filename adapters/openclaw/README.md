@@ -74,10 +74,22 @@ npm (the same prerequisite the OpenCode path has).
 [`adapters/hermes/README.md`](../hermes/README.md) for the skills-only install shape, which
 applies to OpenClaw's `openclaw skills install` as well.
 
-Transcript capture is also not wired: the engine's capture sources are Claude, Codex and OpenCode
-only, so an OpenClaw session cannot yet be filed into the wiki by `/wiki-save`. **Read injection
-works today; the write loop does not.** Where to start when it is worth building: OpenClaw stores
-sessions in SQLite (`src/config/sessions/session-accessor.sqlite.ts`), with legacy artifacts under
-`~/.openclaw/agents/<agentId>/sessions/`. The existing OpenCode source
-(`src/engine/sources/opencode.ts`) reads a SQLite database the same way and is the template; a new
-source registers in `src/engine/source.ts`.
+## Transcript capture is blocked by OpenClaw's data model, not by effort
+
+**Read injection works today; the write loop cannot be built.** `/wiki-save` needs to know which
+repository a session belongs to, and OpenClaw does not record one.
+
+Its per-agent session store (`src/state/openclaw-agent-db-schema.ts`) is conversation-shaped:
+`session_id`, `session_key`, `session_scope`, `channel`, `account_id`, `chat_type`,
+`primary_conversation_id`, `model`. There is **no `cwd`, no `git_repo_root`, no workspace column**
+anywhere in that schema. Project identity exists at runtime as `activeProjectKeys` — normalized
+git origin strings used for memory ranking — but those are ephemeral (documented as "not persisted
+or restored"), they are not filesystem paths, and they are not written to the session row.
+
+Contrast Hermes, where a session row carries `cwd` and `git_repo_root` outright — which is exactly
+why `llmwiki hermes-export` exists and an `openclaw-export` does not.
+
+So the write loop here needs a change on OpenClaw's side (a session field naming the working
+repository), or a plugin-side side-channel that records `ctx.workspaceDir` per session id as turns
+happen. The second is possible from this adapter but writes state OpenClaw does not own, so it is
+not done here without a reason to.

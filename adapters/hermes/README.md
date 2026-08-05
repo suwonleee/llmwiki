@@ -43,12 +43,33 @@ Without `LLMWIKI_ROOT` or a `llmwiki` on PATH, step 1 resolves to the host's own
 stop rather than guess a path — a guessed root writes wiki pages into the wrong repository, which
 is worse than not running.
 
-## Not covered — transcript capture
+## Filing a Hermes session into the wiki
 
-The engine's capture sources are Claude (JSONL), Codex and OpenCode; a Hermes session is not yet a
-source, so `/wiki-save` there cannot file the session it just ran. Where to start when it is worth
-building: Hermes keeps session state in **SQLite at `$HERMES_HOME/state.db`**
-(`hermes_state.py:250`, FTS5-indexed per `hermes_state_schema.py`) — the same shape as the
-existing OpenCode source (`src/engine/sources/opencode.ts`), which also reads a SQLite database
-rather than a JSONL file. That is the template; a new source registers in
-`src/engine/source.ts`.
+Hermes is **not** a capture source — the daemon does not watch it — so filing is two explicit
+steps instead of automatic:
+
+```bash
+llmwiki hermes-export <repo> --list             # sessions Hermes recorded for this repository
+llmwiki hermes-export <repo>                    # newest one; --session <id> to pick another
+llmwiki ingest <repo> <exported.md> --commit    # the existing drop-a-source path
+```
+
+`hermes-export` reads `$HERMES_HOME/state.db` **read-only** (`hermes_state.py:250`), routes the
+session by its `git_repo_root` column (falling back to `cwd`), and writes one Markdown transcript.
+Rewound (`active = 0`), already-compacted, and tool rows are left out — only conversation turns
+are exported — and credential-shaped material is screened on the way out, with secret-only turns
+dropped entirely. The export file is written `0600`.
+
+### Why an exporter and not a capture source
+
+Every registered `TranscriptSource` materializes into the state root's export directory, and that
+directory is load-bearing security machinery: ownership detection, permission re-assertion, and
+TTL cleanup all key on the single `EXPORT_DIR_NAME` constant. A second export directory means
+editing all three, and those paths guard the user's existing local state on every daemon sweep.
+Hermes has not earned that risk: it is a personal-assistant runtime where repo-scoped coding
+sessions are the secondary use case, and there is no live installation here to verify an adapter
+against. A guard test asserts that nothing registers a `hermes` source and that
+`EXPORT_DIR_NAME` stays single.
+
+Promote it to a real source when Hermes proves worth it — the schema reading is the hard part and
+carries over to `src/engine/sources/`.

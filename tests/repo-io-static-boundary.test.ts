@@ -39,6 +39,8 @@ const ALLOWED_MUTATORS: Record<string, string> = {
     "verifies harness data locations read-only and persists the accepted ones in the machine-local state root — never repository content",
   "engine/capture.ts": "removes expired transcript exports from the machine-local state root",
   "engine/sources/opencode.ts": "materializes OpenCode exports into the machine-local state root",
+  "engine/hermes-export.ts":
+    "writes one Hermes session transcript to a caller-chosen path outside any repository (the ingest hand-off), and stats Hermes' own state.db — never repository content",
   "engine/turncontext.ts": "per-session scratch state in the OS temp dir, not in any repository",
   "engine/update-check.ts": "records the daily origin check in the machine-local state root; reads the engine clone's own package.json — never repository content",
   "engine/claude.ts": "creates and removes the throwaway cwd for a generative subprocess",
