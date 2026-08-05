@@ -1,0 +1,13 @@
+{
+  "id": "llmwiki",
+  "name": "llmwiki",
+  "description": "Per-repository wiki that compounds across sessions: cold-start context and per-turn page pointers, filed back by the /wiki-* skills.",
+  "contracts": {},
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}

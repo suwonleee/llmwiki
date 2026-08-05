@@ -1,0 +1,17 @@
+{
+  "name": "@suwonleee/openclaw-llmwiki",
+  "version": "0.11.2",
+  "description": "Local-first project wiki that compounds across coding sessions. Injects the current-state page at session start and page pointers per turn. Requires Bun and an llmwiki engine on the machine.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": "https://github.com/suwonleee/llmwiki",
+  "peerDependencies": {
+    "openclaw": ">=2026.3.24-beta.2"
+  },
+  "openclaw": {
+    "extensions": ["./llmwiki.ts"],
+    "compat": {
+      "pluginApi": ">=2026.3.24-beta.2"
+    }
+  }
+}
