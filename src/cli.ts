@@ -47,6 +47,21 @@ import * as related from "./engine/related.ts";
 import { reconcileReflected } from "./engine/reconcile.ts";
 import * as quiz from "./engine/quiz.ts";
 import { runBench, writeResults } from "./engine/bench.ts";
+import {
+  discoverClaudeTranscripts,
+  pickTranscripts,
+  scanTranscript,
+  summarizeDownstreamRead,
+} from "./engine/downstream-read.ts";
+import {
+  claudeLedgerReads,
+  discoverCodexRollouts,
+  matchEmissions,
+  readEmissionsFor,
+  recordEmission,
+  scanCodexReads,
+  scanOpenCodeReads,
+} from "./engine/observe.ts";
 import { verifyDistillFiles } from "./engine/distill.ts";
 import { runArm, loadArm, judgeArms } from "./engine/compare.ts";
 import { CLONE_ROOT } from "./engine/paths.ts";
@@ -617,27 +632,27 @@ function writeHookOutput(text: string, p: Parsed): void {
  * Returns the cwd the harness reported, so the READ side can bind to the same repository this
  * WRITE side just filed the session under (see cmdContext).
  */
-async function noteHarnessSession(repo: string): Promise<string | null> {
+async function noteHarnessSession(repo: string): Promise<{ cwd: string | null; session: string | null }> {
   try {
-    if (process.stdin.isTTY) return null;
+    if (process.stdin.isTTY) return { cwd: null, session: null };
     const raw = await Bun.stdin.text();
-    if (!raw.trim()) return null;
+    if (!raw.trim()) return { cwd: null, session: null };
     const payload = JSON.parse(raw) as Record<string, unknown>;
     const harnessCwd = typeof payload.cwd === "string" && payload.cwd.trim() ? payload.cwd.trim() : null;
+    const session = typeof payload.session_id === "string" && payload.session_id.trim() ? payload.session_id : null;
     const transcript = typeof payload.transcript_path === "string" ? payload.transcript_path.trim() : "";
-    if (!transcript) return harnessCwd;
+    if (!transcript) return { cwd: harnessCwd, session };
     // Enrollment first: the hint table must never learn about a repository the human did not enroll.
     const target = harnessCwd ?? repo;
     const status = enrollment.inspectEnrollment(target);
-    if (!status.enabled || !status.worktree) return harnessCwd;
-    const session = typeof payload.session_id === "string" ? payload.session_id : null;
+    if (!status.enabled || !status.worktree) return { cwd: harnessCwd, session };
     // The hint records the session's cwd, not the worktree: recordRouteHint resolves it to the
     // wiki root the session reads, and a nested project with its own wiki must keep its own bucket.
     capture.recordRouteHint(resolve(transcript), target, session, sourceKindForTranscript(transcript));
-    return harnessCwd;
+    return { cwd: harnessCwd, session };
   } catch {
     /* a malformed or absent payload simply teaches us nothing */
-    return null;
+    return { cwd: null, session: null };
   }
 }
 
@@ -654,15 +669,23 @@ async function cmdContext(p: Parsed) {
   // is the reason stdin is safe to touch: a hook's stdin is the payload pipe and the harness closes
   // it, whereas a plugin or a human at a terminal may leave it open forever.
   let target = repo;
+  let hookSession = "";
   if (typeof p.flags["--hook-event"] === "string") {
     // In hook mode the harness's own cwd OUTRANKS the positional. The adapters pass
     // `${CLAUDE_PROJECT_DIR:-$PWD}`, which is the directory the session STARTED in — so a session
     // launched from ~ that works in ~/some-repo would read ~'s wiki for its entire life, while
     // capture (right above, already taking the payload's word) files it under ~/some-repo. Read and
     // write must bind to the same repository or the loop silently compounds into the wrong wiki.
-    target = (await noteHarnessSession(repo)) ?? repo;
+    const noted = await noteHarnessSession(repo);
+    target = noted.cwd ?? repo;
+    hookSession = noted.session ?? "";
   }
   const out = buildContext(target);
+  // Cold-start pointers enter the emission ledger too (index + spine lines) — only in hook mode,
+  // where the payload names the session the pointers were emitted FOR.
+  if (out && hookSession) {
+    recordEmission(wikiRootFor(target, enrollment.inspectEnrollment(target).worktree), hookSession, "cold_start", out);
+  }
   // Zero bytes means ZERO BYTES — not even the newline. An unenrolled repository must be
   // indistinguishable from "llmwiki is not installed" to every harness that runs this on
   // session start, so nothing is written when there is nothing to say.
@@ -704,6 +727,10 @@ async function cmdTurnContext(p: Parsed) {
   // …and retrieval runs against the wiki inside what the gate approved, not a subdirectory of it.
   const root = wikiRootFor(repo, enrollment.inspectEnrollment(repo).worktree);
   const out = prompt ? buildTurnContext(root, prompt, sessionId) : "";
+  // Emission ledger: the engine is the only party that reliably knows what was injected
+  // (OpenCode's transform persists nothing, Codex buries it in a message). One appended line,
+  // no-throw — `llmwiki downstream-read` answers it later with each harness's own read records.
+  if (out) recordEmission(root, sessionId, "turn_context", out);
   writeHookOutput(out, p);
 }
 
@@ -997,7 +1024,13 @@ function cmdBench(p: Parsed) {
   if (subset === "sealed") {
     console.error("⚠️  sealed subset opened — every look weakens it as a regression guard; iterate on --tune-only.");
   }
-  const report = runBench(ws, subset as any);
+  const transcript = typeof p.flags["--transcript"] === "string" ? (p.flags["--transcript"] as string) : "";
+  const limitFlag = typeof p.flags["--limit"] === "string" ? Number(p.flags["--limit"]) : NaN;
+  const report = runBench(ws, subset as any, {
+    downstreamRead: Boolean(p.flags["--downstream-read"]) || Boolean(transcript),
+    transcripts: transcript ? [transcript] : undefined,
+    transcriptLimit: Number.isFinite(limitFlag) ? limitFlag : undefined,
+  });
   const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
   console.log(`=== bench [${report.subset}] ${report.n} queries (${report.n_content} content / ${report.n_refusal} refusal) ===`);
   for (const [k, v] of Object.entries(report.recall)) console.log(`  search ${k}: ${pct(v)}`);
@@ -1023,8 +1056,90 @@ function cmdBench(p: Parsed) {
     console.log(`  reach by where else the answer exists: ${rec.map(([k, v]) => `${k} ${pct(v.reach)} (n=${v.n})`).join(" · ")}`);
     console.log(`  answerable from the wiki and nowhere else: ${pct(ps.irreplaceable)}`);
   }
+  // What happened after the pointer arrived. Separate block, separate denominator: this one is
+  // read off real sessions on THIS machine, not off the golden set.
+  const dr = report.downstream_read;
+  if (dr) {
+    console.log(`--- downstream read (captured sessions; Read tool only) ---`);
+    if (!dr.injected) {
+      console.log(`  no llmwiki injection found in ${dr.transcripts} transcript(s) — not measured`);
+    } else {
+      const ch = (k: "turn_context" | "cold_start") => {
+        const c = dr.by_channel[k];
+        return `${pct(c.reach)} (${c.matched}/${c.injected})`;
+      };
+      console.log(`  pointer opened later in the same session: ${pct(dr.pointer_reach)} (${dr.matched}/${dr.injected})`);
+      console.log(`    turn-context ${ch("turn_context")} · cold-start ${ch("cold_start")}`);
+      console.log(`    over ${dr.transcripts} transcript(s), ${dr.read_events} wiki Read(s)`);
+      console.log(`  not counted: ${dr.blind_spots.join("; ")}`);
+    }
+  }
   const out = writeResults(ws, report);
   console.log(`  → ${out}`);
+}
+
+// The follow-through half of the read loop, standalone. `bench` folds it in when a repo has a
+// golden set; most repos never will, and the question "does anyone open what we point at" is
+// worth asking without one. Reads captured transcripts only — no wiki writes, no session cost.
+function cmdDownstreamRead(p: Parsed) {
+  const scope = p.positionals[0] ?? "";
+  const transcript = typeof p.flags["--transcript"] === "string" ? (p.flags["--transcript"] as string) : "";
+  const limitFlag = typeof p.flags["--limit"] === "string" ? Number(p.flags["--limit"]) : NaN;
+  const files = transcript
+    ? [transcript]
+    : pickTranscripts(discoverClaudeTranscripts(), Number.isFinite(limitFlag) ? limitFlag : 30);
+  const r = summarizeDownstreamRead(files.map((f) => scanTranscript(f)), scope ? resolve(scope) : "");
+  const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
+  console.log(`=== downstream read — ${files.length} transcript(s)${scope ? ` · ${resolve(scope)}` : " · all repos"} ===`);
+  // No early return: a fresh machine has no Claude history yet, and that is exactly when the
+  // ledger section below carries the whole answer.
+  if (!r.injected) {
+    console.log(ko ? "  주입된 포인터 없음 — 측정 불가 (0% 아님)" : "  no injected pointers found — not measured (not 0%)");
+    if (scope) printLedgerSection(resolve(scope));
+    return;
+  }
+  console.log(`  pointer opened later in the same session: ${pct(r.pointer_reach)} (${r.matched}/${r.injected})`);
+  for (const k of ["turn_context", "cold_start"] as const) {
+    const c = r.by_channel[k];
+    if (c.injected) console.log(`    ${k.replace("_", "-")}: ${pct(c.reach)} (${c.matched}/${c.injected})`);
+  }
+  console.log(`  pages: ${r.unique_matched_pages}/${r.unique_injected_pages} distinct pointed pages were opened`);
+  console.log(`  wiki Read tool calls seen: ${r.read_events}${r.malformed_lines ? ` · ${r.malformed_lines} unparsable line(s)` : ""}`);
+  console.log(ko ? "  집계 제외:" : "  not counted:");
+  for (const b of r.blind_spots) console.log(`    - ${b}`);
+  if (scope) printLedgerSection(resolve(scope));
+}
+
+// The emission-ledger view: injections come from the engine's own record (all three harnesses),
+// reads from each harness's persisted tool records. Unlike the transcript scan above, this covers
+// Codex (exec opens) and OpenCode (read-tool parts) — but only from the moment the ledger began.
+function printLedgerSection(root: string): void {
+  const emissions = readEmissionsFor(root);
+  console.log(ko ? `--- 방출 원장 (3하네스 공통) ---` : `--- emission ledger (all harnesses) ---`);
+  if (!emissions.length) {
+    console.log(
+      ko
+        ? "  기록 없음 — 원장은 이 엔진 버전부터 쌓인다 (다음 세션들부터 측정 가능)"
+        : "  empty — the ledger starts with this engine version (measurable from the next sessions on)",
+    );
+    return;
+  }
+  const reads = [...claudeLedgerReads(), ...scanCodexReads(discoverCodexRollouts()), ...scanOpenCodeReads()];
+  const r = matchEmissions(emissions, reads);
+  const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
+  console.log(`  emissions: ${r.emissions} (${r.sessions} session(s)) · pointers ${r.injected}`);
+  console.log(`  opened later in the same session: ${pct(r.pointer_reach)} (${r.matched}/${r.injected})`);
+  for (const k of ["turn_context", "cold_start"] as const) {
+    const c = r.by_channel[k];
+    if (c.injected) console.log(`    ${k.replace("_", "-")}: ${pct(c.reach)} (${c.matched}/${c.injected})`);
+  }
+  const by = Object.entries(r.matched_by_harness);
+  if (by.length) console.log(`  matched by: ${by.map(([h, n]) => `${h} ${n}`).join(" · ")}`);
+  console.log(
+    ko
+      ? "  집계 제외: Codex는 shell 열람을 셈(전용 read 도구 없음) · OpenCode bash 열람 미포함 · 서브에이전트 미포함"
+      : "  notes: Codex counts shell opens (no read tool) · OpenCode bash opens not counted · subagents not counted",
+  );
 }
 
 // P0-1b: frozen-corpus A/B — build+score ONE labeled arm (LLM; run per git-state/config)…
@@ -1324,6 +1439,7 @@ const HANDLERS: Record<string, (p: Parsed) => void | Promise<void>> = {
   "wiki-clean-apply": MAINTENANCE_HANDLERS["wiki-clean-apply"],
   "wiki-doctor": MAINTENANCE_HANDLERS["wiki-doctor"],
   bench: cmdBench,
+  "downstream-read": cmdDownstreamRead,
   "compare-arm": cmdCompareArm,
   "compare-verdict": cmdCompareVerdict,
   index: cmdIndex,

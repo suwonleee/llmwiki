@@ -1,0 +1,28 @@
+{
+  "name": "llmwiki",
+  "version": "0.11.0",
+  "description": "Local-first project wiki that compounds across coding sessions (Karpathy LLM-wiki pattern). Requires Bun.",
+  "author": {
+    "name": "suwonleee",
+    "url": "https://github.com/suwonleee"
+  },
+  "homepage": "https://github.com/suwonleee/llmwiki",
+  "repository": "https://github.com/suwonleee/llmwiki.git",
+  "license": "Apache-2.0",
+  "keywords": [
+    "wiki",
+    "memory",
+    "knowledge-base",
+    "local-first",
+    "markdown"
+  ],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.codex.json",
+  "interface": {
+    "displayName": "llmwiki",
+    "shortDescription": "A project wiki that compounds across sessions — injected on session start, pointed at per turn.",
+    "longDescription": "llmwiki keeps a per-repository wiki as plain Markdown under docs/wiki in your own git. Session start injects the current-state page; each prompt gets at most a few page pointers, and stays silent when unsure. The $wiki-save close-out files the session into the log and the topic encyclopedia. Repositories are opt-in: one init per repo, and unenrolled repositories receive nothing. Requires Bun on PATH. The background capture daemon is part of the clone install, not this plugin. Full disclosure of what it reads, writes and never sends: PLUGIN.md in the repository.",
+    "developerName": "suwonleee",
+    "category": "Developer Tools"
+  }
+}

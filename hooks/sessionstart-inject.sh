@@ -28,5 +28,25 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 PROJ="${CLAUDE_PROJECT_DIR:-$PWD}"
 BUN="$(command -v bun)"
 
+# Plugin-context guards. CLAUDE_PLUGIN_ROOT is set only when a harness runs this file out of an
+# installed plugin — the clone install reaches here with it unset, so both guards are inert there.
+# Codex sets the same variable (codex-rs/hooks/src/engine/discovery.rs exports PLUGIN_ROOT AND
+# CLAUDE_PLUGIN_ROOT), so this branch covers both harnesses — and so must the clone-install check
+# below, which therefore looks at BOTH wiring files.
+if [ -n "$CLAUDE_PLUGIN_ROOT" ]; then
+  # A machine that ALSO ran setup.sh injects through its own wiring; running both delivers every
+  # block twice (measured). The clone install wins — it carries the capture daemon.
+  for W in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "${CODEX_HOME:-$HOME/.codex}/hooks.json"; do
+    grep -q 'hooks/sessionstart-inject.sh' "$W" 2>/dev/null && exit 0
+  done
+  # The plugin's one prerequisite, said once per session. Without this line a bun-less install
+  # is indistinguishable from "the plugin does nothing" — a measured first-five-minutes failure,
+  # and the only case where this hook speaks on an unenrolled machine.
+  if [ -z "$BUN" ]; then
+    echo "[llmwiki] Bun not found — the llmwiki plugin needs Bun (https://bun.sh) on PATH. Wiki injection stays silent until it is installed."
+    exit 0
+  fi
+fi
+
 [ -n "$BUN" ] && "$BUN" "$ROOT/src/cli.ts" context "$PROJ" --hook-event SessionStart 2>/dev/null
 exit 0

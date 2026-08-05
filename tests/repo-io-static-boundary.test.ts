@@ -47,6 +47,10 @@ const ALLOWED_MUTATORS: Record<string, string> = {
   "engine/sqlite-open.ts":
     "copies a foreign harness database into a private OS temp dir when its own directory is not writable, and removes that copy on close — never repository content",
   "engine/bench.ts": "engine-development benchmark writing its own report next to the corpus",
+  "plugin/build-assets.ts":
+    "renders the plugin skill surfaces into the engine clone itself from skill/ sources — build tooling, never repository content",
+  "engine/observe.ts":
+    "appends the emission ledger under the machine-local project state root and reads harness records (Claude transcripts, Codex rollouts, opencode.db read-only) — never repository content",
   "engine/compare.ts": "engine-development A/B harness building disposable temp workspaces",
   "daemon/wire.ts": "installs/removes Claude Code hooks and commands in the user's harness config",
   "daemon/wire-codex.ts": "installs/removes Codex hooks, skills and launcher in the harness config",
@@ -67,6 +71,10 @@ const ALLOWED_READERS: Record<string, string> = {
   "engine/session-lang.ts": "reads harness transcripts to detect the session language",
   "engine/distill.ts": "reads the two snapshots handed to distill-verify explicitly",
   "engine/extract.ts": "reads machine-local transcripts",
+  "plugin/preflight.ts":
+    "stats the engine clone's own tracked files to report what a plugin install would ship — publish tooling, read-only, never repository content",
+  "engine/downstream-read.ts":
+    "reads machine-local transcripts to measure whether an injected pointer was later opened — an offline bench observer that never touches repository content",
   "engine/sources/claude.ts": "reads machine-local Claude transcripts",
   "engine/sources/codex.ts": "reads machine-local Codex rollouts",
   "engine/sources/plain.ts": "reads the file an explicit `ingest` names",

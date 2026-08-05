@@ -87,6 +87,39 @@ must_refuse = true
     expect(r.tc_refusal_ok).toBe(1); // out-of-corpus query → turn-context silent
   });
 
+  test("the golden benchmark never reads session history unless asked", () => {
+    // The same repo must score the same on a machine with no transcripts at all, so
+    // downstream-read is opt-in and absent by default.
+    expect(runBench(root, "all").downstream_read).toBeNull();
+  });
+
+  test("an explicit transcript is measured against the golden run's report", () => {
+    const t = join(mkdtempSync(join(tmpdir(), "llmwiki-bench-dsr-")), "s.jsonl");
+    const page = "docs/wiki/5_topic/x.md";
+    writeFileSync(
+      t,
+      [
+        JSON.stringify({
+          type: "attachment",
+          cwd: root,
+          attachment: { content: [`----- [llmwiki turn-context] ${root} — pointers -----\n  • X  →  ${page}`] },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          cwd: root,
+          message: { content: [{ type: "tool_use", name: "Read", input: { file_path: `${root}/${page}` } }] },
+        }),
+      ].join("\n"),
+    );
+    const r = runBench(root, "all", { downstreamRead: true, transcripts: [t] });
+    expect(r.downstream_read?.injected).toBe(1);
+    expect(r.downstream_read?.matched).toBe(1);
+    expect(r.downstream_read?.by_channel.turn_context.reach).toBe(1);
+    // The golden numbers are untouched by it — two denominators, never mixed.
+    expect(r.n).toBe(3);
+    expect(r.passive.reach).toBe(runBench(root, "all").passive.reach);
+  });
+
   test("subset run only scores split members", () => {
     const r = runBench(root, "tune");
     expect(r.n).toBeLessThan(3);

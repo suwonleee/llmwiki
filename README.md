@@ -142,6 +142,27 @@ No MCP server, Docker, external database, vector database, or cloud service is r
 
 The core idea — a project wiki that the LLM maintains and the human only steers — comes from [Andrej Karpathy's LLM-wiki note](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). That note is the only outside reference: the design and code here are original.
 
+## Plugin install (lighter alternative — no clone)
+
+The same repo doubles as a Claude Code / Codex plugin marketplace. The plugin carries the read
+loop and the `/wiki-*` skills; the **background capture daemon ships only with the clone install
+above** — pick ONE path per machine (the hooks detect a clone install and defer to it).
+
+```bash
+# Claude Code
+claude plugin marketplace add suwonleee/llmwiki
+claude plugin install llmwiki@llmwiki
+
+# Codex (approve the two hooks once in /hooks afterwards)
+codex plugin marketplace add https://github.com/suwonleee/llmwiki
+codex plugin add llmwiki@llmwiki
+```
+
+Then, once per repository you want the wiki in: run `/wiki-doctor` in a session there (or
+`bun <plugin-root>/src/cli.ts init <repo>`) — repositories you never enroll stay untouched and
+receive zero injection. Bun is still the one prerequisite; without it the plugin says so once at
+session start and stays silent. Adds ~330 tokens of always-on skill metadata per session.
+
 ## Manual fallback
 
 Use this only when you intentionally want to install without an agent. Select one harness;

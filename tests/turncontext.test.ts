@@ -3,11 +3,11 @@
 // and the porter→trigram migration of pre-existing index DBs.
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { WikiIndex } from "../src/engine/db.ts";
-import { buildTurnContext, extractTerms, ftsQuery } from "../src/engine/turncontext.ts";
+import { buildTurnContext, displayRoot, extractTerms, ftsQuery } from "../src/engine/turncontext.ts";
 
 describe("extractTerms / ftsQuery", () => {
   test("ascii identifiers, paths, and CJK runs; short noise dropped", () => {
@@ -76,6 +76,21 @@ describe("buildTurnContext", () => {
     expect(out).toContain("capture-daemon.md");
     expect(out).not.toContain("overview.md"); // L0 never re-suggested
     expect(out).not.toContain("launchd 로 상주"); // no body injection
+  });
+
+  test("the banner names the clone its relative pointers belong to", () => {
+    const out = buildTurnContext(root, "캡처 데몬이 트랜스크립트 큐를 놓치는 것 같은데 확인해줘");
+    const head = out.split("\n")[0]!;
+    expect(head).toContain("[llmwiki turn-context]");
+    expect(head).toContain(displayRoot(root)); // two clones can share a basename; the path cannot
+    // The pointer lines stay repo-relative — the root is stated once, not repeated per line.
+    for (const line of out.split("\n").slice(1)) expect(line).toContain("  →  docs/wiki/");
+  });
+
+  test("displayRoot collapses home and leaves other paths alone", () => {
+    expect(displayRoot(join(homedir(), "clone"))).toBe("~/clone");
+    expect(displayRoot(homedir())).toBe("~");
+    expect(displayRoot("/opt/elsewhere")).toBe("/opt/elsewhere");
   });
 
   test("english/identifier prompt matches english page", () => {

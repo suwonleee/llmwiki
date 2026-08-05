@@ -1,0 +1,34 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "llmwiki",
+  "owner": {
+    "name": "suwonleee",
+    "url": "https://github.com/suwonleee"
+  },
+  "metadata": {
+    "description": "Marketplace for the llmwiki plugin — this repository is the marketplace: /plugin marketplace add suwonleee/llmwiki",
+    "version": "0.11.0"
+  },
+  "plugins": [
+    {
+      "name": "llmwiki",
+      "description": "Local-first project wiki that compounds across coding sessions: cold-start context injection, per-turn wiki pointers, /wiki-* close-out commands. Requires Bun.",
+      "version": "0.11.0",
+      "author": {
+        "name": "suwonleee",
+        "url": "https://github.com/suwonleee"
+      },
+      "source": "./",
+      "category": "productivity",
+      "homepage": "https://github.com/suwonleee/llmwiki",
+      "license": "Apache-2.0",
+      "tags": [
+        "wiki",
+        "memory",
+        "knowledge-base",
+        "local-first",
+        "markdown"
+      ]
+    }
+  ]
+}

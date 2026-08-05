@@ -25,5 +25,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 PROJ="${CLAUDE_PROJECT_DIR:-$PWD}"
 BUN="$(command -v bun)"
 
+# Plugin-context guard (mirrors sessionstart-inject.sh): when the FULL install is also wired, its
+# own hook already injects this turn — a second copy from the plugin cache would double every
+# pointer block. Both harnesses set CLAUDE_PLUGIN_ROOT for plugin hooks, so both wiring files are
+# checked. Silent here; the once-per-session notice (bun missing) belongs to SessionStart.
+if [ -n "$CLAUDE_PLUGIN_ROOT" ]; then
+  for W in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "${CODEX_HOME:-$HOME/.codex}/hooks.json"; do
+    grep -q 'hooks/userpromptsubmit-inject.sh' "$W" 2>/dev/null && exit 0
+  done
+fi
+
 [ -n "$BUN" ] && "$BUN" "$ROOT/src/cli.ts" turn-context "$PROJ" --hook-event UserPromptSubmit 2>/dev/null
 exit 0

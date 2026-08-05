@@ -21,7 +21,7 @@
 // windows over scripts that write without spaces. Everything is floored at 3 characters, the
 // FTS5 trigram matching floor; shorter terms cannot match and are dropped.
 import { closeSync, constants as fsConstants, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { WikiIndex } from "./db.ts";
@@ -32,10 +32,28 @@ import { COLD_INDEX_RELATIVE_PATH } from "./cold-index.ts";
 const MAX_TERMS = 12;
 const MAX_PAGES = 3;
 // Header language + L0/meta page names resolve per repo at call time (per-repo config).
+// The banner names the clone it is speaking for, because the pointer lines under it are
+// REPO-RELATIVE and a session does not always stay in the repository it started in: in hook mode
+// the harness's cwd wins (cli.ts), so a session that moves into another enrolled repo is served
+// THAT repo's wiki — and two clones can share a basename, so the path is what disambiguates.
+// Cold start already prints its repo; this is the same courtesy on the per-turn path. Home
+// collapses to `~`, keeping the addition to a few bytes a turn.
 const HEADS = {
-  en: "----- [llmwiki turn-context] wiki pages related to this prompt (pointers — Read on demand) -----",
-  ko: "----- [llmwiki turn-context] 이 프롬프트와 관련된 위키 페이지 (포인터 — 필요 시 Read) -----",
+  en: (repo: string) =>
+    `----- [llmwiki turn-context] ${repo} — wiki pages related to this prompt (pointers — Read on demand) -----`,
+  ko: (repo: string) =>
+    `----- [llmwiki turn-context] ${repo} — 이 프롬프트와 관련된 위키 페이지 (포인터 — 필요 시 Read) -----`,
 };
+
+// `/Users/me/repo` → `~/repo`. Cosmetic only: the banner is read by a person, and an absolute
+// home path is both longer and less recognisable than the tilde form they type themselves.
+export function displayRoot(root: string): string {
+  const home = (homedir() || "").replace(/\\/g, "/").replace(/\/+$/, "");
+  const r = String(root ?? "").replace(/\\/g, "/");
+  if (!home) return r;
+  if (r === home) return "~";
+  return r.startsWith(`${home}/`) ? `~${r.slice(home.length)}` : r;
+}
 
 // ---- term extraction (deterministic, language-neutral) ------------------------
 
@@ -252,7 +270,7 @@ export function buildTurnContext(repo: string, prompt: string, sessionId = ""): 
 
     const w = new WikiIndex(repo);
     if (!existsSync(w.dbPath)) return ""; // no index yet — stay silent, never create state
-    const head = HEADS[isRepoKorean(w.root) ? "ko" : "en"]; // the same answer the writers use
+    const head = HEADS[isRepoKorean(w.root) ? "ko" : "en"](displayRoot(w.root)); // the same answer the writers use
 
     // HQE-lite (P1): fold prior-turn terms into this turn's query. Persist the merged
     // weights immediately so even a silent turn feeds the next one.

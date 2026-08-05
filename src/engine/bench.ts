@@ -22,6 +22,13 @@ import { WikiIndex, dedupeByPage } from "./db.ts";
 import { ensureProjectStateDir } from "./project-state.ts";
 import { buildTurnContext } from "./turncontext.ts";
 import { buildContext } from "./context.ts";
+import {
+  discoverClaudeTranscripts,
+  pickTranscripts,
+  scanTranscript,
+  summarizeDownstreamRead,
+  type DownstreamReadReport,
+} from "./downstream-read.ts";
 
 export interface BenchQuery {
   id: string;
@@ -142,10 +149,28 @@ export interface BenchReport {
   n_content: number;
   n_refusal: number;
   passive: PassiveReport;
+  // What happened AFTER a pointer arrived, read off real captured sessions (downstream-read.ts).
+  // Opt-in: null unless asked for, so the golden benchmark never depends on this machine's
+  // transcript history — the same repo must score the same on someone else's laptop.
+  downstream_read: DownstreamReadReport | null;
   per_query: Record<string, any>[];
 }
 
-export function runBench(ws: string, subset: "all" | "tune" | "sealed" = "all"): BenchReport {
+export interface BenchOptions {
+  // Measure pointer→Read follow-through from captured transcripts. Off by default.
+  downstreamRead?: boolean;
+  // Explicit transcript files; when absent, the newest `transcriptLimit` Claude sessions.
+  transcripts?: readonly string[];
+  transcriptLimit?: number;
+}
+
+const DEFAULT_TRANSCRIPT_LIMIT = 30;
+
+export function runBench(
+  ws: string,
+  subset: "all" | "tune" | "sealed" = "all",
+  options: BenchOptions = {},
+): BenchReport {
   const root = resolve(ws);
   const queries = loadQueries(root);
   if (!queries.length) {
@@ -238,8 +263,18 @@ export function runBench(ws: string, subset: "all" | "tune" | "sealed" = "all"):
       by_lang_silence: rates(byLangSilence),
       by_recoverability: rates(byRecoverability),
     },
+    downstream_read: options.downstreamRead ? measureDownstreamRead(options) : null,
     per_query: per,
   };
+}
+
+// Reads captured transcripts — never the wiki, never the turn path. Kept out of the loop above so
+// a plain runBench() touches no session history at all.
+function measureDownstreamRead(options: BenchOptions): DownstreamReadReport {
+  const files = options.transcripts?.length
+    ? [...options.transcripts]
+    : pickTranscripts(discoverClaudeTranscripts(), options.transcriptLimit ?? DEFAULT_TRANSCRIPT_LIMIT);
+  return summarizeDownstreamRead(files.map((f) => scanTranscript(f)));
 }
 
 function tally(into: Record<string, { n: number; hits: number }>, key: string | undefined, hit: boolean): void {

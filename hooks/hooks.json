@@ -1,0 +1,27 @@
+{
+  "description": "llmwiki read-injection: cold-start context once per session, wiki pointers per prompt (silent on unenrolled repos and unconfident turns). Both scripts resolve the engine from their own location, so the plugin cache copy works unmodified.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/sessionstart-inject.sh\""
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/userpromptsubmit-inject.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
