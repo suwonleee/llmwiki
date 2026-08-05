@@ -10,6 +10,7 @@ import { render } from "./extract.ts";
 import { sourceForKind, sourceForPath } from "./source.ts";
 import { WikiIndex } from "./db.ts";
 import { appendRepoFile, ensureRepoDir, readRepoFile, repoFileExists, writeRepoFile } from "./repo-write.ts";
+import { screenSecrets } from "./screen.ts";
 
 // Every repository path in this module is expressed relative to the repo root and resolved by
 // the boundary (repo-write.ts) — never joined onto the root by hand.
@@ -53,6 +54,16 @@ export interface NextIncrement {
 }
 
 /**
+ * Transcript material crosses a trust boundary when update-next prints it back into a model
+ * context. Screen it before that boundary for every harness, not only when an excerpt is later
+ * persisted. A secret-only fragment has no useful evidence left after redaction, so omit it.
+ */
+export function screenTranscriptMaterial(text: string): string | null {
+  const screened = screenSecrets(text);
+  return screened.gutted ? null : screened.text;
+}
+
+/**
  * Header lines answering "where did the work happen?" — the question `cwd=` structurally cannot
  * answer (capture buckets by session cwd, so bucket and cwd agree by construction even when every
  * edit went to another repo). One line lists the mutated git roots; a second, advisory line
@@ -81,6 +92,14 @@ export function nextIncrement(ws: string, transcriptPath: string): NextIncrement
   // even after a transcript moves or the user's active harness profile changes.
   const source = sourceForKind(capture.getSourceKind(transcriptPath));
   const inc = source.parse(transcriptPath, offset);
+  inc.users = inc.users.flatMap((turn) => {
+    const text = screenTranscriptMaterial(turn.text);
+    return text === null ? [] : [{ ...turn, text }];
+  });
+  inc.assistants = inc.assistants.flatMap((turn) => {
+    const text = screenTranscriptMaterial(turn.text);
+    return text === null ? [] : [{ ...turn, text }];
+  });
   new WikiIndex(ws).registerTranscript(transcriptPath, inc.sessionId);
   return {
     rendered: render(inc),

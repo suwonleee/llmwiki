@@ -163,6 +163,9 @@ Then, once per repository you want the wiki in: run `/wiki-doctor` in a session 
 receive zero injection. Bun is still the one prerequisite; without it the plugin says so once at
 session start and stays silent. Adds ~330 tokens of always-on skill metadata per session.
 
+Before installing, review the [plugin disclosure](PLUGIN.md), [privacy policy](PRIVACY.md),
+[terms](TERMS.md), and [support guidance](SUPPORT.md).
+
 ## Manual fallback
 
 Use this only when you intentionally want to install without an agent. Select one harness;

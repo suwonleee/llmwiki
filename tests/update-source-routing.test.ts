@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as capture from "../src/engine/capture.ts";
 import * as update from "../src/engine/update.ts";
+import { REDACTED } from "../src/engine/screen.ts";
 
 describe("update-next source routing", () => {
   let dir: string;
@@ -61,5 +62,38 @@ describe("update-next source routing", () => {
 
     expect(capture.getSourceKind(transcript)).toBe("plain");
     expect(update.nextIncrement(workspace, transcript).rendered).toContain("A plain transcript");
+  });
+
+  test("screens transcript material before any harness can print it back into model context", () => {
+    const transcript = join(dir, "rollout.jsonl");
+    const credential = `AKIA${"A".repeat(16)}`;
+    const records = [
+      { type: "session_meta", payload: { id: "codex-secret", cwd: workspace } },
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: `Keep the decision, but never retain ${credential}.` }],
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: credential.repeat(12) }],
+        },
+      },
+    ];
+    writeFileSync(transcript, records.map((record) => JSON.stringify(record)).join("\n") + "\n");
+    capture.enqueue(transcript, "codex-secret", workspace, records.length, "codex");
+
+    const increment = update.nextIncrement(workspace, transcript);
+
+    expect(increment.rendered).not.toContain(credential);
+    expect(increment.rendered).toContain(REDACTED);
+    expect(increment.nUsers).toBe(1);
+    expect(increment.nAssistants).toBe(0); // secret-only material is not useful after screening
   });
 });

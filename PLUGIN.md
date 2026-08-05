@@ -51,10 +51,11 @@ being precise about — your **session transcripts**:
 
 - the automatic hooks **stat** transcript files (modification time only, to say "N sessions not
   yet filed"); they never open their contents;
-- transcript **content** is read only when you invoke `/wiki-save` or `/wiki-deep`, which is the
-  whole point of those commands: they turn a session into a wiki page. Transcript locations are
-  the harness's own (`~/.claude*/projects`, `$CODEX_HOME/sessions`, OpenCode's database), read
-  only, never modified.
+- the incremental, task-relevant part of transcript **content** is read only when you invoke
+  `/wiki-save` or `/wiki-deep`, which is the whole point of those commands: they turn a session
+  into a wiki page. Credential-shaped material is screened before the extract is shown to the
+  model, and secret-only fragments are omitted. Transcript locations are the harness's own
+  (`~/.claude*/projects`, `$CODEX_HOME/sessions`, OpenCode's database), read only, never modified.
 
 **Sent.** Nothing. The engine makes no network requests — no telemetry, no analytics, no remote
 API. (The clone install's daemon runs `git fetch` against your own clone's origin once a day to

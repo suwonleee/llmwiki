@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">llmwiki</title>
+  <desc id="desc">An open project wiki encircled by a compounding orbit</desc>
+  <rect width="512" height="512" rx="112" fill="#111827"/>
+  <path d="M148 155c38-20 74-20 108 0v220c-34-20-70-20-108 0V155Z" fill="#F9FAFB"/>
+  <path d="M364 155c-38-20-74-20-108 0v220c34-20 70-20 108 0V155Z" fill="#E5E7EB"/>
+  <path d="M256 155v220" fill="none" stroke="#9CA3AF" stroke-width="12"/>
+  <ellipse cx="256" cy="256" rx="180" ry="86" transform="rotate(-18 256 256)" fill="none" stroke="#60A5FA" stroke-width="18"/>
+  <path d="m409 139 9 23 23 9-23 9-9 23-9-23-23-9 23-9 9-23Z" fill="#F9FAFB"/>
+  <circle cx="103" cy="336" r="13" fill="#F9FAFB"/>
+</svg>

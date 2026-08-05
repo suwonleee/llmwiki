@@ -39,23 +39,36 @@ describe("plugin distribution surface", () => {
     expect(marketplace.metadata?.version).toBe(pkg.version);
   });
 
-  test("the Codex manifest carries the interface block its UI renders", () => {
+  test("the Codex manifest satisfies the public directory listing contract", () => {
     // Without `interface`, Codex shows defaults where the sibling projects (oh-my-codex,
     // oh-my-opencode) show a name, a one-liner and a description.
     const codex = readJson(".codex-plugin/plugin.json");
     for (const field of ["displayName", "shortDescription", "longDescription", "developerName", "category"]) {
       expect(codex.interface?.[field], `interface.${field} missing`).toBeTruthy();
     }
+    expect(codex.interface.displayName.length).toBeLessThanOrEqual(30);
+    expect(codex.interface.shortDescription.length).toBeLessThanOrEqual(30);
+    expect(codex.interface.longDescription.length).toBeLessThanOrEqual(4000);
+    expect(codex.interface.capabilities.length).toBeGreaterThan(0);
+    expect(codex.interface.defaultPrompt).toHaveLength(3);
+    for (const prompt of codex.interface.defaultPrompt) expect(prompt.length).toBeLessThanOrEqual(128);
+    for (const field of ["websiteURL", "privacyPolicyURL", "termsOfServiceURL"]) {
+      expect(codex.interface[field]).toStartWith("https://");
+    }
+    for (const field of ["composerIcon", "logo"]) {
+      expect(codex.interface[field]).toBe("./assets/llmwiki-plugin.svg");
+      accessSync(join(CLONE_ROOT, codex.interface[field]));
+    }
     expect(codex.skills).toBe("./skills/");
     expect(codex.hooks).toBe("./hooks/hooks.codex.json"); // its own hook config — see the spill test
   });
 
-  test("the manifests declare their component paths, and those paths exist", () => {
-    // Auto-discovery works, but declaring the paths keeps the shipped inventory deterministic
-    // (measured: Skills 5 / Hooks 2) instead of dependent on what happens to sit in the tree.
+  test("Claude auto-discovers its default hooks exactly once", () => {
+    // Claude Code 2.1.220 rejects a manifest that explicitly points at the default
+    // hooks/hooks.json because that same file is already auto-discovered.
     const plugin = readJson(".claude-plugin/plugin.json");
     expect(plugin.skills).toBe("./skills/");
-    expect(plugin.hooks).toBe("./hooks/hooks.json");
+    expect(plugin.hooks).toBeUndefined();
     for (const rel of ["skills", "hooks/hooks.json"]) accessSync(join(CLONE_ROOT, rel));
   });
 
@@ -185,5 +198,17 @@ describe("plugin distribution surface", () => {
     // Both manifests must point at it, or it is a file nobody finds.
     expect(readJson(".claude-plugin/plugin.json").description).toContain("PLUGIN.md");
     expect(readJson(".codex-plugin/plugin.json").interface.longDescription).toContain("PLUGIN.md");
+  });
+
+  test("public submission policy and support pages cover the directory requirements", () => {
+    const privacy = readFileSync(join(CLONE_ROOT, "PRIVACY.md"), "utf-8");
+    for (const claim of ["Data processed", "Purpose", "Recipients", "Retention", "Your controls"]) {
+      expect(privacy).toContain(claim);
+    }
+    accessSync(join(CLONE_ROOT, "TERMS.md"));
+    accessSync(join(CLONE_ROOT, "SUPPORT.md"));
+    const submission = readFileSync(join(CLONE_ROOT, "PLUGIN_SUBMISSION.md"), "utf-8");
+    expect(submission.match(/^### Positive /gm)).toHaveLength(5);
+    expect(submission.match(/^### Negative /gm)).toHaveLength(3);
   });
 });

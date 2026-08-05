@@ -407,11 +407,14 @@ function cmdUpdateNext(p: Parsed) {
   try {
     const summary = sourceForPath(transcript).summaryFor?.(transcript);
     if (summary) {
-      console.log(
-        "=== harness summary (pre-written by the harness — reuse as draft material; ground every claim in the extract below) ===",
-      );
-      console.log(summary);
-      console.log("=== end harness summary ===");
+      const screened = update.screenTranscriptMaterial(summary);
+      if (screened !== null) {
+        console.log(
+          "=== harness summary (pre-written by the harness — reuse as draft material; ground every claim in the extract below) ===",
+        );
+        console.log(screened);
+        console.log("=== end harness summary ===");
+      }
     }
   } catch {
     /* opportunistic — never break update-next */
