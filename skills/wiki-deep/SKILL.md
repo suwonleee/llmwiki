@@ -3,10 +3,18 @@ name: wiki-deep
 description: Periodic deep pass (day end · weekly · when a close-out report recommends it) — drain the transcript backlog, run the semantic review, work the gap queue, re-distill oversized topic pages. The lossless catch-up safety net; the per-session close-out is `/wiki-save`
 ---
 
-> Engine invocation: this skill ships inside the llmwiki plugin. Resolve `<plugin-root>` as the
-> directory TWO levels above this skill's base directory (skills/<name>/ → plugin root), then
-> run the engine as `bun "<plugin-root>/src/cli.ts"`. Every `llmwiki …` or engine-CLI reference
-> below means that invocation.
+> Engine invocation — resolve it ONCE, in this order, and use the first that exists:
+> 1. `bun "<plugin-root>/src/cli.ts"`, where `<plugin-root>` is the directory TWO levels above
+>    this skill's base directory (skills/<name>/ → plugin root). This is the plugin and clone
+>    install — the normal case. Stop here when that file exists.
+> 2. `bun "$LLMWIKI_ROOT/src/cli.ts"` when `LLMWIKI_ROOT` is set — a host that copied this
+>    skill folder OUT of the plugin (OpenClaw, Hermes, `skills add`) leaves step 1 pointing at
+>    that host's skills directory, not at an engine.
+> 3. `llmwiki` on PATH — the launcher `setup.sh` writes to `~/.local/bin`, or the npm bin.
+>
+> If none of the three resolve, say so once and stop. Do NOT guess a path: the engine writes
+> into a repository, and a guessed root writes into the wrong one. Every `llmwiki …` or
+> engine-CLI reference below means the invocation you resolved here.
 
 # /wiki-deep — periodic deep pass (backlog · review · gaps · re-distill)
 

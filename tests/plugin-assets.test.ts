@@ -120,6 +120,22 @@ describe("plugin distribution surface", () => {
     }
   });
 
+  test("the resolution rule survives a host that copies skills OUT of the plugin", () => {
+    // Claude Code and Codex install the plugin WHOLE, so "two levels up" always lands on the
+    // engine. OpenClaw's `skills install`, Hermes, and `npx skills add` copy the skill FOLDER
+    // into their own skills root instead — there, step 1 resolves to the host's skills directory
+    // and there is no engine. The later steps are what keep those hosts working, and the
+    // no-guessing line is what stops a wrong root from writing pages into another repository.
+    for (const s of SKILLS) {
+      const text = readFileSync(join(CLONE_ROOT, "skills", s, "SKILL.md"), "utf-8");
+      const rule = text.slice(0, text.indexOf("\n#")); // the note sits between frontmatter and body
+      expect(rule, `skills/${s}: step 1 must stay first`).toContain('1. `bun "<plugin-root>/src/cli.ts"`');
+      expect(rule, `skills/${s}: missing LLMWIKI_ROOT fallback`).toContain('`bun "$LLMWIKI_ROOT/src/cli.ts"`');
+      expect(rule, `skills/${s}: missing PATH fallback`).toContain("`llmwiki` on PATH");
+      expect(rule, `skills/${s}: guessing must be forbidden`).toContain("Do NOT guess a path");
+    }
+  });
+
   test("publish preflight blocks the private surface and allows its one exception", () => {
     // Installing from a git marketplace copies the TRACKED tree, so `git ls-files` is the
     // shipping manifest and publishing from the wrong clone would hand every user this

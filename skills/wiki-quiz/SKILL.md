@@ -3,10 +3,18 @@ name: wiki-quiz
 description: The human memory loop — a few minutes of spaced-repetition quiz (day-granular forgetting curve) over this repo's wiki, decisions and direction first. The engine schedules deterministically (quiz-status/next/record); this session authors and grades questions warm, grounded in the pages, and records into docs/wiki/6_quiz/ (a human-only layer excluded from indexing/search)
 ---
 
-> Engine invocation: this skill ships inside the llmwiki plugin. Resolve `<plugin-root>` as the
-> directory TWO levels above this skill's base directory (skills/<name>/ → plugin root), then
-> run the engine as `bun "<plugin-root>/src/cli.ts"`. Every `llmwiki …` or engine-CLI reference
-> below means that invocation.
+> Engine invocation — resolve it ONCE, in this order, and use the first that exists:
+> 1. `bun "<plugin-root>/src/cli.ts"`, where `<plugin-root>` is the directory TWO levels above
+>    this skill's base directory (skills/<name>/ → plugin root). This is the plugin and clone
+>    install — the normal case. Stop here when that file exists.
+> 2. `bun "$LLMWIKI_ROOT/src/cli.ts"` when `LLMWIKI_ROOT` is set — a host that copied this
+>    skill folder OUT of the plugin (OpenClaw, Hermes, `skills add`) leaves step 1 pointing at
+>    that host's skills directory, not at an engine.
+> 3. `llmwiki` on PATH — the launcher `setup.sh` writes to `~/.local/bin`, or the npm bin.
+>
+> If none of the three resolve, say so once and stop. Do NOT guess a path: the engine writes
+> into a repository, and a guessed root writes into the wrong one. Every `llmwiki …` or
+> engine-CLI reference below means the invocation you resolved here.
 
 # /wiki-quiz — human memory loop (spaced repetition over the wiki)
 
