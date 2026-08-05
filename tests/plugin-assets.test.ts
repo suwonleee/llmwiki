@@ -55,12 +55,24 @@ describe("plugin distribution surface", () => {
     for (const field of ["websiteURL", "privacyPolicyURL", "termsOfServiceURL"]) {
       expect(codex.interface[field]).toStartWith("https://");
     }
+    // Raster, not the SVG source: the listing surfaces render a bitmap, and the directory's
+    // asset check only requires the file to exist inside the archive.
     for (const field of ["composerIcon", "logo"]) {
-      expect(codex.interface[field]).toBe("./assets/llmwiki-plugin.svg");
+      expect(codex.interface[field]).toBe("./assets/llmwiki-plugin.png");
       accessSync(join(CLONE_ROOT, codex.interface[field]));
     }
     expect(codex.skills).toBe("./skills/");
-    expect(codex.hooks).toBe("./hooks/hooks.codex.json"); // its own hook config — see the spill test
+    // The public directory's ingestion schema accepts only name/version/description/skills/apps/
+    // mcpServers/interface/author/homepage/repository/license/keywords — a `hooks` key is a
+    // rejection at intake (openai/codex plugin-creator validate_plugin.py). Hooks still load:
+    // with no `hooks` declared, Codex falls back to the default hooks/hooks.json.
+    expect(codex.hooks).toBeUndefined();
+    for (const key of Object.keys(codex)) {
+      expect(
+        ["name", "version", "description", "skills", "apps", "mcpServers", "interface", "author", "homepage", "repository", "license", "keywords"],
+        `.codex-plugin/plugin.json field "${key}" is not accepted by directory ingestion`,
+      ).toContain(key);
+    }
   });
 
   test("Claude auto-discovers its default hooks exactly once", () => {
@@ -152,10 +164,10 @@ describe("plugin distribution surface", () => {
     expect(r.files).toBe(5);
   });
 
-  test("both hook configs point at scripts that exist, execute, and take no absolute path", () => {
+  test("the hook config points at scripts that exist, execute, and take no absolute path", () => {
     // Codex exports CLAUDE_PLUGIN_ROOT alongside its own PLUGIN_ROOT
     // (codex-rs/hooks/src/engine/discovery.rs), so one spelling serves both harnesses.
-    for (const rel of ["hooks/hooks.json", "hooks/hooks.codex.json"]) {
+    for (const rel of ["hooks/hooks.json"]) {
       const cfg = readJson(rel);
       const entries = [...(cfg.hooks.SessionStart ?? []), ...(cfg.hooks.UserPromptSubmit ?? [])]
         .flatMap((m: any) => m.hooks ?? []);
@@ -169,15 +181,19 @@ describe("plugin distribution surface", () => {
     }
   });
 
-  test("the Codex hook config disables the stdout spill the Claude one cannot declare", () => {
+  test("the shared hook config disables the Codex stdout spill without disturbing Claude", () => {
     // Codex replaces hook output over ~10,000 bytes with a head/tail preview; a large cold start
-    // would silently arrive truncated. `additionalContextLimit: 0` opts out — and it lives in a
-    // separate file because Claude's --strict validation rejects fields it does not know.
-    const codex = readJson("hooks/hooks.codex.json");
-    const entries = [...codex.hooks.SessionStart, ...codex.hooks.UserPromptSubmit].flatMap((m: any) => m.hooks);
+    // would silently arrive truncated. `additionalContextLimit: 0` opts out. It lives in the
+    // SHARED file — the split that used to hold it was removed with the manifest `hooks` key the
+    // directory rejects. Measured on Claude Code 2.1.x: both fields are ignored, the hook still
+    // runs, and its stdout still reaches the model (probe: a passphrase printed by SessionStart
+    // came back in the reply). Neither is a field Claude declares, so re-measure before trusting.
+    const cfg = readJson("hooks/hooks.json");
+    const entries = [...cfg.hooks.SessionStart, ...cfg.hooks.UserPromptSubmit].flatMap((m: any) => m.hooks);
     for (const h of entries) expect(h.additionalContextLimit).toBe(0);
-    expect(readJson(".codex-plugin/plugin.json").hooks).toBe("./hooks/hooks.codex.json");
-    expect(JSON.stringify(readJson("hooks/hooks.json"))).not.toContain("additionalContextLimit");
+    // Claude's SessionStart sources include `compact`, which Codex does not emit; the union is a
+    // matcher alternation, so the extra branch simply never fires there.
+    expect(cfg.hooks.SessionStart[0].matcher).toContain("compact");
   });
 
   test("the plugin hooks stand down when a clone install is already wired — for BOTH harnesses", () => {

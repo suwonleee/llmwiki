@@ -1,5 +1,5 @@
 {
-  "description": "llmwiki read-injection: cold-start context once per session, wiki pointers per prompt (silent on unenrolled repos and unconfident turns). Both scripts resolve the engine from their own location, so the plugin cache copy works unmodified.",
+  "description": "llmwiki read-injection: cold-start context once per session, wiki pointers per prompt (silent on unenrolled repos and unconfident turns). Both scripts resolve the engine from their own location, so the plugin cache copy works unmodified. ONE file serves both harnesses: Claude Code auto-discovers hooks/hooks.json, and Codex falls back to the same default path when the manifest declares no `hooks` (codex-rs/core-plugins/src/loader.rs, DEFAULT_HOOKS_CONFIG_FILE) — which it must not, because the public plugin directory's ingestion schema rejects that field.",
   "hooks": {
     "SessionStart": [
       {
@@ -7,7 +7,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/sessionstart-inject.sh\""
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/sessionstart-inject.sh\"",
+            "statusMessage": "llmwiki cold-start",
+            "additionalContextLimit": 0
           }
         ]
       }
@@ -18,7 +20,9 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/userpromptsubmit-inject.sh\"",
-            "timeout": 10
+            "timeout": 10,
+            "statusMessage": "llmwiki turn-context",
+            "additionalContextLimit": 0
           }
         ]
       }

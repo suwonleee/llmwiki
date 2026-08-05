@@ -47,8 +47,8 @@ const REQUIRED: readonly string[] = [
   ".claude-plugin/plugin.json",
   ".claude-plugin/marketplace.json",
   ".codex-plugin/plugin.json", // Codex reads this in preference to the Claude manifest (measured)
-  "hooks/hooks.json",
-  "hooks/hooks.codex.json",
+  "hooks/hooks.json", // the one hook config BOTH harnesses discover by default
+
   "hooks/sessionstart-inject.sh",
   "hooks/userpromptsubmit-inject.sh",
   "src/cli.ts",

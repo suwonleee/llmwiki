@@ -68,6 +68,60 @@ MCP server, hosted service, authentication flow, or external data transfer.
 
 ## Release notes
 
-Initial public directory submission of llmwiki 0.11.1. The plugin packages five local-first wiki
-skills and two opt-in lifecycle hooks. Version 0.11.1 removes a duplicate Claude hook declaration
-for current host compatibility and adds the public-directory metadata, branding, and policy pages.
+Initial public directory submission of llmwiki 0.11.2. The plugin packages five local-first wiki
+skills and two opt-in lifecycle hooks. Version 0.11.2 makes the manifests match both directories'
+ingestion schemas: the Codex manifest no longer declares a `hooks` path (the field the public
+ingestion schema rejects — hooks now load from the default `hooks/hooks.json` both harnesses
+discover), the listing icon ships as a 512×512 PNG, and the earlier 0.11.1 work — one hook
+declaration per host, directory metadata, branding, and the policy pages — is carried forward.
+
+## Submission packet — the values each form asks for
+
+Both directories take submissions through an authenticated web form, so filing is a human step.
+These are the answers to paste; everything they reference is in this repository at the submitted
+commit.
+
+| Field | Value |
+|---|---|
+| Plugin name (immutable slug) | `llmwiki` |
+| Version | 0.11.2 |
+| Repository | https://github.com/suwonleee/llmwiki |
+| Plugin root inside the repository | the repository root (`.claude-plugin/plugin.json` at top level) |
+| Display name / short description | llmwiki — "A wiki that compounds" |
+| Category | Developer Tools (Codex) · productivity (Claude marketplace entry) |
+| Author / developer | suwonleee, https://github.com/suwonleee |
+| License | Apache-2.0 |
+| Website | https://github.com/suwonleee/llmwiki |
+| Support | https://github.com/suwonleee/llmwiki/issues (see SUPPORT.md) |
+| Privacy policy | https://github.com/suwonleee/llmwiki/blob/main/PRIVACY.md |
+| Terms of service | https://github.com/suwonleee/llmwiki/blob/main/TERMS.md |
+| Data/permission disclosure | https://github.com/suwonleee/llmwiki/blob/main/PLUGIN.md |
+| Logo / composer icon | `assets/llmwiki-plugin.png` (512×512) |
+| Brand color | `#111827` |
+| Starter prompts | the three `interface.defaultPrompt` entries in `.codex-plugin/plugin.json` |
+| Test cases | the five positive and three negative cases above |
+| MCP server | none — this plugin ships skills and two hooks only |
+| Authentication / demo credentials | none — no account, no hosted service, no network calls |
+
+**Claude Code (community marketplace).** Form: `platform.claude.com/plugins/submit` for an
+individual author, or `claude.ai/admin-settings/directory/submissions/plugins/new` from a Team or
+Enterprise organization with directory-management access. The review pipeline runs
+`claude plugin validate` plus automated safety screening; run it locally first:
+
+```
+claude plugin validate . --strict
+```
+
+Approved plugins are pinned to a commit SHA in `anthropics/claude-plugins-community` and the public
+catalog syncs nightly, so listing lags approval. The separately curated
+`claude-plugins-official` marketplace has no application process.
+
+**Codex / ChatGPT (universal plugin directory).** Portal: `platform.openai.com/plugins`. It
+requires completed identity verification in the submitting organization and Apps Management write
+access. One submission lists the plugin on both surfaces. Approval does not auto-publish; the
+author publishes from the portal. Preflight with the ingestion validator from
+`openai/codex` (`codex-rs/skills/src/assets/samples/plugin-creator/scripts/validate_plugin.py`):
+
+```
+python3 validate_plugin.py .
+```
