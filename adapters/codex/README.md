@@ -48,6 +48,19 @@ injects only a truncated preview, which silently cuts a healthy wiki's cold
 start. `0` disables that spill (supported since 0.145.0; older versions ignore
 the field and keep the 2,500-token default).
 
+## Hook script integrity (measured on 0.146.0)
+
+Codex checks the hook *script*, not only the hook config. Editing a single line
+of an installed `sessionstart-inject.sh` made Codex silently skip **every**
+llmwiki hook — no error, no warning, just no injection — and restoring the file
+byte-for-byte brought them straight back. `--dangerously-bypass-hook-trust`
+does not help: it waives the trust prompt, not the integrity check.
+
+Two consequences. Patching a hook script in place is never a live fix; re-run
+the installer (or reinstall the plugin) so the recorded hashes match. And after
+any update, confirm the hashes in `/hooks` — the same thing `llmwiki doctor`
+advises for Codex.
+
 ## Coexistence with OMX
 
 The installer removes and re-points only commands containing llmwiki's two hook
