@@ -3,6 +3,10 @@
 This file records the reviewer-facing cases for the skills-only llmwiki plugin. The plugin has no
 MCP server, hosted service, authentication flow, or external data transfer.
 
+For *which* host takes a submission at all, and what has to be green before each one, start at
+[`adapters/DISTRIBUTION.md`](adapters/DISTRIBUTION.md) — it covers Claude Code, Codex, Orca, Hermes
+and OpenClaw. This file holds the field values the two real submission forms ask for.
+
 ## Positive cases
 
 ### Positive 1 — enroll a repository
