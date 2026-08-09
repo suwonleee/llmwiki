@@ -104,6 +104,20 @@ To check that the wiki is compounding, paste this in that project's agent sessio
 Run /wiki-doctor for this project. Repair safe generated state and evidence-grounded page problems, then summarize what was fixed and what still needs attention. In Codex, run $wiki-doctor.
 ```
 
+### What the public clone is verified to do
+
+Every release candidate is checked from a fresh, pinned clone through setup, project enrollment,
+session capture, deterministic close-out mechanics, restart, and next-session retrieval. The public
+retrieval fixtures also gate correctness at 10, 100, and 1,000 generated wiki pages. Release checks
+cover the documented macOS/Linux/native-Windows/WSL2 harness branches, local-only data boundaries,
+and the exact files allowed into the public package.
+
+That automation does **not** claim that a live model will always write a good wiki page or that a
+new person will understand the workflow without help. Observed-user usability remains a separate,
+preregistered gate with no participant results yet. See the
+[release gates](reference/RELEASE_GATES.md), [support contract](reference/support-contract.json),
+and [usability-study protocol](reference/USABILITY_STUDY.md) for the exact claim boundary.
+
 ### Want it another way? One file
 
 The engine code stays untouched — everything below lives in one config:
@@ -522,8 +536,15 @@ guide = "Quarterly goals; changes need human sign-off."
     - seeded tune/sealed split — `--tune-only` to iterate freely, `--sealed` for final checks only (every look at sealed results weakens it as a regression guard)
 - **`llmwiki compare-arm <repo> --corpus <dir> --label <name>`** → **`llmwiki compare-verdict A.json B.json`** — frozen-corpus A/B
     - builds an isolated temp wiki per config/git-state from the same transcript corpus — the arm build is the only LLM step
+    - validates report schema, query identities, score kinds, counts, and bounded metrics before judging; malformed or incompatible evidence fails closed to `keep`
     - judges the two labeled results with sequential gates: regression-block first → keep/adopt/undecided, zero LLM
     - run only when prompts/models change
+- **`llmwiki bench-scale --repeats 2`** — deterministic generated-corpus scale report
+    - runs the public 10/100/1000-page tiers and gates search/context correctness
+    - timing and disk distributions are observational diagnostics, never release thresholds
+
+The complete reproducible command set and the claims each result permits are maintained in
+[`reference/RELEASE_GATES.md`](reference/RELEASE_GATES.md).
 
 ## Principles
 
