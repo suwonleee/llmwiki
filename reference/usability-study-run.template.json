@@ -1,0 +1,39 @@
+{
+  "protocol_version": 1,
+  "event_schema_version": 1,
+  "run_id": "<new-local-run-id>",
+  "study_phase": "<pilot-or-comparative>",
+  "arm": "<agent-guided-or-manual-fallback>",
+  "arm_order": "<first-or-second>",
+  "engine": {
+    "release": "<release-tag>",
+    "commit": "<full-git-commit>",
+    "absolute_clone_path": "<absolute-path-to-this-clone>"
+  },
+  "platform": {
+    "target": "<macos-linux-windows-native-or-windows-wsl2>",
+    "os_version": "<exact-version>",
+    "setup_shell": "<posix-git-bash-or-posix-wsl2>",
+    "windows_git_bash_version": "<version-or-not-applicable>",
+    "wsl_distribution_version": "<distribution-version-or-not-applicable>"
+  },
+  "harness": {
+    "name": "<claude-codex-or-opencode>",
+    "version": "<exact-version>"
+  },
+  "model": {
+    "identifier": "<exact-model-id>",
+    "settings_digest": "sha256:<64-lowercase-hex>"
+  },
+  "fixture": {
+    "commit": "<full-git-commit>",
+    "content_digest": "sha256:<64-lowercase-hex>",
+    "task_script": "reference/usability-study-task.md",
+    "task_script_version": 1,
+    "task_script_digest": "sha256:<64-lowercase-hex>"
+  },
+  "facilitator_material": {
+    "answer_key_digest": "sha256:<64-lowercase-hex>"
+  },
+  "local_event_log": "<absolute-local-path-outside-public-clone>/events.jsonl"
+}

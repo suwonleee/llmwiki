@@ -16,6 +16,7 @@
 //
 // This is an ENGINE-DEV tool: never wired into wiki-save/sync loops (zero per-session
 // cost). Run it when search/turn-context/prompt logic changes.
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { WikiIndex, dedupeByPage } from "./db.ts";
@@ -142,6 +143,7 @@ export interface PassiveReport {
 
 export interface BenchReport {
   subset: string;
+  query_set_fingerprint: string; // selected golden definitions, not just ids
   n: number;
   recall: Record<string, number>; // "r@1" | "r@5" | "r@10" over content queries
   tc_pointer_hit: number; // share of content queries where turn-context pointed at an expected page
@@ -156,6 +158,77 @@ export interface BenchReport {
   per_query: Record<string, any>[];
 }
 
+// Stable correctness-only projection for a public CI baseline. The full BenchReport deliberately
+// keeps useful local observations (absolute-root-bearing byte costs and optional captured-session
+// follow-through), but those are properties of the machine running the bench rather than retrieval
+// semantics. A baseline must contain only values that the same checked-out fixture reproduces on
+// every supported OS and must sort query identities so fixture file order cannot churn the report.
+export interface BenchBaseline {
+  schema_version: 1;
+  query_set_fingerprint: string;
+  n: number;
+  n_content: number;
+  n_refusal: number;
+  recall: Record<string, number>;
+  tc_pointer_hit: number;
+  tc_refusal_ok: number;
+  passive: Pick<
+    PassiveReport,
+    "reach" | "silence" | "irreplaceable" | "by_lang" | "by_lang_silence" | "by_recoverability"
+  >;
+  per_query: Array<{
+    id: string;
+    "r@1"?: number;
+    "r@5"?: number;
+    "r@10"?: number;
+    tc_hit?: boolean;
+    refusal_ok?: boolean;
+    lang?: string;
+    recoverable_from?: string;
+  }>;
+}
+
+type RateMap = Record<string, { n: number; reach: number }>;
+
+function sortedRates(input: RateMap): RateMap {
+  return Object.fromEntries(Object.keys(input).sort().map((key) => [key, { ...input[key]! }]));
+}
+
+/** Project a full report into the versioned, environment-independent public baseline contract. */
+export function toBenchBaseline(report: BenchReport): BenchBaseline {
+  const perQuery = report.per_query.map((row) => {
+    const projected: BenchBaseline["per_query"][number] = { id: String(row.id) };
+    for (const key of ["r@1", "r@5", "r@10"] as const) {
+      if (typeof row[key] === "number") projected[key] = row[key];
+    }
+    if (typeof row.tc_hit === "boolean") projected.tc_hit = row.tc_hit;
+    if (typeof row.refusal_ok === "boolean") projected.refusal_ok = row.refusal_ok;
+    if (typeof row.lang === "string") projected.lang = row.lang;
+    if (typeof row.recoverable_from === "string") projected.recoverable_from = row.recoverable_from;
+    return projected;
+  }).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
+  return {
+    schema_version: 1,
+    query_set_fingerprint: report.query_set_fingerprint,
+    n: report.n,
+    n_content: report.n_content,
+    n_refusal: report.n_refusal,
+    recall: Object.fromEntries(Object.keys(report.recall).sort().map((key) => [key, report.recall[key]!])),
+    tc_pointer_hit: report.tc_pointer_hit,
+    tc_refusal_ok: report.tc_refusal_ok,
+    passive: {
+      reach: report.passive.reach,
+      silence: report.passive.silence,
+      irreplaceable: report.passive.irreplaceable,
+      by_lang: sortedRates(report.passive.by_lang),
+      by_lang_silence: sortedRates(report.passive.by_lang_silence),
+      by_recoverability: sortedRates(report.passive.by_recoverability),
+    },
+    per_query: perQuery,
+  };
+}
+
 export interface BenchOptions {
   // Measure pointer→Read follow-through from captured transcripts. Off by default.
   downstreamRead?: boolean;
@@ -165,6 +238,20 @@ export interface BenchOptions {
 }
 
 const DEFAULT_TRANSCRIPT_LIMIT = 30;
+
+function querySetFingerprint(queries: readonly BenchQuery[]): string {
+  const canonical = [...queries]
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .map((query) => ({
+      id: query.id,
+      question: query.question,
+      target_pages: [...query.target_pages].sort(),
+      must_refuse: query.must_refuse === true,
+      lang: query.lang ?? null,
+      recoverable_from: query.recoverable_from ?? null,
+    }));
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
+}
 
 export function runBench(
   ws: string,
@@ -243,6 +330,7 @@ export function runBench(
   const silence = nRefusal ? refusalOk / nRefusal : 0;
   return {
     subset,
+    query_set_fingerprint: querySetFingerprint(selected),
     n: selected.length,
     recall,
     tc_pointer_hit: reach,

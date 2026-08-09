@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WikiIndex } from "../src/engine/db.ts";
-import { loadQueries, ensureSplit, hitAtK, runBench, benchDir } from "../src/engine/bench.ts";
+import { loadQueries, ensureSplit, hitAtK, runBench, benchDir, toBenchBaseline } from "../src/engine/bench.ts";
 
 describe("bench", () => {
   let root: string;
@@ -91,6 +91,17 @@ must_refuse = true
     // The same repo must score the same on a machine with no transcripts at all, so
     // downstream-read is opt-in and absent by default.
     expect(runBench(root, "all").downstream_read).toBeNull();
+  });
+
+  test("baseline projection excludes environment-sensitive costs and machine transcript history", () => {
+    const report = runBench(root, "all");
+    const changed = structuredClone(report);
+    changed.passive.coldstart_bytes += 999;
+    changed.passive.turn_bytes_p50 += 111;
+    changed.passive.turn_bytes_p95 += 222;
+    changed.downstream_read = { machine: "local-only" } as any;
+
+    expect(toBenchBaseline(changed)).toEqual(toBenchBaseline(report));
   });
 
   test("an explicit transcript is measured against the golden run's report", () => {

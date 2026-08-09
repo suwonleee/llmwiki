@@ -66,6 +66,7 @@ describe("fresh OpenCode setup", () => {
     expect(output).toContain("setup installed");
     expect(output).toContain("OpenCode close-out: /wiki-save");
     expect(output).toContain("Verify the installation anytime: llmwiki doctor --harness opencode");
+    expect(output).toContain("OpenCode activation: restart OpenCode after initial setup or clone re-pointing.");
     // The daemon carries the OpenCode location it was installed with, in this platform's syntax.
     const service = readServiceDefinition(home);
     expect(service).toContain(serviceEnvEntry("XDG_DATA_HOME", dataRoot));

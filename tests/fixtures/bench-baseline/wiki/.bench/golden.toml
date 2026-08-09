@@ -1,0 +1,36 @@
+version = "1"
+
+[[query]]
+id = "capture-route"
+lang = "en"
+question = "how does cobaltroutingmarker bind captured sessions"
+target_pages = ["docs/wiki/5_topic/capture-routing.md"]
+recoverable_from = "code"
+
+[[query]]
+id = "refusal-policy-ko"
+lang = "ko"
+question = "silentrefusalmarker 정책은 관련 없는 질문을 어떻게 처리하는가"
+target_pages = ["docs/wiki/3_decision/silent-refusal.md"]
+recoverable_from = "wiki_only"
+
+[[query]]
+id = "refusal-rationale"
+lang = "en"
+question = "why does silentrefusalmarker keep turn context empty"
+target_pages = ["docs/wiki/3_decision/silent-refusal.md"]
+recoverable_from = "wiki_only"
+
+[[query]]
+id = "off-topic-weather"
+lang = "en"
+question = "what will the mountain weather be tomorrow"
+target_pages = []
+must_refuse = true
+
+[[query]]
+id = "off-topic-cooking"
+lang = "ko"
+question = "저녁 파스타 소스 조리법을 알려줘"
+target_pages = []
+must_refuse = true

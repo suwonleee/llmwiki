@@ -360,6 +360,7 @@ if [ "$USE_CLAUDE" -eq 1 ]; then
     echo "  • Claude Code project-wiki repair: /wiki-doctor"
 fi
 if [ "$USE_OPENCODE" -eq 1 ]; then
+    echo "  • OpenCode activation: restart OpenCode after initial setup or clone re-pointing."
     echo "  • OpenCode close-out: /wiki-save"
     echo "  • OpenCode project-wiki repair: /wiki-doctor"
 fi

@@ -25,7 +25,7 @@ const PRIVATE_SURFACE: readonly RegExp[] = [
   /^docs\/eval-results\//, // measurement artefacts
   /^githooks\//, // team-only hooks
   /^\.mailmap$/, // real names and company e-mail
-  /^reference\//, // internal notes — one file is shipped, see PRIVATE_ALLOW
+  /^reference\//, // internal notes — only exact reviewed public contracts ship, see PRIVATE_ALLOW
   /^experiments\//, // engine-dev scratch
   /^configs\/team-/, // team-specific config
   /^\.omc\//,
@@ -36,8 +36,17 @@ const PRIVATE_SURFACE: readonly RegExp[] = [
   /^HANDOFF-/, // session handoff notes
 ];
 
-/** The single documented exception inside reference/ — part of the shipped contract. */
-const PRIVATE_ALLOW: readonly RegExp[] = [/^reference\/INSTALLATION_FLOW\.md$/];
+/** Exact reviewed public contracts inside reference/. Everything else remains private by default. */
+export const PUBLIC_REFERENCE_FILES: readonly string[] = [
+  "reference/INSTALLATION_FLOW.md",
+  "reference/support-contract.json",
+  "reference/USABILITY_STUDY.md",
+  "reference/usability-study-event.schema.json",
+  "reference/usability-study-run.template.json",
+  "reference/usability-study-task.md",
+  "reference/RELEASE_GATES.md",
+] as const;
+const PRIVATE_ALLOW = new Set(PUBLIC_REFERENCE_FILES);
 
 /** Not needed to RUN the plugin. Reported with sizes so the cost is visible, never fatal. */
 const DEAD_WEIGHT: readonly RegExp[] = [/^tests\//, /^examples\//, /^assets\//, /^readmes\//];
@@ -71,7 +80,7 @@ export interface PreflightReport {
 }
 
 export function isPrivate(path: string): boolean {
-  if (PRIVATE_ALLOW.some((re) => re.test(path))) return false;
+  if (PRIVATE_ALLOW.has(path)) return false;
   return PRIVATE_SURFACE.some((re) => re.test(path));
 }
 

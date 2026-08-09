@@ -67,6 +67,7 @@ describe("fresh Codex setup", () => {
     expect(result.exitCode).toBe(0);
     expect(output).toContain("setup installed");
     expect(output).toContain("Verify the installation anytime: llmwiki doctor --harness codex");
+    expect(output).toContain("One-time Codex activation: start Codex, open /hooks, trust both llmwiki hooks.");
     expect(output).toContain("ACTION REQUIRED");
     expect(output).toContain("one-time review required");
     expect(output).toContain(`export PATH='${join(home, ".local", "bin")}'`);

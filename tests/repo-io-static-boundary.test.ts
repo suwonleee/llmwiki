@@ -54,6 +54,8 @@ const ALLOWED_MUTATORS: Record<string, string> = {
   "engine/observe.ts":
     "appends the emission ledger under the machine-local project state root and reads harness records (Claude transcripts, Codex rollouts, opencode.db read-only) — never repository content",
   "engine/compare.ts": "engine-development A/B harness building disposable temp workspaces",
+  "engine/bench-scale.ts":
+    "engine-development scale harness creating/removing a disposable OS temp workspace and measuring derived machine-local index files; all repository corpus I/O uses repo-write",
   "daemon/wire.ts": "installs/removes Claude Code hooks and commands in the user's harness config",
   "daemon/wire-codex.ts": "installs/removes Codex hooks, skills and launcher in the harness config",
   "daemon/wire-opencode.ts": "installs/removes the OpenCode plugin, commands and launcher",
@@ -85,6 +87,8 @@ const ALLOWED_READERS: Record<string, string> = {
     "bounded tail reads of machine-local transcripts to learn which model the session ran on — a model id, never message content",
   "engine/tool-locate.ts": "stats machine-local bin directories looking for the git executable",
   "engine/daemon-control.ts": "reads /proc to tell whether this clone's own capture daemon is running",
+  "engine/usability-study-validate.ts":
+    "reads the explicit facilitator-selected local JSONL event log for offline validation — never repository content",
   "engine/harness-autoconnect.ts":
     "enumerates machine-local harness data locations (XDG dirs, mounted Windows profiles) so an unusual machine connects without being asked — every candidate is then verified by harness-locate, never read as content",
 };
@@ -182,7 +186,9 @@ describe("tests cannot reach the developer's supervisor", () => {
     const offenders: string[] = [];
     for (const file of readdirSync(dir).filter((f) => f.endsWith(".test.ts"))) {
       const src = readFileSync(join(dir, file), "utf-8");
-      const runsInstaller = /spawnSync\(\[[^\]]*(setup\.sh|install\.sh)/s.test(src) || /"setup\.sh"|"install\.sh"/.test(src);
+      const directSpawn = /spawnSync\(\[[^\]]*(setup\.sh|install\.sh)/s.test(src);
+      const dynamicSpawn = /"setup\.sh"|"install\.sh"/.test(src) && /Bun\.spawn|spawnSync|execFile|execSync|runSetup/.test(src);
+      const runsInstaller = directSpawn || dynamicSpawn;
       if (!runsInstaller) continue;
       // Any of the three ways this suite neutralizes a supervisor: the inert-shim helper, a
       // hand-written `launchctl` shim, or `supervisorStubs()` — which supplies whichever supervisor

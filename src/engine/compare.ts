@@ -34,6 +34,7 @@ import * as consolidate from "./consolidate.ts";
 import { runBench, type BenchReport } from "./bench.ts";
 
 export interface ArmResult {
+  schema_version: 1;
   label: string;
   corpus_files: number;
   build_failures: number; // ingest passes that errored (partial arm)
@@ -94,10 +95,11 @@ export function scoreArm(root: string, label: string, buildStats: { corpus: numb
   try {
     bench = runBench(root, "all");
   } catch {
-    bench = null; // no golden set shipped with the corpus → query gate becomes `undecided`
+    bench = null; // no golden set shipped with the corpus → comparison fails closed at the query gate
   }
 
   return {
+    schema_version: 1,
     label,
     corpus_files: buildStats.corpus,
     build_failures: buildStats.failures,
@@ -115,14 +117,110 @@ export function scoreArm(root: string, label: string, buildStats: { corpus: numb
 function queryScores(r: BenchReport): Record<string, number> {
   const out: Record<string, number> = {};
   for (const q of r.per_query) {
-    out[q.id] = q.refusal_ok !== undefined ? (q.refusal_ok ? 1 : 0) : (q["r@5"] ?? 0);
+    out[q.id] = q.refusal_ok !== undefined ? (q.refusal_ok ? 1 : 0) : q["r@5"];
   }
   return out;
+}
+
+function validRate(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
+function validCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function malformedArmReason(arm: ArmResult): string | null {
+  if (typeof arm !== "object" || arm === null) return "arm is not an object";
+  if (arm.schema_version !== 1) return "unsupported or missing arm schema_version";
+  if (typeof arm.label !== "string" || !arm.label) return "missing arm label";
+  for (const key of ["corpus_files", "build_failures", "pages", "topic_pages", "lint_errors", "lint_warns"] as const) {
+    if (!validCount(arm[key])) return `${key} must be a non-negative integer`;
+  }
+  if (arm.build_failures > arm.corpus_files) return "build_failures exceeds corpus_files";
+  if (arm.topic_pages > arm.pages) return "topic_pages exceeds pages";
+  if (!validRate(arm.lintHealth)) return "lintHealth must be finite in [0,1]";
+  if (!validRate(arm.linkIntegrity)) return "linkIntegrity must be finite in [0,1]";
+  const expectedLintHealth = Math.max(
+    0,
+    Math.min(1, 1 - (arm.lint_errors * 10 + arm.lint_warns) / Math.max(1, arm.pages * 2)),
+  );
+  if (Math.abs(arm.lintHealth - expectedLintHealth) > 1e-12) return "lintHealth disagrees with lint counts/pages";
+  if (arm.bench === null) return null;
+  const report = arm.bench as BenchReport;
+  if (typeof report !== "object" || report === null) return "bench must be an object or null";
+  if (!(["all", "tune", "sealed"] as const).includes(report.subset as any)) return "invalid benchmark subset";
+  if (typeof report.query_set_fingerprint !== "string" || !report.query_set_fingerprint) {
+    return "missing query-set fingerprint";
+  }
+  if (!validCount(report.n) || report.n === 0) return "benchmark n must be a positive integer";
+  if (!validCount(report.n_content) || !validCount(report.n_refusal) || report.n_content + report.n_refusal !== report.n) {
+    return "incomplete benchmark evidence: content/refusal counts must be complete";
+  }
+  if (!Array.isArray(report.per_query) || report.per_query.length !== report.n) {
+    return "declared query count differs from scored rows";
+  }
+  if (!validRate(report.recall?.["r@5"])) return "benchmark recall r@5 must be finite in [0,1]";
+  if (!validRate(report.tc_pointer_hit) || !validRate(report.tc_refusal_ok)) {
+    return "benchmark context health must be finite in [0,1]";
+  }
+  const ids = new Set<string>();
+  let content = 0;
+  let refusal = 0;
+  let contentTotal = 0;
+  for (const query of report.per_query) {
+    if (typeof query !== "object" || query === null) return "query row is not an object";
+    if (typeof query.id !== "string" || !query.id) return "query row has no id";
+    if (ids.has(query.id)) return `duplicate query id: ${query.id}`;
+    const hasR5 = Object.prototype.hasOwnProperty.call(query, "r@5");
+    const hasRefusal = Object.prototype.hasOwnProperty.call(query, "refusal_ok");
+    if (hasR5 === hasRefusal) return "each query requires exactly one score kind (r@5 or refusal_ok)";
+    if (hasR5) {
+      if (!validRate(query["r@5"])) return `query ${query.id} r@5 must be finite in [0,1]`;
+      content++;
+      contentTotal += query["r@5"];
+    } else {
+      if (typeof query.refusal_ok !== "boolean") return `query ${query.id} refusal_ok must be boolean`;
+      refusal++;
+    }
+    ids.add(query.id);
+  }
+  if (content !== report.n_content || refusal !== report.n_refusal) return "query score kinds disagree with content/refusal counts";
+  const expectedRecall = content ? contentTotal / content : 0;
+  if (Math.abs(report.recall["r@5"]! - expectedRecall) > 1e-12) return "benchmark recall r@5 disagrees with query rows";
+  return null;
+}
+
+function compatibleQueryIds(report: BenchReport): string[] | null {
+  const ids = new Set<string>();
+  for (const query of report.per_query) {
+    if (typeof query.id !== "string" || !query.id || ids.has(query.id)) return null;
+    ids.add(query.id);
+  }
+  return [...ids].sort();
+}
+
+function queryScoreKinds(report: BenchReport): Record<string, "r@5" | "refusal_ok"> {
+  return Object.fromEntries(
+    report.per_query.map((query) => [
+      query.id,
+      Object.prototype.hasOwnProperty.call(query, "r@5") ? "r@5" : "refusal_ok",
+    ]),
+  );
 }
 
 // Sequential judgement gates, regression-block first (rule ordering studied from kytmanov's
 // compare harness; identifiers and vocabulary are our own).
 export function judgeArms(current: ArmResult, challenger: ArmResult): Verdict {
+  const currentMalformed = malformedArmReason(current);
+  const challengerMalformed = malformedArmReason(challenger);
+  if (currentMalformed || challengerMalformed) {
+    const details = [
+      currentMalformed ? `current: ${currentMalformed}` : "",
+      challengerMalformed ? `challenger: ${challengerMalformed}` : "",
+    ].filter(Boolean).join("; ");
+    return v("keep", `malformed arm report (${details})`, null, {}, {});
+  }
   const structural: Record<string, number> = {
     lintHealth: challenger.lintHealth - current.lintHealth,
     linkIntegrity: challenger.linkIntegrity - current.linkIntegrity,
@@ -133,13 +231,52 @@ export function judgeArms(current: ArmResult, challenger: ArmResult): Verdict {
     return v("keep", "challenger build partial (more ingest failures)", null, {}, structural);
   }
 
+  // A comparison is evidence only when both arms scored the same non-empty query set. Treating a
+  // missing or partially-overlapping set as `undecided` exits zero in the CLI and lets a broken arm
+  // pass CI. Fail closed before calculating deltas; the caller can repair/regenerate the arm.
+  if (!current.bench || !challenger.bench) {
+    return v("keep", "missing benchmark evidence on one or both arms", null, {}, structural);
+  }
+  if (
+    current.bench.n !== current.bench.per_query.length ||
+    challenger.bench.n !== challenger.bench.per_query.length
+  ) {
+    return v("keep", "incomplete benchmark evidence (declared query count differs from scored rows)", null, {}, structural);
+  }
+  if (
+    !current.bench.query_set_fingerprint ||
+    !challenger.bench.query_set_fingerprint ||
+    current.bench.subset !== challenger.bench.subset ||
+    current.bench.query_set_fingerprint !== challenger.bench.query_set_fingerprint
+  ) {
+    return v("keep", "incompatible benchmark evidence (subset or golden definitions differ)", null, {}, structural);
+  }
+  const currentIds = compatibleQueryIds(current.bench);
+  const challengerIds = compatibleQueryIds(challenger.bench);
+  if (!currentIds || !challengerIds) {
+    return v("keep", "invalid benchmark evidence (missing scores or duplicate query ids)", null, {}, structural);
+  }
+  if (currentIds.length === 0 || JSON.stringify(currentIds) !== JSON.stringify(challengerIds)) {
+    return v("keep", "incompatible benchmark query sets (ids must match exactly and be non-empty)", null, {}, structural);
+  }
+  const currentKinds = queryScoreKinds(current.bench);
+  const challengerKinds = queryScoreKinds(challenger.bench);
+  const changedKindId = currentIds.find((id) => currentKinds[id] !== challengerKinds[id]);
+  if (changedKindId) {
+    return v(
+      "keep",
+      `incompatible benchmark score kinds (query ${changedKindId} changed between r@5 and refusal_ok)`,
+      null,
+      {},
+      structural,
+    );
+  }
+
   // per-query deltas (only ids scored on both arms)
   const deltas: Record<string, number> = {};
-  if (current.bench && challenger.bench) {
-    const a = queryScores(current.bench);
-    const b = queryScores(challenger.bench);
-    for (const id of Object.keys(a)) if (id in b) deltas[id] = b[id]! - a[id]!;
-  }
+  const a = queryScores(current.bench);
+  const b = queryScores(challenger.bench);
+  for (const id of currentIds) deltas[id] = b[id]! - a[id]!;
   const ds = Object.values(deltas);
   const avg = ds.length ? ds.reduce((s, x) => s + x, 0) / ds.length : null;
 

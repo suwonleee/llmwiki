@@ -10,9 +10,22 @@ Use [`reference/INSTALLATION_FLOW.md`](reference/INSTALLATION_FLOW.md) for the s
 the active harness branch, and recovery rules. Read only the relevant harness section unless the
 human explicitly requests multiple harnesses.
 
+The machine-readable public support contract is
+[`reference/support-contract.json`](reference/support-contract.json). Its platform status, setup
+shell, daemon mechanism, CI evidence level, runtime floor, and privacy boundaries are canonical.
+
+| contract target | installation | setup shell | daemon | CI evidence |
+|---|---|---|---|---|
+| `macos` | `supported` | `posix` | `launchd` | `full-suite` |
+| `linux` | `supported` | `posix` | `systemd-or-cron-nohup` | `full-suite` |
+| `windows-native` | `supported` | `git-bash` | `per-user-startup-folder` | `platform-contract` |
+| `windows-wsl2` | `supported` | `posix-wsl2` | `systemd-or-cron-nohup` | `linux-suite` |
+
 **Claude-only installs have no `llmwiki` launcher** (the launcher is installed by the Codex and
 OpenCode wiring). On such an install, read every `llmwiki <args>` in this contract as
 `bun <absolute-clone-path>/src/cli.ts <args>` — the subcommands and flags are identical.
+On native Windows, use that explicit Bun form for every harness: the optional `llmwiki` launcher
+is a `#!/bin/sh` script for Git Bash, while Codex and OpenCode execute commands through PowerShell.
 
 ## Boundaries
 
@@ -33,8 +46,8 @@ OpenCode wiring). On such an install, read every `llmwiki <args>` in this contra
     - Identify the active harness: Claude Code, Codex, or OpenCode
     - Read the shared flow and only that harness branch in `reference/INSTALLATION_FLOW.md`
 - Check prerequisites
-    - A POSIX shell. `setup.sh` and the daemon installer are bash; on Windows run them under WSL2
-      (see README § Requirements). Do not attempt a native-Windows install
+    - The setup shell named by the support contract. `setup.sh` and the daemon installer are bash:
+      use a POSIX shell on macOS/Linux/WSL2, or Git Bash for a native-Windows install
     - `git` — the capture loop's one hard dependency. Enrollment cannot tell "git is missing" from
       "not a git worktree", so without it the engine installs cleanly and captures nothing. The
       engine searches past PATH (Homebrew, MacPorts, Nix, ~/.local/bin) before reporting it absent;
@@ -52,6 +65,8 @@ OpenCode wiring). On such an install, read every `llmwiki <args>` in this contra
     - Claude Code: `./setup.sh --harness claude`
     - Codex: `./setup.sh --harness codex`
     - OpenCode: `./setup.sh --harness opencode`
+    - Native Windows: run the selected command from Git Bash; setup registers the capture daemon
+      in the unelevated per-user Startup folder and prints explicit `bun .../src/cli.ts` follow-ups
     - `--harness auto` only on an explicit request for every detected harness
 - Preserve setup evidence
     - Keep the complete output

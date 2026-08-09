@@ -1,0 +1,150 @@
+{
+  "contract_version": 2,
+  "runtime": {
+    "bun_minimum": "1.1.0",
+    "git_required_for_capture": true
+  },
+  "platforms": {
+    "macos": {
+      "installation": "supported",
+      "setup_shell": "posix",
+      "daemon": "launchd",
+      "ci": "full-suite"
+    },
+    "linux": {
+      "installation": "supported",
+      "setup_shell": "posix",
+      "daemon": "systemd-or-cron-nohup",
+      "ci": "full-suite"
+    },
+    "windows-native": {
+      "installation": "supported",
+      "setup_shell": "git-bash",
+      "daemon": "per-user-startup-folder",
+      "ci": "platform-contract"
+    },
+    "windows-wsl2": {
+      "installation": "supported",
+      "setup_shell": "posix-wsl2",
+      "daemon": "systemd-or-cron-nohup",
+      "ci": "linux-suite"
+    }
+  },
+  "support_matrix": {
+    "macos": {
+      "claude": {
+        "install": "./setup.sh --harness claude",
+        "verify": "bun <absolute-clone-path>/src/cli.ts doctor --harness claude",
+        "init": "bun <absolute-clone-path>/src/cli.ts init <absolute-project-path>",
+        "manual_actions": [],
+        "public_surfaces": ["capture-daemon", "sessionstart-hook", "userpromptsubmit-hook", "wiki-commands"]
+      },
+      "codex": {
+        "install": "./setup.sh --harness codex",
+        "verify": "llmwiki doctor --harness codex",
+        "init": "llmwiki init <absolute-project-path>",
+        "manual_actions": ["codex-hook-trust"],
+        "public_surfaces": ["capture-daemon", "sessionstart-hook", "userpromptsubmit-hook", "wiki-skills", "user-launcher"]
+      },
+      "opencode": {
+        "install": "./setup.sh --harness opencode",
+        "verify": "llmwiki doctor --harness opencode",
+        "init": "llmwiki init <absolute-project-path>",
+        "manual_actions": ["opencode-restart"],
+        "public_surfaces": ["capture-daemon", "read-injection-plugin", "wiki-commands", "user-launcher"]
+      }
+    },
+    "linux": {
+      "claude": {
+        "install": "./setup.sh --harness claude",
+        "verify": "bun <absolute-clone-path>/src/cli.ts doctor --harness claude",
+        "init": "bun <absolute-clone-path>/src/cli.ts init <absolute-project-path>",
+        "manual_actions": [],
+        "public_surfaces": ["capture-daemon", "sessionstart-hook", "userpromptsubmit-hook", "wiki-commands"]
+      },
+      "codex": {
+        "install": "./setup.sh --harness codex",
+        "verify": "llmwiki doctor --harness codex",
+        "init": "llmwiki init <absolute-project-path>",
+        "manual_actions": ["codex-hook-trust"],
+        "public_surfaces": ["capture-daemon", "sessionstart-hook", "userpromptsubmit-hook", "wiki-skills", "user-launcher"]
+      },
+      "opencode": {
+        "install": "./setup.sh --harness opencode",
+        "verify": "llmwiki doctor --harness opencode",
+        "init": "llmwiki init <absolute-project-path>",
+        "manual_actions": ["opencode-restart"],
+        "public_surfaces": ["capture-daemon", "read-injection-plugin", "wiki-commands", "user-launcher"]
+      }
+    },
+    "windows-native": {
+      "claude": {
+        "install": "./setup.sh --harness claude",
+        "verify": "bun <absolute-clone-path>/src/cli.ts doctor --harness claude",
+        "init": "bun <absolute-clone-path>/src/cli.ts init <absolute-project-path>",
+        "manual_actions": [],
+        "public_surfaces": ["capture-daemon", "sessionstart-hook", "userpromptsubmit-hook", "wiki-commands"]
+      },
+      "codex": {
+        "install": "./setup.sh --harness codex",
+        "verify": "bun <absolute-clone-path>/src/cli.ts doctor --harness codex",
+        "init": "bun <absolute-clone-path>/src/cli.ts init <absolute-project-path>",
+        "manual_actions": ["codex-hook-trust"],
+        "public_surfaces": ["capture-daemon", "sessionstart-hook", "userpromptsubmit-hook", "wiki-skills", "git-bash-launcher"]
+      },
+      "opencode": {
+        "install": "./setup.sh --harness opencode",
+        "verify": "bun <absolute-clone-path>/src/cli.ts doctor --harness opencode",
+        "init": "bun <absolute-clone-path>/src/cli.ts init <absolute-project-path>",
+        "manual_actions": ["opencode-restart"],
+        "public_surfaces": ["capture-daemon", "read-injection-plugin", "wiki-commands", "git-bash-launcher"]
+      }
+    },
+    "windows-wsl2": {
+      "claude": {
+        "install": "./setup.sh --harness claude",
+        "verify": "bun <absolute-clone-path>/src/cli.ts doctor --harness claude",
+        "init": "bun <absolute-clone-path>/src/cli.ts init <absolute-project-path>",
+        "manual_actions": [],
+        "public_surfaces": ["capture-daemon", "sessionstart-hook", "userpromptsubmit-hook", "wiki-commands"]
+      },
+      "codex": {
+        "install": "./setup.sh --harness codex",
+        "verify": "llmwiki doctor --harness codex",
+        "init": "llmwiki init <absolute-project-path>",
+        "manual_actions": ["codex-hook-trust"],
+        "public_surfaces": ["capture-daemon", "sessionstart-hook", "userpromptsubmit-hook", "wiki-skills", "user-launcher"]
+      },
+      "opencode": {
+        "install": "./setup.sh --harness opencode",
+        "verify": "llmwiki doctor --harness opencode",
+        "init": "llmwiki init <absolute-project-path>",
+        "manual_actions": ["opencode-restart"],
+        "public_surfaces": ["capture-daemon", "read-injection-plugin", "wiki-commands", "user-launcher"]
+      }
+    }
+  },
+  "manual_actions": {
+    "codex-hook-trust": [
+      "Start Codex inside an initialized project",
+      "Open `/hooks`",
+      "Inspect and trust both current llmwiki hook hashes",
+      "Start a new project session after trust to exercise `SessionStart`"
+    ],
+    "opencode-restart": [
+      "Restart OpenCode after initial setup or clone re-pointing",
+      "No hook-trust UI action"
+    ]
+  },
+  "privacy": {
+    "local_first": true,
+    "project_enrollment_required": true,
+    "generative_subprocess_opt_in_env": "LLMWIKI_LLM_CMD",
+    "transcript_store_access": "read-only",
+    "managed_configuration_writes": {
+      "allowed": true,
+      "scope": "llmwiki-owned hooks, plugins, commands, skills, launchers, and service definitions",
+      "preserve_unrelated_configuration": true
+    }
+  }
+}

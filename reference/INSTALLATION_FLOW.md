@@ -4,6 +4,9 @@ Detailed execution reference for the coding agent following [`../setup_text.md`]
 Read the shared flow plus the active harness section only. Treat live setup and doctor output as
 the current source of truth.
 
+Platform support and privacy invariants are defined in the machine-readable
+[`support-contract.json`](support-contract.json).
+
 **Claude-only installs have no `llmwiki` launcher** (it is installed by the Codex and OpenCode
 wiring). On such an install, read every `llmwiki <args>` in this document as
 `bun <absolute-clone-path>/src/cli.ts <args>` — the subcommands and flags are identical.
@@ -205,8 +208,11 @@ you are the fallback searcher; the engine stays the gate on what gets recorded.
     - User systemd when available
     - Cron/nohup fallback when user systemd is unavailable
 - Windows
-    - WSL2 recommended
-    - Native Windows requires Git Bash plus separate service registration
+    - Native Windows and WSL2 are supported
+    - Native Windows runs setup under Git Bash; setup registers the daemon in the unelevated
+      per-user Startup folder, and generated Codex/OpenCode surfaces invoke Bun directly so they
+      work under PowerShell
+    - WSL2 uses the Linux systemd or cron/nohup path
 - Generative maintenance
     - Warm `/wiki-*` or `$wiki-*` workflows run on the active coding agent
     - Unattended `autoupdate` and semantic `review` launch a subprocess ONLY when

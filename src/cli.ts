@@ -47,6 +47,7 @@ import * as related from "./engine/related.ts";
 import { reconcileReflected } from "./engine/reconcile.ts";
 import * as quiz from "./engine/quiz.ts";
 import { runBench, writeResults } from "./engine/bench.ts";
+import { runScaleSuite } from "./engine/bench-scale.ts";
 import {
   discoverClaudeTranscripts,
   pickTranscripts,
@@ -1111,6 +1112,14 @@ function cmdBench(p: Parsed) {
   console.log(`  → ${out}`);
 }
 
+// Generated public scale tiers. Durations and byte distributions are evidence only: the suite's
+// `gating` field states the CI contract explicitly, and no absolute timing threshold exists here.
+function cmdBenchScale(p: Parsed) {
+  const repeats = Number(String(p.flags["--repeats"] ?? "5"));
+  if (!Number.isInteger(repeats) || repeats < 1) die("bench-scale --repeats must be a positive integer");
+  console.log(JSON.stringify(runScaleSuite(repeats), null, 2));
+}
+
 // The follow-through half of the read loop, standalone. `bench` folds it in when a repo has a
 // golden set; most repos never will, and the question "does anyone open what we point at" is
 // worth asking without one. Reads captured transcripts only — no wiki writes, no session cost.
@@ -1203,6 +1212,10 @@ function cmdCompareVerdict(p: Parsed) {
   console.log(`=== verdict: ${verdict.verdict} ===`);
   console.log(`  reason: ${verdict.reason}`);
   if (verdict.avg_query_delta !== null) console.log(`  avg query delta: ${verdict.avg_query_delta.toFixed(3)}`);
+  for (const [id, delta] of Object.entries(verdict.per_query_deltas).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    if (delta === 0) continue;
+    console.log(`  query ${id} delta: ${delta > 0 ? "+" : ""}${delta.toFixed(3)}`);
+  }
   for (const [k, d] of Object.entries(verdict.structural_deltas)) console.log(`  ${k} delta: ${d.toFixed(3)}`);
   if (verdict.verdict === "keep") process.exit(1); // regression → non-zero for CI use
 }
@@ -1472,6 +1485,7 @@ const HANDLERS: Record<string, (p: Parsed) => void | Promise<void>> = {
   "wiki-clean-apply": MAINTENANCE_HANDLERS["wiki-clean-apply"],
   "wiki-doctor": MAINTENANCE_HANDLERS["wiki-doctor"],
   bench: cmdBench,
+  "bench-scale": cmdBenchScale,
   "downstream-read": cmdDownstreamRead,
   "compare-arm": cmdCompareArm,
   "compare-verdict": cmdCompareVerdict,

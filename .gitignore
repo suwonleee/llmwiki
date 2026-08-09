@@ -33,3 +33,9 @@ docs/
 # internal working notes stay local; the agent installation flow is part of the shipped contract
 reference/*
 !reference/INSTALLATION_FLOW.md
+!reference/support-contract.json
+!reference/USABILITY_STUDY.md
+!reference/usability-study-event.schema.json
+!reference/usability-study-run.template.json
+!reference/usability-study-task.md
+!reference/RELEASE_GATES.md

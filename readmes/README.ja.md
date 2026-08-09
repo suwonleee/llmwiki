@@ -133,9 +133,12 @@ MCPサーバー、Docker、外部データベース、ベクトルDB、クラウ
 
 - setupが表示した次のコマンドをそのまま使用
     - Claude-only: clone固定の `bun <clone>/src/cli.ts …`
-    - Codex/OpenCode: ユーザー用 `llmwiki …`
+    - macOS・Linux・WSL2のCodex/OpenCode: ユーザー用 `llmwiki …`
+    - ネイティブWindowsの全ハーネス: 明示的な `bun <clone>/src/cli.ts …`; 任意の
+      `llmwiki` ランチャーはGit Bash専用で、Codex/OpenCodeはPowerShellを使用
 - 表示された手動アクションを完了
     - Codexのみ: `/hooks` で現在のllmwikiフック2つを確認・信頼
+    - OpenCode: 初回セットアップまたはclone再指定後に再起動
 - 全分岐・復旧基準: [`reference/INSTALLATION_FLOW.md`](../reference/INSTALLATION_FLOW.md)
 
 ## 複利のループ
@@ -289,10 +292,10 @@ cd ~/llmwiki
 
 | | 必要 | 備考 |
 |---|---|---|
-| **Bun ≥ 1.1** | ✔ 必須 | 単一バイナリ（`curl -fsSL https://bun.sh/install \| bash`）。`.ts` を直接実行、`bun:sqlite` がFTS5まで同梱 — ビルド·`node_modules` 0。エンジン実行·`bun test` はインストール不要; `bun run typecheck`（tsc）のみ一度 `bun install` が必要（dev専用）。 |
+| **Bun ≥ 1.1** | ✔ 必須 | 単一バイナリ — POSIX: `curl -fsSL https://bun.sh/install \| bash`; ネイティブWindows: PowerShellで `irm bun.sh/install.ps1 \| iex`（POSIXインストーラーはWindowsでは動作しません）。`.ts` を直接実行、`bun:sqlite` がFTS5まで同梱 — ビルド·`node_modules` 0。エンジン実行·`bun test` はインストール不要; `bun run typecheck`（tsc）のみ一度 `bun install` が必要（dev専用）。 |
 | **Codex · OpenCode CLI** | 各クイックスタートのみ | `codex` / `opencode` が `PATH` にあること。Codexは加えてlifecycle hook対応 + stable `hooks` 機能の有効化が必要。setupはフック·スキル·サービスを変更する前に、対応状況と既存の機能設定を確認。 |
 | **LLM CLI** | 任意・オプトイン | キャプチャ·読み込み注入·`/wiki-*`·`ingest`（capture-only、保留updateをキュー）は無くても動作し、**既定では何もどこにも送りません**。`autoupdate·review` と `ingest` の統合は、シェル環境で `LLMWIKI_LLM_CMD` を設定したときだけ生成サブプロセスを起動します（例: `export LLMWIKI_LLM_CMD='claude -p {prompt} --model {model} --disallowedTools Write Edit NotebookEdit Bash'`）。未設定ならそれらのパスは「利用不可」として skip し、決定的な処理はすべて動き続けます。 |
-| **OS** | macOS / Linux | macOS=launchd、Linux=systemd（`--user`）、systemdが無ければcron+nohupへフォールバック。デーモン詳細は [`daemon/README.md`](../daemon/README.md) |
+| **OS** | macOS / Linux / Windows | 正式なサポート契約: [`reference/support-contract.json`](../reference/support-contract.json)。macOS=launchd、Linux=systemd（`--user`）、systemdが無ければcron+nohupへフォールバック、Windows=ユーザー別スタートアップフォルダー。デーモン詳細は [`daemon/README.md`](../daemon/README.md) |
 
 ### ハーネス · OSノート（Claude Code / Codex / OpenCode / Windows）
 
@@ -306,9 +309,9 @@ cd ~/llmwiki
 - **OpenCode** — `./setup.sh --harness opencode`
     - グローバル `/wiki-*` カスタムコマンド、クローン固定の読み込み注入プラグイン、ユーザーCLIを導入
     - キャプチャはSQLiteセッションストアを読む · `XDG_DATA_HOME`/`OPENCODE_DB` もデーモン環境に保存
-- **Windows** — WSL2推奨
+- **Windows** — ネイティブ・WSL2ともにサポート
     - Bun·`bun:sqlite` はネイティブ動作 · パスマッチングはバックスラッシュを正規化
-    - ただしネイティブWindowsは `.sh` スクリプトにGit Bashが必要 + デーモンはTask Scheduler/NSSMの手動登録（launchd/systemd/cronが無い）
+    - ネイティブWindowsはGit Bashで `.sh` セットアップを実行。デーモンは権限昇格なしでユーザー別スタートアップフォルダーへ自動登録
     - WSL2ならすべて無修正で動作（launchd→systemd · bash · パス）— Claude Code·Codexの公式推奨とも一致
 
 ## インストール / 使い方

@@ -52,6 +52,7 @@ describe("public onboarding documentation", () => {
       const content = read(path);
       expect(content).toContain("setup_text.md");
       expect(content).toContain("INSTALLATION_FLOW.md");
+      expect(content).toContain("support-contract.json");
       expect(content).toContain("wiki-doctor");
       expect(content).toContain(attributionRule);
       expect(content).not.toContain("unattended writes stamp `author:`");

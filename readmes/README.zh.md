@@ -129,9 +129,12 @@ cp llmwiki.config.example.toml llmwiki.config.toml   # 英文，注释齐全
 
 - 原样使用setup输出的下一条命令
     - Claude-only: 固定到clone的 `bun <clone>/src/cli.ts …`
-    - Codex/OpenCode: 用户级 `llmwiki …`
+    - macOS、Linux 或 WSL2 上的Codex/OpenCode: 用户级 `llmwiki …`
+    - 原生 Windows 的所有harness: 显式使用 `bun <clone>/src/cli.ts …`；可选的
+      `llmwiki` 启动器仅适用于Git Bash，而Codex/OpenCode使用PowerShell
 - 完成输出中的手动操作
     - 仅Codex: 在 `/hooks` 中检查并信任两个当前llmwiki钩子
+    - OpenCode: 初次setup或clone重新指向后重启
 - 完整分支与恢复规则: [`reference/INSTALLATION_FLOW.md`](../reference/INSTALLATION_FLOW.md)
 
 ## 复利循环
@@ -284,10 +287,10 @@ cd ~/llmwiki
 
 | | 必需 | 备注 |
 |---|---|---|
-| **Bun ≥ 1.1** | ✔ 必需 | 单一二进制（`curl -fsSL https://bun.sh/install \| bash`）。直接运行 `.ts`，`bun:sqlite` 连 FTS5 一并打包 — 零构建·`node_modules`。运行引擎和 `bun test` 无需安装; 仅 `bun run typecheck`（tsc）需要一次 `bun install`（仅开发用）。 |
+| **Bun ≥ 1.1** | ✔ 必需 | 单一二进制 — POSIX：`curl -fsSL https://bun.sh/install \| bash`；原生 Windows：在 PowerShell 中运行 `irm bun.sh/install.ps1 \| iex`（POSIX 安装器不能在 Windows 上运行）。直接运行 `.ts`，`bun:sqlite` 连 FTS5 一并打包 — 零构建·`node_modules`。运行引擎和 `bun test` 无需安装; 仅 `bun run typecheck`（tsc）需要一次 `bun install`（仅开发用）。 |
 | **Codex · OpenCode CLI** | 仅各自的快速开始 | `codex` / `opencode` 需在 `PATH` 上。Codex 另需支持 lifecycle hook 且启用 stable `hooks` 功能。setup 在改动钩子·技能·服务之前，会先确认支持情况与既有功能设置。 |
 | **LLM CLI** | 可选，需显式开启 | 捕获·读取注入·`/wiki-*`·`ingest`（capture-only，只排队待更新）没有它也能工作，且**默认不向任何地方发送任何内容**。只有在 shell 环境中设置 `LLMWIKI_LLM_CMD` 后，`autoupdate·review` 和 `ingest` 的整合才会启动生成子进程（例如 `export LLMWIKI_LLM_CMD='claude -p {prompt} --model {model} --disallowedTools Write Edit NotebookEdit Bash'`）。未设置时这些通道报告“不可用”并跳过，确定性功能照常工作。 |
-| **OS** | macOS / Linux | macOS=launchd，Linux=systemd（`--user`），无 systemd 则回退 cron+nohup。守护进程细节见 [`daemon/README.md`](../daemon/README.md) |
+| **OS** | macOS / Linux / Windows | 正式支持契约：[`reference/support-contract.json`](../reference/support-contract.json)。macOS=launchd，Linux=systemd（`--user`），无 systemd 则回退 cron+nohup，Windows=每用户启动文件夹。守护进程细节见 [`daemon/README.md`](../daemon/README.md) |
 
 ### Harness · OS 备注（Claude Code / Codex / OpenCode / Windows）
 
@@ -301,9 +304,9 @@ cd ~/llmwiki
 - **OpenCode** — `./setup.sh --harness opencode`
     - 安装全局 `/wiki-*` 自定义命令、内嵌克隆路径的读取注入插件、用户 CLI
     - 捕获读取 SQLite 会话存储 · `XDG_DATA_HOME`/`OPENCODE_DB` 也会保留在守护进程环境里
-- **Windows** — 推荐 WSL2
+- **Windows** — 原生与 WSL2 均受支持
     - Bun·`bun:sqlite` 原生可跑 · 路径匹配会规范化反斜杠
-    - 但原生 Windows 仍需 Git Bash 跑 `.sh` 脚本 + 手动注册 Task Scheduler/NSSM（没有 launchd/systemd/cron）
+    - 原生 Windows 使用 Git Bash 运行 `.sh` 安装；守护进程无需提升权限，会自动注册到每用户启动文件夹
     - WSL2 下一切原样可用（launchd→systemd · bash · 路径）— 与 Claude Code·Codex 的官方建议一致
 
 ## 安装 / 使用

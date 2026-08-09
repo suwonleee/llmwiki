@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/suwonleee/llmwiki/reference/usability-study-event.schema.json",
+  "title": "llmwiki local usability study event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "manifest_digest",
+    "participant_code",
+    "study_phase",
+    "arm",
+    "platform",
+    "harness",
+    "sequence",
+    "monotonic_ms",
+    "stage",
+    "event",
+    "outcome",
+    "reason_code"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "run_id": { "type": "string", "pattern": "^run-[a-z0-9-]{6,48}$" },
+    "manifest_digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "participant_code": { "type": "string", "pattern": "^P[0-9]{3}$" },
+    "study_phase": { "enum": ["pilot", "comparative"] },
+    "arm": { "enum": ["agent-guided", "manual-fallback"] },
+    "platform": { "enum": ["macos", "linux", "windows-native", "windows-wsl2"] },
+    "harness": { "enum": ["claude", "codex", "opencode"] },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "monotonic_ms": { "type": "integer", "minimum": 0 },
+    "stage": {
+      "enum": [
+        "consent",
+        "prerequisites",
+        "clone-located",
+        "dry-run",
+        "install",
+        "doctor",
+        "harness-activation",
+        "fixture-enrollment",
+        "first-context",
+        "fixture-task",
+        "deterministic-close-out",
+        "close-out-artifact",
+        "clean-session-start",
+        "seeded-decision-retrieval",
+        "comprehension-check"
+      ]
+    },
+    "event": {
+      "description": "Across one run, the second intervention must be followed immediately by stopped/facilitator-safety-stop; a third intervention, completion, or later event is invalid.",
+      "enum": ["entered", "completed", "blocked", "intervention", "wrong-command", "stopped"]
+    },
+    "outcome": { "enum": ["pending", "success", "failure", "stopped"] },
+    "retrieval_evidence": { "enum": ["cold-start-context", "wiki-search", "both", "not-found"] },
+    "comprehension_results": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enrollment-scope", "clone-is-not-consent", "wiki-location", "llm-opt-in", "uninstall-preserves-wiki"],
+      "properties": {
+        "enrollment-scope": { "type": "boolean" },
+        "clone-is-not-consent": { "type": "boolean" },
+        "wiki-location": { "type": "boolean" },
+        "llm-opt-in": { "type": "boolean" },
+        "uninstall-preserves-wiki": { "type": "boolean" }
+      }
+    },
+    "reason_code": {
+      "description": "Withdrawal, deletion, private-data, credential, unsafe-mutation, distress, and timebox codes are mandatory terminal reasons; facilitator-safety-stop is mandatory immediately after the second intervention.",
+      "enum": [
+        "none",
+        "participant-withdrew",
+        "deletion-requested",
+        "private-data-exposed",
+        "credential-risk",
+        "prerequisite-missing",
+        "setup-error",
+        "doctor-error",
+        "activation-incomplete",
+        "wrong-command",
+        "retrieval-incorrect",
+        "unsafe-mutation-risk",
+        "participant-distress",
+        "timebox-expired",
+        "facilitator-safety-stop",
+        "other-coded"
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "event": { "const": "entered" } } },
+      "then": { "properties": { "outcome": { "const": "pending" }, "reason_code": { "const": "none" } } }
+    },
+    {
+      "if": { "properties": { "event": { "const": "completed" } } },
+      "then": { "properties": { "outcome": { "const": "success" }, "reason_code": { "const": "none" } } }
+    },
+    {
+      "if": { "properties": { "event": { "enum": ["blocked", "intervention"] } } },
+      "then": { "properties": { "outcome": { "const": "failure" } } }
+    },
+    {
+      "if": { "properties": { "event": { "const": "wrong-command" } } },
+      "then": {
+        "properties": {
+          "outcome": { "const": "failure" },
+          "reason_code": { "const": "wrong-command" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event": { "const": "stopped" } } },
+      "then": {
+        "properties": {
+          "outcome": { "const": "stopped" },
+          "reason_code": { "not": { "const": "none" } }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "reason_code": {
+            "enum": [
+              "participant-withdrew",
+              "deletion-requested",
+              "private-data-exposed",
+              "credential-risk",
+              "unsafe-mutation-risk",
+              "participant-distress",
+              "timebox-expired"
+            ]
+          }
+        },
+        "required": ["reason_code"]
+      },
+      "then": {
+        "properties": {
+          "event": { "const": "stopped" },
+          "outcome": { "const": "stopped" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "stage": { "const": "comprehension-check" },
+          "event": { "const": "completed" }
+        },
+        "required": ["stage", "event"]
+      },
+      "then": { "required": ["comprehension_results"] },
+      "else": { "not": { "required": ["comprehension_results"] } }
+    },
+    {
+      "if": {
+        "properties": {
+          "stage": { "const": "seeded-decision-retrieval" },
+          "event": { "enum": ["completed", "blocked", "stopped"] }
+        },
+        "required": ["stage", "event"]
+      },
+      "then": { "required": ["retrieval_evidence"] },
+      "else": { "not": { "required": ["retrieval_evidence"] } }
+    },
+    {
+      "if": {
+        "properties": {
+          "stage": { "const": "seeded-decision-retrieval" },
+          "event": { "const": "completed" },
+          "outcome": { "const": "success" }
+        },
+        "required": ["stage", "event", "outcome"]
+      },
+      "then": {
+        "properties": {
+          "retrieval_evidence": { "enum": ["cold-start-context", "wiki-search", "both"] }
+        }
+      }
+    }
+  ],
+  "examples": [
+    {
+      "schema_version": 1,
+      "run_id": "run-pilot-001",
+      "manifest_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "participant_code": "P001",
+      "study_phase": "pilot",
+      "arm": "agent-guided",
+      "platform": "windows-native",
+      "harness": "codex",
+      "sequence": 1,
+      "monotonic_ms": 0,
+      "stage": "consent",
+      "event": "completed",
+      "outcome": "success",
+      "reason_code": "none"
+    }
+  ]
+}

@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 import { CLONE_ROOT } from "../src/engine/paths.ts";
 import { CLAUDE_COMMANDS } from "../src/engine/claude-commands.ts";
 import { buildAssets } from "../src/plugin/build-assets.ts";
-import { classify, isPrivate, trackedFiles } from "../src/plugin/preflight.ts";
+import { classify, isPrivate, PUBLIC_REFERENCE_FILES, trackedFiles } from "../src/plugin/preflight.ts";
 import { git, makeGitRepo, tempDir } from "./support/git-repo.ts";
 
 const SKILLS = CLAUDE_COMMANDS.map((n) => n.replace(/\.md$/, ""));
@@ -136,7 +136,7 @@ describe("plugin distribution surface", () => {
     }
   });
 
-  test("publish preflight blocks the private surface and allows its one exception", () => {
+  test("publish preflight blocks the private surface and allows only reviewed public references", () => {
     // Installing from a git marketplace copies the TRACKED tree, so `git ls-files` is the
     // shipping manifest and publishing from the wrong clone would hand every user this
     // project's working wiki.
@@ -147,7 +147,9 @@ describe("plugin distribution surface", () => {
     expect(isPrivate("experiments/build-commit-golden.ts")).toBe(true);
     expect(isPrivate("configs/team-balcony.toml")).toBe(true);
     expect(isPrivate("reference/notes.md")).toBe(true);
-    expect(isPrivate("reference/INSTALLATION_FLOW.md")).toBe(false); // the shipped contract
+    for (const path of PUBLIC_REFERENCE_FILES) expect(isPrivate(path)).toBe(false);
+    expect(isPrivate("reference/usability-study-private/answer-key.json")).toBe(true);
+    expect(isPrivate("reference/future-public-looking-name.md")).toBe(true);
     expect(isPrivate("src/cli.ts")).toBe(false);
     expect(isPrivate("skills/wiki-save/SKILL.md")).toBe(false);
   });

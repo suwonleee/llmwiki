@@ -179,9 +179,12 @@ do not use `auto` unless you want every detected harness wired.
 
 - Follow the exact next command printed by setup
     - Claude-only: clone-pinned `bun <clone>/src/cli.ts …`
-    - Codex/OpenCode: user-level `llmwiki …`
+    - Codex/OpenCode on macOS, Linux, or WSL2: user-level `llmwiki …`
+    - Native Windows, every harness: explicit `bun <clone>/src/cli.ts …`; the optional
+      `llmwiki` launcher is a Git Bash-only shell script, while Codex/OpenCode use PowerShell
 - Complete any printed manual action
     - Codex only: review and trust the two current llmwiki hooks in `/hooks`
+    - OpenCode: restart it after initial setup or clone re-pointing
 - Full branch and recovery reference: [`reference/INSTALLATION_FLOW.md`](reference/INSTALLATION_FLOW.md)
 
 ## The Compounding Loop
@@ -336,6 +339,9 @@ The state directory and everything in it are created private (`0700` / `0600`). 
 transcripts are read in place from the harness's own store — llmwiki makes no copy of them.
 
 ## Prerequisites
+
+The canonical machine-readable platform, runtime, CI-evidence, and privacy contract is
+[`reference/support-contract.json`](reference/support-contract.json).
 
 | | Required | Notes |
 |---|---|---|

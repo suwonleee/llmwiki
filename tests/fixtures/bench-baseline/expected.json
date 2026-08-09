@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "query_set_fingerprint": "f413ea0a02c18eabdff0b2ef28b14ad76d550fae245fd57c320c6ed008c6e83e",
+  "n": 5,
+  "n_content": 3,
+  "n_refusal": 2,
+  "recall": {
+    "r@1": 1,
+    "r@5": 1,
+    "r@10": 1
+  },
+  "tc_pointer_hit": 1,
+  "tc_refusal_ok": 1,
+  "passive": {
+    "reach": 1,
+    "silence": 1,
+    "irreplaceable": 0.6666666666666666,
+    "by_lang": {
+      "en": { "n": 2, "reach": 1 },
+      "ko": { "n": 1, "reach": 1 }
+    },
+    "by_lang_silence": {
+      "en": { "n": 1, "reach": 1 },
+      "ko": { "n": 1, "reach": 1 }
+    },
+    "by_recoverability": {
+      "code": { "n": 1, "reach": 1 },
+      "wiki_only": { "n": 2, "reach": 1 }
+    }
+  },
+  "per_query": [
+    {
+      "id": "capture-route",
+      "r@1": 1,
+      "r@5": 1,
+      "r@10": 1,
+      "tc_hit": true,
+      "lang": "en",
+      "recoverable_from": "code"
+    },
+    {
+      "id": "off-topic-cooking",
+      "refusal_ok": true,
+      "lang": "ko"
+    },
+    {
+      "id": "off-topic-weather",
+      "refusal_ok": true,
+      "lang": "en"
+    },
+    {
+      "id": "refusal-policy-ko",
+      "r@1": 1,
+      "r@5": 1,
+      "r@10": 1,
+      "tc_hit": true,
+      "lang": "ko",
+      "recoverable_from": "wiki_only"
+    },
+    {
+      "id": "refusal-rationale",
+      "r@1": 1,
+      "r@5": 1,
+      "r@10": 1,
+      "tc_hit": true,
+      "lang": "en",
+      "recoverable_from": "wiki_only"
+    }
+  ]
+}

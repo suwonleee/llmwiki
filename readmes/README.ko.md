@@ -134,9 +134,12 @@ MCP 서버·Docker·외부 데이터베이스·벡터 DB·클라우드 서비스
 
 - setup이 출력한 다음 명령을 그대로 사용
     - Claude-only: clone 고정 `bun <clone>/src/cli.ts …`
-    - Codex/OpenCode: 사용자 `llmwiki …`
+    - macOS·Linux·WSL2의 Codex/OpenCode: 사용자 `llmwiki …`
+    - 네이티브 Windows의 모든 하네스: 명시적 `bun <clone>/src/cli.ts …`; 선택형 `llmwiki`
+      런처는 Git Bash 전용이고 Codex/OpenCode는 PowerShell을 사용
 - 출력된 수동 단계 완료
     - Codex만: `/hooks`에서 현재 llmwiki 훅 2개 검토·신뢰
+    - OpenCode: 최초 설치 또는 clone 경로 변경 후 재시작
 - 전체 분기·복구 기준: [`reference/INSTALLATION_FLOW.md`](../reference/INSTALLATION_FLOW.md)
 
 ## 선순환 루프
@@ -295,7 +298,7 @@ cd ~/llmwiki
 | **Bun ≥ 1.1** | ✔ 필수 | 단일 바이너리 — POSIX 는 `curl -fsSL https://bun.sh/install \| bash`, 네이티브 Windows 는 PowerShell 에서 `irm bun.sh/install.ps1 \| iex` (POSIX 설치 스크립트는 Windows 에서 동작하지 않는다). `.ts` 를 그대로 실행, `bun:sqlite` 가 FTS5 까지 번들 — 빌드·`node_modules` 0. 엔진 실행·`bun test` 는 무설치로 동작; `bun run typecheck`(tsc) 만 `bun install` 1회 필요 (dev 전용). |
 | **Codex · OpenCode CLI** | 각 빠른 시작에만 | `codex` / `opencode` 가 `PATH`에 있어야 함. Codex는 추가로 lifecycle hook 지원 + stable `hooks` 기능 활성 필요. setup은 훅·스킬·서비스 변경 전에 지원 여부와 기존 기능 설정을 확인. |
 | **LLM CLI** | 선택형·명시적 활성화 | 캡처·읽기 주입·`/wiki-*`·`ingest`(capture-only, 대기 목록만 기록)는 없어도 동작하고, 기본 상태에서는 아무것도 전송하지 않음. `LLMWIKI_LLM_CMD`를 셸 환경에 설정한 경우에만 `autoupdate·review`와 `ingest` 통합이 생성 서브프로세스를 실행 (Claude Code 권장값: `export LLMWIKI_LLM_CMD='claude -p {prompt} --model {model} --disallowedTools Write Edit NotebookEdit Bash'` — 프롬프트가 트랜스크립트 텍스트로 만들어지므로 툴 제한을 유지할 것). |
-| **OS** | macOS / Linux / Windows | macOS=launchd, Linux=systemd(`--user`), systemd 없으면 cron+nohup 폴백, Windows=사용자별 시작프로그램 폴더(권한 상승 없음; 로그온 시 시작, 크래시 재시작 없음). macOS·Linux 는 CI 에서 검증, Windows 는 CI 에서 typecheck·플랫폼 회귀 테스트가 돌고 나머지는 수동 검증. 데몬 세부는 [`daemon/README.md`](../daemon/README.md) |
+| **OS** | macOS / Linux / Windows | 정식 지원 계약: [`reference/support-contract.json`](../reference/support-contract.json). macOS=launchd, Linux=systemd(`--user`), systemd 없으면 cron+nohup 폴백, Windows=사용자별 시작프로그램 폴더(권한 상승 없음; 로그온 시 시작, 크래시 재시작 없음). macOS·Linux 는 CI 에서 검증, Windows 는 CI 에서 typecheck·플랫폼 회귀 테스트가 돌고 나머지는 수동 검증. 데몬 세부는 [`daemon/README.md`](../daemon/README.md) |
 
 ### 하네스 · OS 노트 (Claude Code / Codex / OpenCode / Windows)
 

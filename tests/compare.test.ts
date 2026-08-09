@@ -51,6 +51,7 @@ describe("compare scoreArm", () => {
 
 describe("compare judgeArms (sequential gates, regression-block first)", () => {
   const arm = (over: Partial<ArmResult>): ArmResult => ({
+    schema_version: 1,
     label: "x",
     corpus_files: 3,
     build_failures: 0,
@@ -59,6 +60,7 @@ describe("compare judgeArms (sequential gates, regression-block first)", () => {
     bench: {
       subset: "all", n: 2, recall: { "r@5": 1 }, tc_pointer_hit: 1, tc_refusal_ok: 1,
       n_content: 1, n_refusal: 1,
+      query_set_fingerprint: "fixture-query-set",
       per_query: [{ id: "q1", "r@5": 1 }, { id: "q2", refusal_ok: true }],
     } as any,
     lint_errors: 0,
@@ -70,8 +72,11 @@ describe("compare judgeArms (sequential gates, regression-block first)", () => {
   const withScores = (s: Record<string, number>, over: Partial<ArmResult> = {}): ArmResult =>
     arm({
       bench: {
-        subset: "all", n: Object.keys(s).length, recall: {}, tc_pointer_hit: 0, tc_refusal_ok: 0,
+        subset: "all", n: Object.keys(s).length,
+        recall: { "r@5": Object.values(s).reduce((sum, value) => sum + value, 0) / Object.keys(s).length },
+        tc_pointer_hit: 0, tc_refusal_ok: 0,
         n_content: Object.keys(s).length, n_refusal: 0,
+        query_set_fingerprint: "fixture-query-set",
         per_query: Object.entries(s).map(([id, v]) => ({ id, "r@5": v })),
       } as any,
       ...over,
@@ -93,9 +98,91 @@ describe("compare judgeArms (sequential gates, regression-block first)", () => {
     expect(v.verdict).toBe("keep");
   });
 
-  test("no shared queries → undecided", () => {
+  test("missing benchmark evidence fails closed", () => {
     const v = judgeArms(arm({ bench: null }), arm({ bench: null }));
-    expect(v.verdict).toBe("undecided");
+    expect(v.verdict).toBe("keep");
+    expect(v.reason).toContain("missing benchmark evidence");
+  });
+
+  test("mismatched query sets fail closed even when they overlap", () => {
+    const current = withScores({ shared: 1, current_only: 1 });
+    const challenger = withScores({ shared: 1, challenger_only: 1 });
+    const v = judgeArms(current, challenger);
+
+    expect(v.verdict).toBe("keep");
+    expect(v.reason).toContain("incompatible benchmark query sets");
+  });
+
+  test("non-overlapping query sets fail closed", () => {
+    const v = judgeArms(withScores({ current: 1 }), withScores({ challenger: 1 }));
+
+    expect(v.verdict).toBe("keep");
+    expect(v.reason).toContain("incompatible benchmark query sets");
+  });
+
+  test("matching ids with different golden definitions fail closed", () => {
+    const current = withScores({ shared: 1 });
+    const challenger = withScores({ shared: 1 });
+    challenger.bench!.query_set_fingerprint = "different-golden-definition";
+
+    const v = judgeArms(current, challenger);
+
+    expect(v.verdict).toBe("keep");
+    expect(v.reason).toContain("incompatible benchmark evidence");
+  });
+
+  test("matching ids with swapped content and refusal score kinds fail closed", () => {
+    const current = arm({});
+    const challenger = arm({
+      bench: {
+        ...arm({}).bench!,
+        per_query: [{ id: "q1", refusal_ok: true }, { id: "q2", "r@5": 1 }],
+      } as any,
+    });
+
+    const v = judgeArms(current, challenger);
+
+    expect(v.verdict).toBe("keep");
+    expect(v.reason).toContain("incompatible benchmark score kinds");
+  });
+
+  test("identically truncated reports fail closed when declared query counts exceed scored rows", () => {
+    const current = withScores({ shared: 1 });
+    const challenger = withScores({ shared: 1 });
+    current.bench!.n = 2;
+    challenger.bench!.n = 2;
+
+    const v = judgeArms(current, challenger);
+
+    expect(v.verdict).toBe("keep");
+    expect(v.reason).toContain("incomplete benchmark evidence");
+  });
+
+  test("malformed score values and kinds fail closed", () => {
+    for (const score of [Number.NaN, Number.POSITIVE_INFINITY, -0.01, 1.01]) {
+      const challenger = withScores({ shared: 1 });
+      challenger.bench!.per_query[0]!["r@5"] = score;
+      expect(judgeArms(withScores({ shared: 0 }), challenger)).toMatchObject({
+        verdict: "keep",
+        reason: expect.stringContaining("malformed arm report"),
+      });
+    }
+    const wrongKind = withScores({ shared: 1 });
+    wrongKind.bench!.per_query = [{ id: "shared", "r@1": 1 }];
+    expect(judgeArms(withScores({ shared: 0 }), wrongKind).reason).toContain("exactly one score kind");
+  });
+
+  test("malformed counts, health, and schema fail closed", () => {
+    const incomplete = withScores({ shared: 1 });
+    incomplete.bench!.n_content = 0;
+    expect(judgeArms(withScores({ shared: 0 }), incomplete).reason).toContain("content/refusal counts");
+
+    const unhealthy = withScores({ shared: 1 }, { linkIntegrity: 2 });
+    expect(judgeArms(withScores({ shared: 0 }), unhealthy).reason).toContain("linkIntegrity");
+
+    const unversioned = withScores({ shared: 1 }) as any;
+    delete unversioned.schema_version;
+    expect(judgeArms(withScores({ shared: 0 }), unversioned).reason).toContain("schema_version");
   });
 
   test("avg > +0.10 → adopt", () => {
