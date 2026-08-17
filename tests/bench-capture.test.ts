@@ -33,7 +33,7 @@ describe("deterministic capture-scale benchmark", () => {
     }
     expect(tier.harnesses.claude.unchanged_candidates).toBe(0);
     expect(tier.harnesses.codex.unchanged_candidates).toBe(0);
-    expect(tier.harnesses.opencode.unchanged_candidates).toBe(10);
+    expect(tier.harnesses.opencode.unchanged_candidates).toBe(0);
     expect(suite.hook_cli_ms.module_startup.samples).toHaveLength(2);
     expect(suite.hook_cli_ms.enrollment_probe.samples).toHaveLength(2);
   }, 20_000);

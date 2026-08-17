@@ -20,6 +20,11 @@ export interface DiscoveredSession {
   lines: number;
 }
 
+export interface MaterializationResult {
+  session: DiscoveredSession | null;
+  error?: unknown;
+}
+
 /**
  * Stage 1 of discovery: WHERE a session belongs, and nothing else.
  *
@@ -38,6 +43,8 @@ export interface DiscoveredRoute {
   sourcePath?: string;
   /** Existing file whose size represents this route when `path` is a stable logical identity. */
   changePath?: string;
+  /** Harness-owned revision token for logical/database-backed routes. */
+  revision?: string;
   /** The source has no reliable file-size revision token and must be checked every sweep. */
   alwaysMaterialize?: boolean;
 }
@@ -66,6 +73,8 @@ export interface TranscriptSource {
   // Stage 2: count the work and, where the harness needs it (OpenCode), materialize the export.
   // The daemon calls this ONLY for routes whose repository is enrolled.
   materialize(route: DiscoveredRoute): DiscoveredSession | null;
+  // Optional sweep batch. Results preserve route order and isolate errors per route.
+  materializeMany?(routes: readonly DiscoveredRoute[]): MaterializationResult[];
   discover(): DiscoveredSession[]; // convenience composition; sources may retain their trust gate
   // Stage 1 for ONE path (the watcher fast path): same bounded budget as discoverRoutes.
   // Omitted → this adapter has no file-watch entry point.

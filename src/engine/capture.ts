@@ -67,6 +67,13 @@ CREATE TABLE IF NOT EXISTS route_hint (
     source_kind TEXT,
     seen_at TEXT DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS route_revision (
+    source_kind TEXT NOT NULL,
+    route_path TEXT NOT NULL,
+    revision TEXT NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (source_kind, route_path)
+);
 CREATE TABLE IF NOT EXISTS opencode_progress (
     source_path TEXT NOT NULL,
     session_id TEXT NOT NULL,
@@ -111,6 +118,11 @@ CREATE TABLE IF NOT EXISTS opencode_v1_append (
 );
 `;
 
+export interface RouteRevision {
+  path: string;
+  revision: string;
+}
+
 export interface CaptureRow {
   transcript_path: string;
   session_id: string | null;
@@ -130,6 +142,7 @@ export interface CaptureRow {
 // as missing capture rather than as an error. Wait instead — the per-repo index has made the same
 // choice since its first WAL day (db.ts).
 const BUSY_TIMEOUT_MS = 5000;
+let scopedConnection: Database | null = null;
 
 function applyBusyTimeout(db: Database): Database {
   db.exec(`PRAGMA busy_timeout=${BUSY_TIMEOUT_MS}`);
@@ -143,6 +156,7 @@ function openReadonly(): Database {
 
 function connect(): Database {
   syncStatePaths();
+  if (scopedConnection) return scopedConnection;
   // The state root is created (or adopted) under the ownership contract, so the queue database
   // never lands in a directory this engine does not own — and never with default permissions.
   ensureOwnedStateRoot(STATE_DIR);
@@ -208,13 +222,60 @@ function connect(): Database {
   return db;
 }
 
+function release(db: Database): void {
+  if (db !== scopedConnection) db.close();
+}
+
+/** Reuse capture.db across a synchronous materialization batch without changing public operations. */
+export function withCaptureConnection<T>(fn: () => T): T {
+  if (scopedConnection) return fn();
+  const db = connect();
+  scopedConnection = db;
+  try {
+    return fn();
+  } finally {
+    scopedConnection = null;
+    db.close();
+  }
+}
+
+/** Durable body-free poll revisions, so a daemon restart does not rescan every DB session. */
+export function routeRevisions(sourceKind: string): Record<string, string | number> {
+  const db = connect();
+  try {
+    const rows = db
+      .query("SELECT route_path, revision FROM route_revision WHERE source_kind = ?")
+      .all(sourceKind) as { route_path: string; revision: string }[];
+    return Object.fromEntries(rows.map((row) => [row.route_path, row.revision]));
+  } finally {
+    release(db);
+  }
+}
+
+/** Commit revisions only after materialization and queue handling have safely completed. */
+export function recordRouteRevisions(sourceKind: string, revisions: readonly RouteRevision[]): void {
+  if (!revisions.length) return;
+  const db = connect();
+  try {
+    const upsert = db.prepare(
+      "INSERT INTO route_revision (source_kind, route_path, revision) VALUES (?, ?, ?) " +
+        "ON CONFLICT(source_kind, route_path) DO UPDATE SET revision = excluded.revision, updated_at = datetime('now')",
+    );
+    db.transaction((rows: readonly RouteRevision[]) => {
+      for (const row of rows) upsert.run(sourceKind, row.path, row.revision);
+    })(revisions);
+  } finally {
+    release(db);
+  }
+}
+
 /** Durable, non-body OpenCode watermark. Export bodies may expire without losing this progress. */
 export function getOpenCodeProgress(sourcePath: string, sessionId: string): number | null {
   const db = connect();
   const row = db
     .query("SELECT last_seq FROM opencode_progress WHERE source_path = ? AND session_id = ?")
     .get(sourcePath, sessionId) as { last_seq: number } | null;
-  db.close();
+  release(db);
   return row && Number.isFinite(row.last_seq) ? row.last_seq : null;
 }
 
@@ -227,7 +288,7 @@ export function advanceOpenCodeProgress(sourcePath: string, sessionId: string, l
       "last_seq = MAX(opencode_progress.last_seq, excluded.last_seq), updated_at = datetime('now')",
     [sourcePath, sessionId, lastSeq],
   );
-  db.close();
+  release(db);
 }
 
 export interface OpenCodeAppendJournal {
@@ -353,7 +414,7 @@ export function beginOpenCodeAppend(
       owner.token,
     ],
   );
-  db.close();
+  release(db);
 }
 
 export function getOpenCodeAppend(sourcePath: string, sessionId: string): OpenCodeAppendJournal | null {
@@ -373,7 +434,7 @@ export function getOpenCodeAppend(sourcePath: string, sessionId: string): OpenCo
       owner_pid: number;
       owner_token: string;
     } | null;
-  db.close();
+  release(db);
   return row
     ? {
         exportPath: row.export_path,
@@ -401,7 +462,7 @@ export function claimOpenCodeAppend(
       "WHERE source_path = ? AND session_id = ? AND owner_pid = ? AND owner_token = ?",
     [next.pid, next.token, sourcePath, sessionId, expected.pid, expected.token],
   );
-  db.close();
+  release(db);
   return Number(result.changes ?? 0) === 1;
 }
 
@@ -418,7 +479,7 @@ export function finishOpenCodeAppend(sourcePath: string, sessionId: string, last
     db.run("DELETE FROM opencode_append WHERE source_path = ? AND session_id = ?", [sourcePath, sessionId]);
   });
   finish();
-  db.close();
+  release(db);
 }
 
 // ---- OpenCode v1 (legacy `message`+`part`) watermark + append journal ------------------
@@ -437,7 +498,7 @@ export function getOpenCodeV1Progress(sourcePath: string, sessionId: string): st
   const row = db
     .query("SELECT last_message_id FROM opencode_v1_progress WHERE source_path = ? AND session_id = ?")
     .get(sourcePath, sessionId) as { last_message_id: string } | null;
-  db.close();
+  release(db);
   return row && typeof row.last_message_id === "string" && row.last_message_id ? row.last_message_id : null;
 }
 
@@ -451,7 +512,7 @@ export function advanceOpenCodeV1Progress(sourcePath: string, sessionId: string,
       "updated_at = datetime('now')",
     [sourcePath, sessionId, lastMessageId],
   );
-  db.close();
+  release(db);
 }
 
 export interface OpenCodeV1AppendJournal {
@@ -489,7 +550,7 @@ export function beginOpenCodeV1Append(
       owner.token,
     ],
   );
-  db.close();
+  release(db);
 }
 
 export function getOpenCodeV1Append(sourcePath: string, sessionId: string): OpenCodeV1AppendJournal | null {
@@ -509,7 +570,7 @@ export function getOpenCodeV1Append(sourcePath: string, sessionId: string): Open
       owner_pid: number;
       owner_token: string;
     } | null;
-  db.close();
+  release(db);
   return row
     ? {
         exportPath: row.export_path,
@@ -537,7 +598,7 @@ export function claimOpenCodeV1Append(
       "WHERE source_path = ? AND session_id = ? AND owner_pid = ? AND owner_token = ?",
     [next.pid, next.token, sourcePath, sessionId, expected.pid, expected.token],
   );
-  db.close();
+  release(db);
   return Number(result.changes ?? 0) === 1;
 }
 
@@ -555,7 +616,7 @@ export function finishOpenCodeV1Append(sourcePath: string, sessionId: string, la
     db.run("DELETE FROM opencode_v1_append WHERE source_path = ? AND session_id = ?", [sourcePath, sessionId]);
   });
   finish();
-  db.close();
+  release(db);
 }
 
 function sizeOf(path: string): number {

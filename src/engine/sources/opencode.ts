@@ -26,7 +26,13 @@ import {
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import type { DiscoveredRoute, DiscoveredSession, ParseOpts, TranscriptSource } from "../source.ts";
+import type {
+  DiscoveredRoute,
+  DiscoveredSession,
+  MaterializationResult,
+  ParseOpts,
+  TranscriptSource,
+} from "../source.ts";
 import { discoverViaRoutes } from "./routing.ts";
 import { readTail, type Increment, type Turn } from "../extract.ts";
 import { canonicalWorktree, isEnrolledFresh } from "../enrollment.ts";
@@ -252,6 +258,9 @@ function renderRow(row: any): string | null {
 // Past this grace, a row with no completion marker is a crashed/abandoned turn: its partial text
 // is all there will ever be, so it settles rather than stranding the tail of the session forever.
 const STREAM_SETTLE_GRACE_MS = 6 * 60 * 60 * 1000;
+// A batch may contain thousands of sessions from one repository. Git enrollment is rechecked at
+// this cadence while avoiding one subprocess per session; processGuarded checks again before queue writes.
+const BATCH_ENROLLMENT_CACHE_MS = 250;
 
 function rowSettled(row: any, hasLater: boolean): boolean {
   if (String(row.type ?? "") !== "assistant") return true;
@@ -829,12 +838,20 @@ export function discoverOpenCodeRoutes(dbPaths: readonly string[] = opencodeDbPa
     if (!db) continue;
     try {
       let sessions: any[];
+      let hasRevision = true;
       try {
         sessions = db
-          .query("SELECT id, directory FROM session WHERE time_archived IS NULL ORDER BY time_updated DESC")
+          .query("SELECT id, directory, time_updated FROM session WHERE time_archived IS NULL ORDER BY time_updated DESC")
           .all() as any[];
       } catch {
-        continue; // schema drift
+        // Old/alternate projections may not expose time_updated. Routing remains available and
+        // conservatively falls back to checking those sessions every sweep.
+        hasRevision = false;
+        try {
+          sessions = db.query("SELECT id, directory FROM session WHERE time_archived IS NULL").all() as any[];
+        } catch {
+          continue; // schema drift
+        }
       }
       for (const s of sessions) {
         const id = String(s.id ?? "");
@@ -845,7 +862,9 @@ export function discoverOpenCodeRoutes(dbPaths: readonly string[] = opencodeDbPa
           sessionId: id,
           repo,
           sourcePath: dbPath,
-          alwaysMaterialize: true,
+          ...(hasRevision && s.time_updated !== null && s.time_updated !== undefined
+            ? { revision: String(s.time_updated) }
+            : { alwaysMaterialize: true }),
         });
       }
     } finally {
@@ -859,34 +878,102 @@ export function materializeOpenCodeRoute(
   route: DiscoveredRoute,
   allowedDbPaths: readonly string[] = opencodeDbPaths(),
 ): DiscoveredSession | null {
-  const id = route.sessionId;
-  if (!id || !route.repo || !route.sourcePath) return null;
-  let sourcePath: string;
-  try {
-    sourcePath = realpathSync(route.sourcePath);
-  } catch {
-    return null;
-  }
-  if (!allowedDbPaths.includes(sourcePath)) return null;
-  const db = openRO(sourcePath);
-  if (!db) return null;
-  try {
-    let row: any;
+  return capture.withCaptureConnection(() => {
+    const id = route.sessionId;
+    if (!id || !route.repo || !route.sourcePath) return null;
+    let sourcePath: string;
     try {
-      row = db.query("SELECT id, directory, title FROM session WHERE id = ?").get(id);
+      sourcePath = realpathSync(route.sourcePath);
     } catch {
       return null;
     }
-    if (!row || typeof row.directory !== "string") return null;
-    const routedRepo = canonicalWorktree(route.repo);
-    const currentRepo = canonicalWorktree(row.directory);
-    if (!routedRepo || !currentRepo || routedRepo !== currentRepo || !isEnrolledFresh(currentRepo)) return null;
-    const result = exportSession(db, sourcePath, id, currentRepo, row.title ?? null);
-    if (result.lines <= 1) return null;
-    return { path: result.path, sessionId: id, repo: currentRepo, lines: result.lines };
-  } finally {
-    db.close();
+    if (!allowedDbPaths.includes(sourcePath)) return null;
+    const db = openRO(sourcePath);
+    if (!db) return null;
+    try {
+      return materializeFromOpenCodeDb(route, sourcePath, db);
+    } finally {
+      db.close();
+    }
+  });
+}
+
+function materializeFromOpenCodeDb(
+  route: DiscoveredRoute,
+  sourcePath: string,
+  db: Database,
+  cache?: {
+    canonical: Map<string, string | null>;
+    enrollment: Map<string, { checkedAt: number; enrolled: boolean }>;
+  },
+): DiscoveredSession | null {
+  const id = route.sessionId;
+  if (!id || !route.repo) return null;
+  let row: any;
+  try {
+    row = db.query("SELECT id, directory, title FROM session WHERE id = ?").get(id);
+  } catch {
+    return null;
   }
+  if (!row || typeof row.directory !== "string") return null;
+  const canonical = (path: string): string | null => {
+    if (!cache) return canonicalWorktree(path);
+    if (!cache.canonical.has(path)) cache.canonical.set(path, canonicalWorktree(path));
+    return cache.canonical.get(path) ?? null;
+  };
+  const routedRepo = canonical(route.repo);
+  const currentRepo = canonical(row.directory);
+  if (!routedRepo || !currentRepo || routedRepo !== currentRepo) return null;
+  const now = Date.now();
+  const checked = cache?.enrollment.get(currentRepo);
+  const enrolled =
+    checked && now - checked.checkedAt < BATCH_ENROLLMENT_CACHE_MS
+      ? checked.enrolled
+      : isEnrolledFresh(currentRepo);
+  if (cache && (!checked || now - checked.checkedAt >= BATCH_ENROLLMENT_CACHE_MS)) {
+    cache.enrollment.set(currentRepo, { checkedAt: now, enrolled });
+  }
+  if (!enrolled) return null;
+  const result = exportSession(db, sourcePath, id, currentRepo, row.title ?? null);
+  if (result.lines <= 1) return null;
+  return { path: result.path, sessionId: id, repo: currentRepo, lines: result.lines };
+}
+
+/** One source-DB and one capture-DB connection per sweep, while preserving per-route failures. */
+export function materializeOpenCodeRoutes(
+  routes: readonly DiscoveredRoute[],
+  allowedDbPaths: readonly string[] = opencodeDbPaths(),
+): MaterializationResult[] {
+  const allowed = new Set(allowedDbPaths);
+  return capture.withCaptureConnection(() => {
+    const databases = new Map<string, Database | null>();
+    const cache = {
+      canonical: new Map<string, string | null>(),
+      enrollment: new Map<string, { checkedAt: number; enrolled: boolean }>(),
+    };
+    try {
+      return routes.map((route): MaterializationResult => {
+        if (!route.sessionId || !route.repo || !route.sourcePath) return { session: null };
+        let sourcePath: string;
+        try {
+          sourcePath = realpathSync(route.sourcePath);
+        } catch {
+          return { session: null };
+        }
+        if (!allowed.has(sourcePath)) return { session: null };
+        if (!databases.has(sourcePath)) databases.set(sourcePath, openRO(sourcePath));
+        const db = databases.get(sourcePath);
+        if (!db) return { session: null };
+        try {
+          return { session: materializeFromOpenCodeDb(route, sourcePath, db, cache) };
+        } catch (error) {
+          return { session: null, error };
+        }
+      });
+    } finally {
+      for (const db of databases.values()) db?.close();
+    }
+  });
 }
 
 export const opencodeSource: TranscriptSource = {
@@ -905,6 +992,10 @@ export const opencodeSource: TranscriptSource = {
   // the append-only file, and report its size.
   materialize(route: DiscoveredRoute): DiscoveredSession | null {
     return materializeOpenCodeRoute(route);
+  },
+
+  materializeMany(routes: readonly DiscoveredRoute[]): MaterializationResult[] {
+    return materializeOpenCodeRoutes(routes);
   },
 
   discover(): DiscoveredSession[] {

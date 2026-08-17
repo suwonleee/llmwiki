@@ -17,7 +17,9 @@ import {
   sources,
   discoverableSources,
   routeNeedsMaterialization,
+  type DiscoveredRoute,
   type DiscoveredSession,
+  type MaterializationResult,
 } from "../engine/source.ts";
 
 const THRESHOLD_LINES = 50; // skip trivial Q&A sessions (work-volume signal)
@@ -47,12 +49,14 @@ function emptyCounts(): SweepCounts {
 //
 // Logging is deliberately AGGREGATE for the rejected side: printing the repository path of a
 // session we refused to read would put the very inventory we are protecting into daemon.log.
-function sweep(lastSizes?: Record<string, number>): SweepCounts {
+function sweep(lastRevisions?: Record<string, string | number>): SweepCounts {
   const counts = emptyCounts();
+  const durableRevisionUpdates: capture.RouteRevision[] = [];
   // Enrollment is cached per process; a sweep is the natural refresh point, so `llmwiki init`
   // takes effect on the next poll without restarting the daemon.
   resetEnrollmentCache();
   for (const s of sources()) {
+    const candidates: DiscoveredRoute[] = [];
     for (let route of s.discoverRoutes()) {
       counts.discovered += 1;
       // Stage-1 could not tell whose session this is. Before giving up, check whether a harness
@@ -72,17 +76,42 @@ function sweep(lastSizes?: Record<string, number>): SweepCounts {
       }
       // Poll-mode short circuit: an enrolled transcript whose size has not moved since the last
       // sweep has nothing new to count or enqueue.
-      if (!routeNeedsMaterialization(route, lastSizes)) continue;
-      let session: DiscoveredSession | null;
+      if (!routeNeedsMaterialization(route, lastRevisions)) continue;
+      candidates.push(route);
+    }
+    if (!candidates.length) continue;
+    let materialized: MaterializationResult[];
+    if (s.materializeMany) {
       try {
-        session = s.materialize(route);
+        materialized = s.materializeMany(candidates);
       } catch (e) {
-        counts.failed += 1;
-        log(`materialize FAILED [${s.kind}]: ${e}`);
+        counts.failed += candidates.length;
+        log(`materialize batch FAILED [${s.kind}]: ${e}`);
+        if (lastRevisions) for (const route of candidates) delete lastRevisions[route.path];
         continue;
       }
+    } else {
+      materialized = candidates.map((route) => {
+        try {
+          return { session: s.materialize(route) };
+        } catch (error) {
+          return { session: null, error };
+        }
+      });
+    }
+    for (let index = 0; index < candidates.length; index += 1) {
+      const route = candidates[index]!;
+      const result = materialized[index] ?? { session: null, error: new Error("missing materialization result") };
+      if (result.error) {
+        counts.failed += 1;
+        log(`materialize FAILED [${s.kind}]: ${result.error}`);
+        if (lastRevisions) delete lastRevisions[route.path];
+        continue;
+      }
+      const session: DiscoveredSession | null = result.session;
       if (!session) {
         counts.routeUnresolved += 1;
+        if (lastRevisions && route.revision !== undefined) delete lastRevisions[route.path];
         continue;
       }
       const outcome = processGuarded(session, s.kind);
@@ -90,7 +119,24 @@ function sweep(lastSizes?: Record<string, number>): SweepCounts {
       else if (outcome === "failed") counts.failed += 1;
       else if (outcome === "skipped_unenrolled") counts.skippedUnenrolled += 1;
       else counts.skippedShort += 1;
+      if (route.revision !== undefined && (outcome === "enqueued" || outcome === "skipped_short")) {
+        durableRevisionUpdates.push({ path: route.path, revision: route.revision });
+      } else if (lastRevisions && route.revision !== undefined) {
+        // A failed enqueue or an enrollment revocation must retry rather than becoming an
+        // in-memory false success for the lifetime of the daemon.
+        delete lastRevisions[route.path];
+      }
     }
+  }
+  try {
+    capture.recordRouteRevisions("opencode", durableRevisionUpdates);
+  } catch (error) {
+    // Do not let a transient capture.db failure turn the in-memory gate into a false durable
+    // success. Forget these tokens so the next poll retries the complete capture path.
+    if (lastRevisions) {
+      for (const row of durableRevisionUpdates) delete lastRevisions[row.path];
+    }
+    throw error;
   }
   return counts;
 }
@@ -131,8 +177,8 @@ function queueStats(): string {
   }
 }
 
-function runCycle(lastSizes?: Record<string, number>): SweepCounts {
-  const counts = sweep(lastSizes);
+function runCycle(lastRevisions?: Record<string, string | number>): SweepCounts {
+  const counts = sweep(lastRevisions);
   // Retention is deliberately after materialization: legacy exports can be migration evidence.
   pruneExportsIfDue();
   return counts;
@@ -143,13 +189,19 @@ function runOnce(): SweepCounts {
 }
 
 async function pollLoop(): Promise<void> {
-  const lastSizes: Record<string, number> = {};
+  let lastRevisions: Record<string, string | number> = {};
+  try {
+    lastRevisions = capture.routeRevisions("opencode");
+  } catch (e) {
+    // Safe fallback: a damaged/unavailable state DB costs one conservative rescan, not capture.
+    log(`route revision restore FAILED (using conservative sweep): ${e}`);
+  }
   // eslint-disable-next-line no-constant-condition
   while (true) {
     // Discovery walks other tools' directories, so it can throw on a permission or race too —
     // a failed sweep costs one poll interval, never the loop.
     try {
-      runCycle(lastSizes);
+      runCycle(lastRevisions);
     } catch (e) {
       log(`sweep FAILED (retrying next poll): ${e}`);
     }

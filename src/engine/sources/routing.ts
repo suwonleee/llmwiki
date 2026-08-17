@@ -389,8 +389,15 @@ export function countLines(path: string): number {
  * the entire point of splitting them. Explicit commands and tests do.
  */
 export function discoverViaRoutes(source: TranscriptSource): DiscoveredSession[] {
+  const routes = source.discoverRoutes();
+  if (source.materializeMany) {
+    const results = source.materializeMany(routes);
+    const failed = results.find((result) => result.error !== undefined);
+    if (failed?.error) throw failed.error;
+    return results.flatMap((result) => (result.session ? [result.session] : []));
+  }
   const out: DiscoveredSession[] = [];
-  for (const route of source.discoverRoutes()) {
+  for (const route of routes) {
     const session = source.materialize(route);
     if (session) out.push(session);
   }
@@ -398,15 +405,20 @@ export function discoverViaRoutes(source: TranscriptSource): DiscoveredSession[]
 }
 
 /**
- * Poll revision gate. File-backed sources skip unchanged bodies; database-backed OpenCode has no
- * reliable single-file revision (SQLite may update only its WAL), so its routes explicitly opt
- * into materialization every sweep.
+ * Poll revision gate. File-backed sources use size; database-backed sources can provide a
+ * harness-owned logical revision because SQLite may update only its WAL. A source without either
+ * reliable signal explicitly opts into materialization every sweep.
  */
 export function routeNeedsMaterialization(
   route: DiscoveredRoute,
-  lastSizes?: Record<string, number>,
+  lastRevisions?: Record<string, string | number>,
 ): boolean {
-  if (!lastSizes || route.alwaysMaterialize) return true;
+  if (!lastRevisions || route.alwaysMaterialize) return true;
+  if (route.revision !== undefined) {
+    if (lastRevisions[route.path] === route.revision) return false;
+    lastRevisions[route.path] = route.revision;
+    return true;
+  }
   const observedPath = route.changePath ?? route.path;
   let size: number;
   try {
@@ -414,7 +426,7 @@ export function routeNeedsMaterialization(
   } catch {
     return true;
   }
-  if (lastSizes[observedPath] === size) return false;
-  lastSizes[observedPath] = size;
+  if (lastRevisions[observedPath] === size) return false;
+  lastRevisions[observedPath] = size;
   return true;
 }

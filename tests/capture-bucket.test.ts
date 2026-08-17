@@ -91,4 +91,20 @@ describe("captureBucket — a row is filed where its reads bind", () => {
 
     expect(capture.routeHintFor(t)?.repo).toBe(repo);
   });
+
+  test("database route revisions survive a new daemon process boundary", () => {
+    capture.setStateDir(join(scratch(), "state"));
+
+    capture.recordRouteRevisions("opencode", [
+      { path: "/logical/session-1", revision: "1000" },
+      { path: "/logical/session-2", revision: "2000" },
+    ]);
+    capture.recordRouteRevisions("opencode", [{ path: "/logical/session-1", revision: "1001" }]);
+
+    expect(capture.routeRevisions("opencode")).toEqual({
+      "/logical/session-1": "1001",
+      "/logical/session-2": "2000",
+    });
+    expect(capture.routeRevisions("codex")).toEqual({});
+  });
 });

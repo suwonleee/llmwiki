@@ -29,6 +29,7 @@ import { codexSource, discoverCodexFileRoutes } from "./sources/codex.ts";
 import {
   discoverOpenCodeRoutes,
   materializeOpenCodeRoute,
+  materializeOpenCodeRoutes,
   opencodeSource,
   setExportDir,
 } from "./sources/opencode.ts";
@@ -180,11 +181,15 @@ function measureHarness(
     const discovery = elapsed(discover);
     discoverySamples.push(discovery.ms);
     const routes = discovery.value;
-    const revisions: Record<string, number> = {};
+    const revisions: Record<string, string | number> = {};
     const initial = routes.filter((route) => routeNeedsMaterialization(route, revisions));
     const unchanged = routes.filter((route) => routeNeedsMaterialization(route, revisions));
     const sample = initial.slice(0, CAPTURE_SAMPLE_MATERIALIZATIONS);
-    const materialization = elapsed(() => sample.map((route) => source.materialize(route)));
+    const materialization = elapsed(() =>
+      source.materializeMany
+        ? source.materializeMany(sample).map((result) => result.session)
+        : sample.map((route) => source.materialize(route)),
+    );
     materializationSamples.push(materialization.ms);
 
     if (discovered < 0) {
@@ -255,6 +260,7 @@ export function runCaptureScaleSuite(
       const opencodeFixtureSource: TranscriptSource = {
         ...opencodeSource,
         materialize: (route) => materializeOpenCodeRoute(route, [realpathSync(fixture.opencodeDb)]),
+        materializeMany: (routes) => materializeOpenCodeRoutes(routes, [realpathSync(fixture.opencodeDb)]),
       };
       const harnesses = {
         claude: measureHarness(

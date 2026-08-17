@@ -317,9 +317,14 @@ describe("OpenCode touches no message body before enrollment", () => {
 
     expect(routes.length).toBe(1);
     expect(routes[0]!.repo).toBe("/repo/unenrolled");
-    const lastSizes: Record<string, number> = {};
-    expect(routeNeedsMaterialization(routes[0]!, lastSizes)).toBe(true);
-    expect(routeNeedsMaterialization(routes[0]!, lastSizes)).toBe(true);
+    const lastRevisions: Record<string, string | number> = {};
+    expect(routeNeedsMaterialization(routes[0]!, lastRevisions)).toBe(true);
+    expect(routeNeedsMaterialization(routes[0]!, lastRevisions)).toBe(false);
+    const db = new Database(join(dir, "opencode.db"));
+    db.run("UPDATE session SET time_updated = 1001 WHERE id = 's1'");
+    db.close();
+    const changed = opencodeSource.discoverRoutes()[0]!;
+    expect(routeNeedsMaterialization(changed, lastRevisions)).toBe(true);
     expect(JSON.stringify(routes)).not.toContain("SENSITIVE-TITLE");
     expect(JSON.stringify(routes)).not.toContain("SENSITIVE-PROMPT-TEXT");
     // the export directory is created by materialize() only — routing leaves the disk alone
