@@ -20,8 +20,13 @@ test("an active OpenCode plugin becomes silent immediately after llmwiki disable
     let exitCode = 0;
     let output = "";
     if (command.includes(" enabled ")) exitCode = enrolled ? 0 : 1;
-    else if (command.includes(" context ")) output = "[llmwiki]\ncold context";
-    else if (command.includes(" turn-context ")) output = "turn pointer";
+    else if (command.includes(" opencode-context ")) {
+      exitCode = enrolled ? 0 : 1;
+      output = JSON.stringify({
+        cold: command.includes("--include-cold") ? "[llmwiki]\ncold context" : "",
+        turn: command.includes("remember this prompt") ? "turn pointer" : "",
+      });
+    }
     const result: any = {
       quiet: () => result,
       nothrow: async () => ({ exitCode, text: () => output }),
@@ -53,7 +58,8 @@ test("an active OpenCode plugin becomes silent immediately after llmwiki disable
   const reenabled = { system: [] as string[] };
   await hooks["experimental.chat.system.transform"]({ sessionID: "s1" }, reenabled);
   expect(reenabled.system).toEqual(["[llmwiki]\ncold context"]);
-  expect(calls.filter((command) => command.includes(" turn-context "))).toHaveLength(1);
+  expect(calls.filter((command) => command.includes(" opencode-context ") && command.includes("remember this prompt"))).toHaveLength(1);
+  expect(calls.filter((command) => command.includes(" opencode-context "))).toHaveLength(3);
 });
 
 // OpenCode's command templates have no session-id variable, so /wiki-* commands cannot know which

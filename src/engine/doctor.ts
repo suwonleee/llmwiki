@@ -106,6 +106,7 @@ const CODEX_SESSION_CMDS = [
 ] as const;
 const CODEX_TURN_CMDS = [
   TURNCTX_CMD,
+  `bun "${CLONE_ROOT_SHELL}/src/hook-cli.ts" turn-context-hook`,
   `bun "${CLONE_ROOT_SHELL}/src/cli.ts" turn-context --hook-event UserPromptSubmit`,
 ] as const;
 const WIRE_CLAUDE_CMD = `bun ${shellQuote(join(CLONE_ROOT, "src", "daemon", "wire.ts"))}`;

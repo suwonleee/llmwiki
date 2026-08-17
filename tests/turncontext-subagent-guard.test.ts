@@ -9,10 +9,10 @@ import { join } from "node:path";
 import { WikiIndex } from "../src/engine/db.ts";
 import { enrollRepo, makeGitRepo, tempDir } from "./support/git-repo.ts";
 
-const CLI = join(import.meta.dir, "..", "src", "cli.ts");
+const HOOK_CLI = join(import.meta.dir, "..", "src", "hook-cli.ts");
 
 function runTurnContext(repo: string, payload: Record<string, unknown>): string {
-  const r = Bun.spawnSync(["bun", CLI, "turn-context", repo, "--hook-event", "UserPromptSubmit"], {
+  const r = Bun.spawnSync(["bun", HOOK_CLI, "turn-context-hook", repo], {
     stdin: Buffer.from(JSON.stringify(payload)),
     env: { ...process.env },
   });

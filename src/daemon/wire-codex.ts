@@ -24,7 +24,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { insertAfterFrontmatter } from "../engine/frontmatter.ts";
 import { RETIRED_CODEX_SKILLS } from "../engine/install-history.ts";
-import { CLONE_ROOT, CLONE_ROOT_SHELL, ENGINE_CLI_TOKEN, engineCliCommand } from "../engine/paths.ts";
+import { CLONE_ROOT, CLONE_ROOT_SHELL, ENGINE_CLI_TOKEN, engineCliCommand, hookCliCommand } from "../engine/paths.ts";
 import { envValueOutsideRepoFiles } from "../engine/env-policy.ts";
 
 const HOME = process.env.HOME?.trim() || homedir();
@@ -68,13 +68,14 @@ const TURN_MARK = "hooks/userpromptsubmit-inject.sh";
 // cwd over the positional, and CLAUDE_PROJECT_DIR — the only reason the adapter passes one — does
 // not exist under Codex. Verified end to end: hooks report Completed and the wiki block arrives.
 const CLI_SHELL = engineCliCommand();
+const HOOK_CLI_SHELL = hookCliCommand();
 const SESSION_CMD =
   process.platform === "win32"
     ? `${CLI_SHELL} context --hook-event SessionStart`
     : `bash ${shellQuote(`${CLONE_ROOT_SHELL}/${SESSION_MARK}`)}`;
 const TURN_CMD =
   process.platform === "win32"
-    ? `${CLI_SHELL} turn-context --hook-event UserPromptSubmit`
+    ? `${HOOK_CLI_SHELL} turn-context-hook`
     : `bash ${shellQuote(`${CLONE_ROOT_SHELL}/${TURN_MARK}`)}`;
 const SKILLS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"] as const;
 
@@ -91,7 +92,10 @@ const SKILLS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"
 function isManagedHookCommand(command: unknown): boolean {
   if (typeof command !== "string") return false;
   if (command.includes(SESSION_MARK) || command.includes(TURN_MARK)) return true;
-  return command.includes("/src/cli.ts") && command.includes("--hook-event");
+  return (
+    (command.includes("/src/cli.ts") && command.includes("--hook-event")) ||
+    (command.includes("/src/hook-cli.ts") && command.includes("turn-context-hook"))
+  );
 }
 
 interface HookHandler {

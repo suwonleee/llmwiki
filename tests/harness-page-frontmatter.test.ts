@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { insertAfterFrontmatter } from "../src/engine/frontmatter.ts";
 import { inspectCodexInstall, inspectOpenCodeInstall } from "../src/engine/doctor.ts";
-import { ENGINE_CLI_TOKEN, engineCliCommand } from "../src/engine/paths.ts";
+import { ENGINE_CLI_TOKEN, engineCliCommand, hookCliCommand } from "../src/engine/paths.ts";
 import { renderOwnedCommand } from "../src/engine/claude-commands.ts";
 
 const ROOT = join(import.meta.dir, "..");
@@ -65,6 +65,7 @@ describe("the engine invocation a generated page carries", () => {
     // unquoted form truncated there — bun answered `Module not found ".../First"` and every engine
     // call in every skill failed.
     expect(engineCliCommand("/home/me/my llmwiki")).toBe('bun "/home/me/my llmwiki/src/cli.ts"');
+    expect(hookCliCommand("/home/me/my llmwiki")).toBe('bun "/home/me/my llmwiki/src/hook-cli.ts"');
   });
 
   test("the token it replaces is the one the shipped skills actually use", () => {
@@ -158,6 +159,16 @@ describe("doctor sees a page that does not parse", () => {
     );
     const viaCli = inspectCodexInstall(codexHome, home);
     expect([viaCli.sessionHook, viaCli.turnHook]).toEqual([true, true]);
+
+    writeFileSync(
+      join(codexHome, "hooks.json"),
+      hooksFor(
+        `bun "${root}/src/cli.ts" context --hook-event SessionStart`,
+        `bun "${root}/src/hook-cli.ts" turn-context-hook`,
+      ),
+    );
+    const viaHookCli = inspectCodexInstall(codexHome, home);
+    expect([viaHookCli.sessionHook, viaHookCli.turnHook]).toEqual([true, true]);
 
     // Another clone's hook is still another clone's hook.
     writeFileSync(

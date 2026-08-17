@@ -1,13 +1,13 @@
 #!/bin/bash
 # llmwiki UserPromptSubmit turn-context injection (the per-turn read loop).
 #
-# Thin Claude-Code adapter: the logic lives in the engine (src/engine/turncontext.ts →
-# `llmwiki turn-context`), so it is HARNESS-NEUTRAL. Claude Code pipes the hook payload
-# JSON ({prompt, session_id, cwd, ...}) on stdin; we forward it untouched — the CLI reads
+# Thin Claude-Code adapter: the logic lives in the engine (src/engine/turncontext.ts), so it is
+# HARNESS-NEUTRAL. Claude Code pipes the hook payload JSON ({prompt, session_id, cwd, ...}) on
+# stdin; we forward it untouched — the lightweight hook entrypoint reads
 # prompt/session/cwd from it. Codex's native UserPromptSubmit hook can run this same
 # script (payload shape is compatible); other harnesses call the CLI with --prompt.
 #
-# Output contract: `--hook-event` makes the engine emit the JSON envelope BOTH harnesses DECLARE
+# Output contract: the engine emits the JSON envelope BOTH harnesses DECLARE
 # ({"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"…"}}). Bare text
 # also works today (both accept it as a fallback); the envelope is the declared contract rather than
 # the undeclared one. The engine prints AT MOST a few pointer lines and is SILENT when unconfident,
@@ -35,5 +35,5 @@ if [ -n "$CLAUDE_PLUGIN_ROOT" ]; then
   done
 fi
 
-[ -n "$BUN" ] && "$BUN" "$ROOT/src/cli.ts" turn-context "$PROJ" --hook-event UserPromptSubmit 2>/dev/null
+[ -n "$BUN" ] && "$BUN" "$ROOT/src/hook-cli.ts" turn-context-hook "$PROJ" 2>/dev/null
 exit 0

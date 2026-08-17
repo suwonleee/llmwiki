@@ -37,6 +37,12 @@ export function engineCliCommand(root: string = CLONE_ROOT): string {
   return `bun "${path}/src/cli.ts"`;
 }
 
+/** Lightweight automatic-hook entrypoint; same cross-shell path contract as engineCliCommand. */
+export function hookCliCommand(root: string = CLONE_ROOT): string {
+  const path = process.platform === "win32" ? root.replaceAll("\\", "/") : root;
+  return `bun "${path}/src/hook-cli.ts"`;
+}
+
 /** The token in `skill/*.md` that engineCliCommand() replaces. */
 export const ENGINE_CLI_TOKEN = "bun ~/llmwiki/src/cli.ts";
 
