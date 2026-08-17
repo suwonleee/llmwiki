@@ -15,7 +15,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setEffectiveStateRoot } from "../src/engine/state-dir.ts";
-import { opencodeSource, setExportDir } from "../src/engine/sources/opencode.ts";
+import { discoverOpenCodeRoutes, opencodeSource, setExportDir } from "../src/engine/sources/opencode.ts";
 import { enrollRepo, makeGitRepo } from "./support/git-repo.ts";
 import * as capture from "../src/engine/capture.ts";
 
@@ -96,6 +96,31 @@ afterEach(() => {
 });
 
 describe("opencode v1 (message+part) capture", () => {
+  test("derives a stable poll revision when session.time_updated is absent", () => {
+    const db = new Database(dbPath);
+    db.exec(`
+      CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, title TEXT, time_archived INTEGER);
+      CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER,
+        time_updated INTEGER, data TEXT);
+      CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT,
+        time_created INTEGER, time_updated INTEGER, data TEXT);
+    `);
+    db.run("INSERT INTO session VALUES ('ses_revision', ?, 'revision fallback', NULL)", [repo]);
+    insertMessage(db, "msg_revision", "ses_revision", userData());
+    insertPart(db, "prt_revision", "msg_revision", "ses_revision", textPart("first"));
+    db.close();
+
+    const initial = discoverOpenCodeRoutes([realpathSync(dbPath)])[0]!;
+    expect(initial.revision).toBeDefined();
+    expect(initial.alwaysMaterialize).toBeUndefined();
+    expect(discoverOpenCodeRoutes([realpathSync(dbPath)])[0]!.revision).toBe(initial.revision);
+
+    const changed = new Database(dbPath);
+    changed.run("UPDATE part SET data = ?, time_updated = ? WHERE id = 'prt_revision'", [textPart("second"), OLD + 1]);
+    changed.close();
+    expect(discoverOpenCodeRoutes([realpathSync(dbPath)])[0]!.revision).not.toBe(initial.revision);
+  });
+
   test("real-shape DB (empty session_message) exports dialog under MessageV2's rules", () => {
     const db = new Database(dbPath);
     createSchema(db);

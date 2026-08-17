@@ -838,19 +838,43 @@ export function discoverOpenCodeRoutes(dbPaths: readonly string[] = opencodeDbPa
     if (!db) continue;
     try {
       let sessions: any[];
-      let hasRevision = true;
+      let revisionColumn = "time_updated";
       try {
         sessions = db
           .query("SELECT id, directory, time_updated FROM session WHERE time_archived IS NULL ORDER BY time_updated DESC")
           .all() as any[];
       } catch {
-        // Old/alternate projections may not expose time_updated. Routing remains available and
-        // conservatively falls back to checking those sessions every sweep.
-        hasRevision = false;
+        // Some v1 projections omit session.time_updated even though their message/part tables
+        // expose reliable update clocks. Derive a body-free token there so an unchanged database
+        // does not force every enrolled session through export materialization every sweep.
         try {
-          sessions = db.query("SELECT id, directory FROM session WHERE time_archived IS NULL").all() as any[];
+          sessions = db
+            .query(
+              "SELECT s.id, s.directory, " +
+                "printf('%s:%s:%s:%s:%s:%s', " +
+                "COALESCE(m.row_count, 0), COALESCE(m.max_id, ''), COALESCE(m.max_updated, 0), " +
+                "COALESCE(p.row_count, 0), COALESCE(p.max_id, ''), COALESCE(p.max_updated, 0)) AS derived_revision " +
+                "FROM session s " +
+                "LEFT JOIN (SELECT session_id, COUNT(*) AS row_count, MAX(id) AS max_id, " +
+                "MAX(COALESCE(time_updated, time_created)) AS max_updated " +
+                "FROM message GROUP BY session_id) m ON m.session_id = s.id " +
+                "LEFT JOIN (SELECT session_id, COUNT(*) AS row_count, MAX(id) AS max_id, " +
+                "MAX(COALESCE(time_updated, time_created)) AS max_updated " +
+                "FROM part GROUP BY session_id) p ON p.session_id = s.id " +
+                "WHERE s.time_archived IS NULL",
+            )
+            .all() as any[];
+          revisionColumn = "derived_revision";
         } catch {
-          continue; // schema drift
+          // The event-sourced session_message shape can update an unsettled assistant in place
+          // without a per-row update clock. It must remain conservative to avoid losing the final
+          // text; only schemas with a reliable revision signal receive the poll optimization.
+          revisionColumn = "";
+          try {
+            sessions = db.query("SELECT id, directory FROM session WHERE time_archived IS NULL").all() as any[];
+          } catch {
+            continue; // schema drift
+          }
         }
       }
       for (const s of sessions) {
@@ -862,8 +886,8 @@ export function discoverOpenCodeRoutes(dbPaths: readonly string[] = opencodeDbPa
           sessionId: id,
           repo,
           sourcePath: dbPath,
-          ...(hasRevision && s.time_updated !== null && s.time_updated !== undefined
-            ? { revision: String(s.time_updated) }
+          ...(revisionColumn && s[revisionColumn] !== null && s[revisionColumn] !== undefined
+            ? { revision: String(s[revisionColumn]) }
             : { alwaysMaterialize: true }),
         });
       }
