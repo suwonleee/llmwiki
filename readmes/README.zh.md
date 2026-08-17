@@ -59,6 +59,9 @@ llmwiki init /absolute/path/to/my-project
 
 - `llmwiki status <repo>` — 查看是否启用，以及未启用的原因
 - `llmwiki disable <repo>` — 关闭自动集成但保留wiki
+- 在 CLI 中查找：`llmwiki --help` 显示首次使用流程和命令分组，
+  `llmwiki <command> --help` 在不执行命令的情况下显示其用法，`llmwiki --version` 显示
+  引擎版本。
 - 自动集成仅用于Git，且按worktree隔离；移动仓库后需重新运行 `init`
 - `llmwiki` 启动器由Codex与OpenCode的接线安装。**仅安装Claude时没有该命令**，请直接从克隆目录运行：
   `bun ~/llmwiki/src/cli.ts init /absolute/path/to/my-project`（`status`、`disable` 同理）

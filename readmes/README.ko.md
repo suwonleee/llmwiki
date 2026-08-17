@@ -62,6 +62,9 @@ clone 한 것은 거기서 llmwiki를 돌리겠다는 결정이 아니기 때문
 
 - `llmwiki status <repo>` — 켜져 있는지, 아니면 왜 꺼져 있는지 확인
 - `llmwiki disable <repo>` — 다시 끄기(위키 파일은 그대로 유지)
+- CLI에서 찾기: `llmwiki --help`는 첫 사용 순서와 명령군을 보여주고,
+  `llmwiki <command> --help`는 명령을 실행하지 않고 사용법을 보여주며, `llmwiki --version`은
+  엔진 버전을 출력합니다.
 - 자동 연동은 **git 전용·워크트리 단위** — 연결된 워크트리 두 개는 각각 등록, 저장소를 옮기면
   `init` 재실행 필요(표식이 정규 경로를 기록함)
 - `llmwiki` 런처는 Codex·OpenCode 배선이 설치함 — **Claude 단독 설치에는 이 명령이 없으므로**

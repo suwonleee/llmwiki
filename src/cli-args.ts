@@ -14,11 +14,27 @@ const VALUE_FLAG_NAMES = [
 
 const VALUE_FLAGS = new Set<string>(VALUE_FLAG_NAMES);
 
+const BOOLEAN_FLAG_NAMES = [
+  "--check", "--commit", "--confirm", "--downstream-read", "--ensure", "--errors-only",
+  "--fix", "--force", "--forget", "--help", "--if-due", "--keep", "--list", "--notice",
+  "--sealed", "--skipped", "--topic", "--tune-only",
+] as const;
+
+const BOOLEAN_FLAGS = new Set<string>(BOOLEAN_FLAG_NAMES);
+
 export class MissingCliFlagValueError extends Error {
   readonly name = "MissingCliFlagValueError";
 
   constructor(readonly flag: string) {
     super(`${flag} requires a value`);
+  }
+}
+
+export class UnknownCliFlagError extends Error {
+  readonly name = "UnknownCliFlagError";
+
+  constructor(readonly flag: string) {
+    super(`unknown option: ${flag}`);
   }
 }
 
@@ -36,10 +52,12 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       continue;
     }
 
-    if (!VALUE_FLAGS.has(argument)) {
+    if (BOOLEAN_FLAGS.has(argument)) {
       flags[argument] = true;
       continue;
     }
+
+    if (!VALUE_FLAGS.has(argument)) throw new UnknownCliFlagError(argument);
 
     const value = argv[index + 1];
     if (value === undefined || value.startsWith("--")) {

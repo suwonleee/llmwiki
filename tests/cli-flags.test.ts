@@ -11,18 +11,40 @@
 import { test, expect, describe } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { MissingCliFlagValueError, parseCliArgs } from "../src/cli-args.ts";
+import { MissingCliFlagValueError, UnknownCliFlagError, parseCliArgs } from "../src/cli-args.ts";
 
 const CLI_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli.ts"), "utf8");
 const ARGUMENT_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli-args.ts"), "utf8");
 const MAINTENANCE_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "commands", "maintenance.ts"), "utf8");
 const SRC = `${CLI_SOURCE}\n${MAINTENANCE_SOURCE}`;
 const ROOT = join(import.meta.dir, "..");
+const PACKAGE = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as { version: string };
+
+function registeredCommands(): string[] {
+  const block = CLI_SOURCE.match(/const HANDLERS:[^{]+\{([\s\S]*?)\n\};/);
+  if (!block) throw new Error("CLI handler registry not found");
+  return Array.from(block[1]!.matchAll(/^\s+(?:"([a-z][a-z-]+)"|([a-z][a-z-]+)):/gm), (match) =>
+    match[1] ?? match[2]!,
+  );
+}
 
 function declaredValueFlags(): Set<string> {
   const block = ARGUMENT_SOURCE.match(/const VALUE_FLAG_NAMES = \[([\s\S]*?)\] as const/);
   if (!block) throw new Error("value flag allowlist not found in cli-args.ts — did parseCliArgs change shape?");
   return new Set(Array.from(block[1]!.matchAll(/"(--[a-z-]+)"/g), (m) => m[1]!));
+}
+
+function declaredBooleanFlags(): Set<string> {
+  const block = ARGUMENT_SOURCE.match(/const BOOLEAN_FLAG_NAMES = \[([\s\S]*?)\] as const/);
+  if (!block) throw new Error("boolean flag allowlist not found in cli-args.ts");
+  return new Set(Array.from(block[1]!.matchAll(/"(--[a-z-]+)"/g), (match) => match[1]!));
+}
+
+function allReadFlags(): Set<string> {
+  const out = new Set<string>();
+  for (const match of SRC.matchAll(/(?:p|args)\.flags\["(--[a-z-]+)"\]/g)) out.add(match[1]!);
+  for (const match of SRC.matchAll(/getFlagValue\(args, "(--[a-z-]+)"\)/g)) out.add(match[1]!);
+  return out;
 }
 
 // Flags whose VALUE is read (as opposed to mere presence, e.g. `!!p.flags["--commit"]`).
@@ -50,12 +72,43 @@ describe("cli flag allowlist", () => {
 
     // Then: help succeeds and advertises an existing public command.
     expect(result.exitCode).toBe(0);
-    expect(new TextDecoder().decode(result.stdout)).toContain("commands:");
-    expect(new TextDecoder().decode(result.stdout)).toContain("excerpt");
+    const output = new TextDecoder().decode(result.stdout);
+    expect(output).toContain("Get started:");
+    expect(output).toContain("llmwiki init <workspace>");
+    expect(output).toContain("llmwiki <command> --help");
+    expect(output).toContain("excerpt");
+  });
+
+  test("prints the package version", () => {
+    const result = Bun.spawnSync([process.execPath, "src/cli.ts", "--version"], {
+      cwd: ROOT,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(new TextDecoder().decode(result.stdout)).toBe(`llmwiki ${PACKAGE.version}\n`);
+    expect(new TextDecoder().decode(result.stderr)).toBe("");
+  });
+
+  test("every registered command exposes side-effect-free command help", () => {
+    const commands = registeredCommands();
+    expect(commands.length).toBeGreaterThan(40);
+
+    for (const command of commands) {
+      const result = Bun.spawnSync([process.execPath, "src/cli.ts", command, "--help"], {
+        cwd: ROOT,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(result.exitCode, command).toBe(0);
+      expect(new TextDecoder().decode(result.stdout), command).toContain(`Usage:\n  llmwiki ${command}`);
+      expect(new TextDecoder().decode(result.stderr), command).toBe("");
+    }
   });
 
   test("delegates argument parsing to the typed CLI boundary", () => {
-    expect(CLI_SOURCE).toContain('import { MissingCliFlagValueError, parseCliArgs, type ParsedCliArgs as Parsed } from "./cli-args.ts";');
+    expect(CLI_SOURCE).toMatch(/import \{[^}]*parseCliArgs[^}]*\} from "\.\/cli-args\.ts";/s);
     expect(CLI_SOURCE).not.toMatch(/function parseArgs\(/);
   });
 
@@ -69,11 +122,22 @@ describe("cli flag allowlist", () => {
     expect(() => parseCliArgs(["turn-context", "--prompt"])).toThrow(MissingCliFlagValueError);
   });
 
+  test("rejects an unknown flag before a command can run", () => {
+    expect(() => parseCliArgs(["status", "--definitely-not-a-flag"])).toThrow(UnknownCliFlagError);
+  });
+
   test("every flag read as a value is declared as a value flag", () => {
     const declared = declaredValueFlags();
     const missing = [...valueReadFlags()].filter((f) => !declared.has(f)).sort();
 
     // A miss here means that flag silently parses as `true` and its argument becomes a positional.
+    expect(missing).toEqual([]);
+  });
+
+  test("every flag a handler reads is known to the parser", () => {
+    const declared = new Set([...declaredValueFlags(), ...declaredBooleanFlags()]);
+    const missing = [...allReadFlags()].filter((flag) => !declared.has(flag)).sort();
+
     expect(missing).toEqual([]);
   });
 

@@ -2,10 +2,13 @@
 // llmwiki — local-first compounding wiki engine (CLI).
 // Markdown under <workspace>/docs/wiki is the source of truth; .llmwiki/index.db is a
 // rebuildable derived index. No server, no MCP registration required.
-// allow: SIZE_OK — stable CLI dispatch remains co-located with legacy handlers to preserve command/help ordering; parsing and maintenance commands now have dedicated boundaries, while further migration is outside this behavior-preserving Todo.
+// allow: SIZE_OK — legacy handlers remain co-located while typed parsing, declarative command/help
+// metadata, and maintenance commands have dedicated boundaries; further extraction stays incremental.
 import { WikiIndex, dedupeByPage } from "./engine/db.ts";
 import { today } from "./engine/today.ts";
-import { MissingCliFlagValueError, parseCliArgs, type ParsedCliArgs as Parsed } from "./cli-args.ts";
+import packageJson from "../package.json" with { type: "json" };
+import { commandSpec, renderCommandHelp, renderRootHelp, type CommandName } from "./commands/catalog.ts";
+import { MissingCliFlagValueError, UnknownCliFlagError, parseCliArgs, type ParsedCliArgs as Parsed } from "./cli-args.ts";
 import { createMaintenanceHandlers } from "./commands/maintenance.ts";
 import * as excerpt from "./engine/excerpt.ts";
 import { rebuildReferenceGraph, referenceGraphCounts } from "./engine/refs.ts";
@@ -1468,7 +1471,7 @@ function cmdConnect(p: Parsed) {
 // never reaches config resolution (which reads repository files) at all.
 const AUTOMATIC_COMMANDS = new Set(["context", "turn-context", "enabled"]);
 
-const HANDLERS: Record<string, (p: Parsed) => void | Promise<void>> = {
+const HANDLERS: Record<CommandName, (p: Parsed) => void | Promise<void>> = {
   init: cmdInit,
   disable: cmdDisable,
   status: cmdStatus,
@@ -1527,19 +1530,24 @@ const HANDLERS: Record<string, (p: Parsed) => void | Promise<void>> = {
   "quiz-record": cmdQuizRecord,
 };
 
-function usage(): string {
-  return `usage: llmwiki <command> ...\ncommands: ${Object.keys(HANDLERS).join(", ")}\n`;
-}
-
 let parsed: Parsed;
 try {
   parsed = parseCliArgs(process.argv.slice(2));
 } catch (error) {
-  if (error instanceof MissingCliFlagValueError) die(error.message);
+  if (error instanceof MissingCliFlagValueError || error instanceof UnknownCliFlagError) die(error.message);
   throw error;
 }
 if (parsed.cmd === "--help" || parsed.cmd === "-h") {
-  process.stdout.write(usage());
+  process.stdout.write(renderRootHelp(packageJson.version));
+  process.exit(0);
+}
+if (parsed.cmd === "--version") {
+  process.stdout.write(`llmwiki ${packageJson.version}\n`);
+  process.exit(0);
+}
+const spec = commandSpec(parsed.cmd);
+if (spec && parsed.flags["--help"]) {
+  process.stdout.write(renderCommandHelp(spec));
   process.exit(0);
 }
 // Per-repo language: if the first positional is an existing path, resolve that workspace's
@@ -1550,9 +1558,9 @@ if (!AUTOMATIC_COMMANDS.has(parsed.cmd)) {
   LANG = isRepoKorean(wsGuess) ? "ko" : "en";
   ko = LANG === "ko";
 }
-const handler = HANDLERS[parsed.cmd];
+const handler = HANDLERS[parsed.cmd as CommandName];
 if (!handler) {
-  die(usage().trimEnd());
+  die(`${parsed.cmd ? `unknown command: ${parsed.cmd}\n\n` : ""}${renderRootHelp(packageJson.version).trimEnd()}`);
 }
 // A harness hook may now reach this CLI without going through hooks/*.sh — on Windows the Codex
 // wiring calls it directly, because `bash` is not on the Windows PATH and Codex runs hook commands

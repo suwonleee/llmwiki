@@ -61,6 +61,9 @@ llmwiki init /absolute/path/to/my-project
 
 - `llmwiki status <repo>` — 有効か、無効なら理由を表示
 - `llmwiki disable <repo>` — wikiを残したまま無効化
+- CLIで探す: `llmwiki --help` は初回の流れとコマンド群を表示し、
+  `llmwiki <command> --help` は実行せずに個別の使い方を表示し、`llmwiki --version` は
+  エンジンのバージョンを表示します。
 - 自動連携はGit専用・ワークツリー単位。リポジトリを移動した場合は `init` を再実行
 - `llmwiki` ランチャーはCodex・OpenCodeの配線が導入します。**Claude単独構成にはこのコマンドがない**ため、
   クローンから直接実行してください: `bun ~/llmwiki/src/cli.ts init /absolute/path/to/my-project`

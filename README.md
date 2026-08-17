@@ -78,6 +78,9 @@ there are no further prompts or confirmations, ever.
 
 - `llmwiki status <repo>` — is it on, and why not
 - `llmwiki disable <repo>` — turn it back off (your wiki files are untouched)
+- CLI discovery: `llmwiki --help` shows the first-use path and command groups;
+  `llmwiki <command> --help` shows one command without running it; `llmwiki --version` prints the
+  engine version.
 - automatic integration is **git-only** and per-worktree; two linked worktrees enroll separately,
   and moving a repository requires re-running `init` (the marker records its canonical path)
 - the `llmwiki` launcher is installed by the Codex and OpenCode wiring. On a **Claude-only**

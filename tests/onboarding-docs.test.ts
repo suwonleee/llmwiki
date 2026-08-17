@@ -76,6 +76,9 @@ describe("public onboarding documentation", () => {
     ]) {
       const content = read(path);
       expect(content).toContain("llmwiki init");
+      expect(content).toContain("llmwiki --help");
+      expect(content).toContain("llmwiki <command> --help");
+      expect(content).toContain("llmwiki --version");
       expect(content).toContain("./setup.sh --uninstall");
       expect(content).toContain("LLMWIKI_LLM_CMD");
       expect(content).toContain("LLMWIKI_STATE_DIR");
