@@ -33,7 +33,13 @@ export function checkPlan(mode: CheckMode): CheckStep[] {
     mode === "quick"
       ? { label: "focused tests", argv: [BUN, "test", ...FOCUSED_TESTS] }
       : { label: "full test suite", argv: [BUN, "test"] },
-    { label: "shell syntax", argv: ["bash", "-n", ...SHELL_FILES] },
+    // One `bash -n` per file. `bash -n a.sh b.sh` parses ONLY a.sh — everything after the first
+    // path becomes a positional argument to it, so the shipped hook and daemon scripts were
+    // silently unchecked while the step reported green. CI never had the bug because it loops.
+    {
+      label: "shell syntax",
+      argv: ["bash", "-c", 'for script in "$@"; do bash -n "$script" || exit 1; done', "check", ...SHELL_FILES],
+    },
     { label: "publish boundary", argv: [BUN, "src/plugin/preflight.ts"] },
     { label: "diff whitespace", argv: ["git", "diff", "HEAD", "--check"] },
   ];
