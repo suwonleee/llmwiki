@@ -28,6 +28,16 @@ type MatrixCell = {
 type SupportContract = {
   contract_version: number;
   runtime: { bun_minimum: string; git_required_for_capture: boolean };
+  harness_compatibility: Record<
+    string,
+    {
+      policy: string;
+      install_probes: string[];
+      installed_surface_canary: string;
+      verified_projection?: string;
+      poll_revision_fallbacks?: string[];
+    }
+  >;
   platforms: Record<string, PlatformSupport>;
   support_matrix: Record<string, Record<string, MatrixCell>>;
   manual_actions: Record<string, string[]>;
@@ -115,7 +125,7 @@ function surfaceIds(section: string): string[] {
 describe("public machine-readable support contract", () => {
   test("has a complete OS by harness command/action/surface matrix", () => {
     const value = contract();
-    expect(value.contract_version).toBe(2);
+    expect(value.contract_version).toBe(3);
     expect(Object.keys(value.platforms).sort()).toEqual(PLATFORM_IDS.slice().sort());
     expect(Object.keys(value.support_matrix).sort()).toEqual(PLATFORM_IDS.slice().sort());
     for (const platform of PLATFORM_IDS) {
@@ -129,6 +139,35 @@ describe("public machine-readable support contract", () => {
         expect(cell.manual_actions).toEqual(harness === "codex" ? ["codex-hook-trust"] : harness === "opencode" ? ["opencode-restart"] : []);
       }
     }
+  });
+
+  test("pins capability probes, executable canaries, and OpenCode schema fallback policy", () => {
+    const value = contract();
+    expect(Object.keys(value.harness_compatibility).sort()).toEqual(HARNESS_IDS.slice().sort());
+    expect(value.harness_compatibility.claude).toMatchObject({
+      policy: "capability-gated",
+      install_probes: ["cli-present"],
+      installed_surface_canary: "fresh-public-loop",
+    });
+    expect(value.harness_compatibility.codex).toMatchObject({
+      install_probes: ["hook-trust-cli", "stable-hooks-feature"],
+      installed_surface_canary: "fresh-public-harness-loop",
+    });
+    expect(value.harness_compatibility.opencode).toMatchObject({
+      policy: "capability-and-schema-gated",
+      install_probes: ["custom-command-cli"],
+      installed_surface_canary: "fresh-public-harness-loop",
+      verified_projection: "1.18.4-message-part",
+      poll_revision_fallbacks: ["session-time-updated", "message-part-metadata", "conservative-materialization"],
+    });
+
+    const setup = read("setup.sh");
+    expect(setup).toContain("command -v claude");
+    expect(setup).toContain("--dangerously-bypass-hook-trust");
+    expect(setup).toContain("codex features list");
+    expect(setup).toContain("opencode run --help");
+    expect(read("tests/fresh-public-loop.test.ts")).toContain("SessionStart");
+    expect(read("tests/fresh-public-harness-loop.test.ts")).toContain("experimental.chat.system.transform");
   });
 
   test("keeps setup_text platform rows and installation-flow harness claims equal to the JSON contract", () => {

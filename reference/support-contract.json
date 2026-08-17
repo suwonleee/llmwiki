@@ -1,8 +1,27 @@
 {
-  "contract_version": 2,
+  "contract_version": 3,
   "runtime": {
     "bun_minimum": "1.1.0",
     "git_required_for_capture": true
+  },
+  "harness_compatibility": {
+    "claude": {
+      "policy": "capability-gated",
+      "install_probes": ["cli-present"],
+      "installed_surface_canary": "fresh-public-loop"
+    },
+    "codex": {
+      "policy": "capability-gated",
+      "install_probes": ["hook-trust-cli", "stable-hooks-feature"],
+      "installed_surface_canary": "fresh-public-harness-loop"
+    },
+    "opencode": {
+      "policy": "capability-and-schema-gated",
+      "install_probes": ["custom-command-cli"],
+      "installed_surface_canary": "fresh-public-harness-loop",
+      "verified_projection": "1.18.4-message-part",
+      "poll_revision_fallbacks": ["session-time-updated", "message-part-metadata", "conservative-materialization"]
+    }
   },
   "platforms": {
     "macos": {

@@ -82,8 +82,12 @@ describe("setup lifecycle across every harness", () => {
   });
 
   function setup(...args: string[]) {
-    return Bun.spawnSync(["bash", join(ROOT, "setup.sh"), ...args], {
-      cwd: ROOT,
+    return setupAt(ROOT, ...args);
+  }
+
+  function setupAt(root: string, ...args: string[]) {
+    return Bun.spawnSync(["bash", join(root, "setup.sh"), ...args], {
+      cwd: root,
       env,
       stdout: "pipe",
       stderr: "pipe",
@@ -119,5 +123,44 @@ describe("setup lifecycle across every harness", () => {
     // Whichever supervisor this platform installed, its definition is gone too.
     expect(existsSync(serviceDefinitionPath(home))).toBe(false);
     expect(existsSync(stateRoot)).toBe(false);
+  });
+
+  test("a second public clone re-points every managed runtime surface without manual cleanup", () => {
+    const cloneA = join(scratch, "public clone A");
+    const cloneB = join(scratch, "public clone B");
+    for (const clone of [cloneA, cloneB]) {
+      const result = Bun.spawnSync(["git", "clone", "--quiet", ROOT, clone], {
+        cwd: scratch,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(result.exitCode).toBe(0);
+    }
+
+    expect(setupAt(cloneA, "--harness", "all").exitCode).toBe(0);
+    const moved = setupAt(cloneB, "--harness", "all");
+    const output = (moved.stdout?.toString() ?? "") + (moved.stderr?.toString() ?? "");
+    expect(moved.exitCode, output).toBe(0);
+
+    const managed = [
+      readFileSync(join(claude, "settings.json"), "utf-8"),
+      readFileSync(join(codexHome, "hooks.json"), "utf-8"),
+      readFileSync(join(configRoot, "opencode", "plugin", "llmwiki.ts"), "utf-8"),
+      readFileSync(join(home, ".local", "bin", "llmwiki"), "utf-8"),
+      readFileSync(join(home, ".agents", "skills", "wiki-save", "SKILL.md"), "utf-8"),
+      readFileSync(serviceDefinitionPath(home), "utf-8"),
+    ];
+    for (const content of managed) {
+      expect(content).toContain(cloneB);
+      expect(content).not.toContain(cloneA);
+    }
+
+    const launcher = Bun.spawnSync([join(home, ".local", "bin", "llmwiki"), "--version"], {
+      cwd: cloneB,
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(launcher.exitCode).toBe(0);
   });
 });

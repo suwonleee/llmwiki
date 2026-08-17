@@ -11,6 +11,12 @@ Every harness install includes the same user-level `llmwiki` launcher. Setup pri
 `PATH` action when necessary. Native Windows follow-ups remain explicit Bun commands because the
 launcher is a POSIX shell script for Git Bash, while harness commands run through PowerShell.
 
+Compatibility is capability-gated rather than tied to a guessed CLI version range. Setup checks
+the harness features llmwiki actually needs, while release tests execute the installed hook/plugin
+surface from a clean public clone. OpenCode additionally keeps schema-specific revision fallbacks:
+its known message/part projection is gated by update metadata, and unknown projections degrade to
+conservative rechecking instead of silently skipping memory capture.
+
 ## Contents
 
 - [Source-of-truth order](#source-of-truth-order)
