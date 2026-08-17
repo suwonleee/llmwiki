@@ -17,6 +17,28 @@ function hasFlag(name: string): boolean {
   return Bun.argv.includes(name);
 }
 
+/**
+ * Read the harness's hook payload, or nothing at all.
+ *
+ * Two cases must NOT be confused. A hook's stdin is the payload pipe and the harness closes it, so
+ * reading is safe there; a terminal's stdin is not, and reading it would hang the person who ran
+ * this entrypoint by hand to debug a session. `src/cli.ts` has always made that distinction before
+ * touching stdin, and this entrypoint inherits its contracts.
+ *
+ * An absent or malformed payload is "the harness told us nothing", never "abort" — see contextHook.
+ */
+async function readPayload(): Promise<Payload | null> {
+  if (process.stdin.isTTY) return null;
+  try {
+    const raw = await Bun.stdin.text();
+    if (!raw.trim()) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as Payload) : null;
+  } catch {
+    return null;
+  }
+}
+
 function writeEnvelope(event: "SessionStart" | "UserPromptSubmit", text: string): void {
   if (!text) return;
   process.stdout.write(
@@ -33,15 +55,15 @@ async function enabled(repo: string): Promise<void> {
 
 async function contextHook(repo: string): Promise<void> {
   if ((process.env.LLMWIKI_ENGINE_SUBPROCESS ?? "") !== "") return;
-  let payload: Payload;
-  try {
-    payload = JSON.parse(await Bun.stdin.text()) as Payload;
-  } catch {
-    return;
-  }
-  const target = String(payload.cwd ?? "").trim() || repo || process.cwd();
-  const sessionId = String(payload.session_id ?? "").trim();
-  const transcript = String(payload.transcript_path ?? "").trim();
+  // A missing payload costs the ROUTE HINT, not the cold start. The payload is how a harness tells
+  // us which repository and session this transcript belongs to — worth having, never a precondition
+  // for reading the wiki. The adapters already pass the project as a positional, and `cli.ts` fell
+  // back to it here; treating an unparseable payload as "return silently" instead would mean any
+  // harness that starts a session without one loses its work memory and reports nothing at all.
+  const payload = await readPayload();
+  const target = String(payload?.cwd ?? "").trim() || repo || process.cwd();
+  const sessionId = String(payload?.session_id ?? "").trim();
+  const transcript = String(payload?.transcript_path ?? "").trim();
   const { inspectEnrollment, isEnrolled } = await import("./engine/enrollment.ts");
   if (!isEnrolled(target)) return;
   const status = inspectEnrollment(target);
@@ -64,12 +86,8 @@ async function contextHook(repo: string): Promise<void> {
 
 async function turnContextHook(repo: string): Promise<void> {
   if ((process.env.LLMWIKI_ENGINE_SUBPROCESS ?? "") !== "") return;
-  let payload: Payload;
-  try {
-    payload = JSON.parse(await Bun.stdin.text()) as Payload;
-  } catch {
-    return;
-  }
+  const payload = await readPayload();
+  if (!payload) return; // no prompt, nothing to retrieve for — the same silence as an empty one
   if (String(payload.agent_type ?? "").trim() || String(payload.agent_id ?? "").trim()) return;
   const prompt = String(payload.prompt ?? "");
   if (!prompt) return;
