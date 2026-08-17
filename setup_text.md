@@ -21,9 +21,8 @@ shell, daemon mechanism, CI evidence level, runtime floor, and privacy boundarie
 | `windows-native` | `supported` | `git-bash` | `per-user-startup-folder` | `platform-contract` |
 | `windows-wsl2` | `supported` | `posix-wsl2` | `systemd-or-cron-nohup` | `linux-suite` |
 
-**Claude-only installs have no `llmwiki` launcher** (the launcher is installed by the Codex and
-OpenCode wiring). On such an install, read every `llmwiki <args>` in this contract as
-`bun <absolute-clone-path>/src/cli.ts <args>` — the subcommands and flags are identical.
+Every harness install includes the same user-level `llmwiki` launcher. Apply the one-time `PATH`
+line setup prints when necessary; harness choice no longer changes the command spelling.
 On native Windows, use that explicit Bun form for every harness: the optional `llmwiki` launcher
 is a `#!/bin/sh` script for Git Bash, while Codex and OpenCode execute commands through PowerShell.
 
@@ -52,10 +51,9 @@ is a `#!/bin/sh` script for Git Bash, while Codex and OpenCode execute commands 
 - Check prerequisites
     - The setup shell named by the support contract. `setup.sh` and the daemon installer are bash:
       use a POSIX shell on macOS/Linux/WSL2, or Git Bash for a native-Windows install
-    - `git` — the capture loop's one hard dependency. Enrollment cannot tell "git is missing" from
-      "not a git worktree", so without it the engine installs cleanly and captures nothing. The
-      engine searches past PATH (Homebrew, MacPorts, Nix, ~/.local/bin) before reporting it absent;
-      `llmwiki doctor` prints a `[deps]` line either way
+    - `git` — the capture loop's one hard dependency. Setup searches past PATH (Homebrew, MacPorts,
+      Nix, ~/.local/bin) and now stops before mutation when it is absent; `llmwiki doctor` also
+      prints the resolved `[deps]` path
     - Bun 1.2 or newer recommended; 1.1 is the accepted floor. Below 1.2 there is no in-process
       zstd, so Codex's compressed rollouts are skipped unless a `zstd` binary is installed —
       doctor's `[deps]` line says which route it found
@@ -79,9 +77,9 @@ is a `#!/bin/sh` script for Git Bash, while Codex and OpenCode execute commands 
     - Printed `PATH` action → apply that exact command first
     - Codex: `llmwiki doctor --harness codex`
     - OpenCode: `llmwiki doctor --harness opencode`
-    - Claude-only: `bun <absolute-clone-path>/src/cli.ts doctor --harness claude`
+    - Claude Code: `llmwiki doctor --harness claude`
 - Confirm the harness data location (discovery resolves itself before it asks you)
-    - Run `llmwiki locate <harness>` (Claude-only: `bun <absolute-clone-path>/src/cli.ts locate claude`)
+    - Run `llmwiki locate <harness>`
     - A ✅ line means the location is verified and nothing is required of you. That includes
       `found and connected automatically` — the engine searched past the defaults (WSL's mounted
       Windows profile, XDG variants), verified a candidate, and persisted it on its own
@@ -110,8 +108,9 @@ is a `#!/bin/sh` script for Git Bash, while Codex and OpenCode execute commands 
 - Enroll the project (the one project-level trust decision)
     - Machine-level installation is INERT until a repository is enrolled: no cold-start context,
       no per-turn injection, no captured sessions
-    - Run `llmwiki init <absolute-project-path>` once per repository (Claude-only installs:
-      `bun <absolute-clone-path>/src/cli.ts init <absolute-project-path>`)
+    - Run `llmwiki init <absolute-project-path>` once per repository
+    - Run `llmwiki verify <absolute-project-path> --harness <harness>` for one combined machine,
+      enrollment, index, and cold-start-memory receipt
     - The target must be a git worktree; automatic integration is git-only and per-worktree
     - Confirm with `llmwiki status <absolute-project-path>` — it prints enabled/disabled and why
     - Never enroll a repository the human did not name, and never enroll one just because it
@@ -155,7 +154,7 @@ After a successful installation, give these instructions:
 - Custom conventions
     - Copy `llmwiki.config.example.toml` to `llmwiki.config.toml` only on request
     - Codex/OpenCode check: `llmwiki config <project-path>`
-    - Claude-only check: `bun <absolute-clone-path>/src/cli.ts config <project-path>`
+    - Check: `llmwiki config <project-path>`
     - Show the result before any migration
 
 ## Local architecture to describe accurately

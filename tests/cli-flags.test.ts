@@ -107,7 +107,7 @@ describe("cli flag allowlist", () => {
       expect(new TextDecoder().decode(result.stdout), command).toContain(`Usage:\n  llmwiki ${command}`);
       expect(new TextDecoder().decode(result.stderr), command).toBe("");
     }
-  });
+  }, 15_000);
 
   test("delegates argument parsing to the typed CLI boundary", () => {
     expect(CLI_SOURCE).toMatch(/import \{[^}]*parseCliArgs[^}]*\} from "\.\/cli-args\.ts";/s);

@@ -7,9 +7,9 @@ the current source of truth.
 Platform support and privacy invariants are defined in the machine-readable
 [`support-contract.json`](support-contract.json).
 
-**Claude-only installs have no `llmwiki` launcher** (it is installed by the Codex and OpenCode
-wiring). On such an install, read every `llmwiki <args>` in this document as
-`bun <absolute-clone-path>/src/cli.ts <args>` — the subcommands and flags are identical.
+Every harness install includes the same user-level `llmwiki` launcher. Setup prints the one-time
+`PATH` action when necessary. Native Windows follow-ups remain explicit Bun commands because the
+launcher is a POSIX shell script for Git Bash, while harness commands run through PowerShell.
 
 ## Contents
 
@@ -65,7 +65,7 @@ wiring). On such an install, read every `llmwiki <args>` in this document as
     - Enrollment action: `llmwiki init <absolute-project-path>` (one time, per worktree)
     - The target must be a git worktree; automatic integration is git-only
     - Enrollment is granted only after the bounded skeleton/index work succeeds
-    - Confirm with `llmwiki status <absolute-project-path>`
+    - Confirm the full machine + project loop with `llmwiki verify <absolute-project-path> --harness <harness>`
     - Never enroll a repository the human did not name; `docs/wiki/` presence is not consent
 - Phase 7 — handoff
     - Report absolute engine path and selected harness
@@ -81,16 +81,14 @@ wiring). On such an install, read every `llmwiki <args>` in this document as
 - Install
     - `./setup.sh --harness claude`
 - Verify
-    - `bun "<absolute-clone-path>/src/cli.ts" doctor --harness claude`
+    - `llmwiki doctor --harness claude`
 - Initialize a project
-    - `bun "<absolute-clone-path>/src/cli.ts" init "<absolute-project-path>"`
+    - `llmwiki init "<absolute-project-path>"`
 - Installed surfaces
     - Local capture daemon
     - `SessionStart` and `UserPromptSubmit` hooks
     - `/wiki-save`, `/wiki-deep`, `/wiki-doctor`, `/wiki-ask`, `/wiki-quiz`
-- CLI distinction
-    - Claude-only setup does not install the user-level `llmwiki` launcher
-    - Use the clone-pinned Bun command unless Codex or OpenCode setup also installed the launcher
+    - User-level `llmwiki` launcher
 - Profile handling
     - Honor `CLAUDE_CONFIG_DIR`
     - Preserve unrelated hooks and permissions

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -69,9 +69,9 @@ describe("fresh Claude Code setup", () => {
     expect(result.exitCode).toBe(0);
     expect(output).toContain("setup installed");
     expect(output).toContain("Claude Code close-out: /wiki-save");
-    expect(output).toContain(`${process.execPath} ${ROOT}/src/cli.ts init <repo>`);
-    expect(output).toContain(`${process.execPath} ${ROOT}/src/cli.ts doctor --harness claude`);
-    expect(output).not.toContain("Initialize a project: llmwiki init <repo>");
+    expect(output).toContain("Initialize a project: llmwiki init <repo>");
+    expect(output).toContain("Verify the installation anytime: llmwiki doctor --harness claude");
+    expect(existsSync(join(home, ".local", "bin", "llmwiki"))).toBe(true);
     expect(output).toContain("read-injection hook present");
     expect(output).toContain("turn-context hook present");
     expect(output).toContain("commands present");

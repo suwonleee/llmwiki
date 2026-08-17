@@ -58,13 +58,14 @@ llmwiki init /absolute/path/to/my-project
 登记后不再要求额外确认。
 
 - `llmwiki status <repo>` — 查看是否启用，以及未启用的原因
+- `llmwiki verify <repo> --harness <harness>` — 一次检查安装、登记、索引与cold-start工作记忆
 - `llmwiki disable <repo>` — 关闭自动集成但保留wiki
 - 在 CLI 中查找：`llmwiki --help` 显示首次使用流程和命令分组，
   `llmwiki <command> --help` 在不执行命令的情况下显示其用法，`llmwiki --version` 显示
   引擎版本。
 - 自动集成仅用于Git，且按worktree隔离；移动仓库后需重新运行 `init`
-- `llmwiki` 启动器由Codex与OpenCode的接线安装。**仅安装Claude时没有该命令**，请直接从克隆目录运行：
-  `bun ~/llmwiki/src/cli.ts init /absolute/path/to/my-project`（`status`、`disable` 同理）
+- 所有harness安装都会提供同一个用户级 `llmwiki` 启动器；如有需要，只需执行一次setup输出的
+  `PATH` 命令
 - **从要工作的项目目录启动智能体**：会话读取、捕获并记录其cwd处的wiki。若某个会话的编辑实际落在
   另一个已登记的仓库，收尾时抽取头部会以一行 `# ⚠ route:` 标出，引导记录进正确的wiki
 
@@ -131,8 +132,7 @@ cp llmwiki.config.example.toml llmwiki.config.toml   # 英文，注释齐全
 ```
 
 - 原样使用setup输出的下一条命令
-    - Claude-only: 固定到clone的 `bun <clone>/src/cli.ts …`
-    - macOS、Linux 或 WSL2 上的Codex/OpenCode: 用户级 `llmwiki …`
+    - macOS、Linux 或 WSL2上的所有harness: 用户级 `llmwiki …`
     - 原生 Windows 的所有harness: 显式使用 `bun <clone>/src/cli.ts …`；可选的
       `llmwiki` 启动器仅适用于Git Bash，而Codex/OpenCode使用PowerShell
 - 完成输出中的手动操作

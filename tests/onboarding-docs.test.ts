@@ -19,7 +19,7 @@ describe("public onboarding documentation", () => {
     expect(contract).toContain("`llmwiki doctor --harness codex`");
     expect(contract).toContain("`llmwiki doctor --harness opencode`");
     expect(contract).toContain("`llmwiki config <project-path>`");
-    expect(contract).toContain("`bun <absolute-clone-path>/src/cli.ts config <project-path>`");
+    expect(contract).toContain("`llmwiki verify <absolute-project-path> --harness <harness>`");
     expect(contract).toContain("Open `/hooks`");
     expect(contract).toContain("`llmwiki wiki-doctor <project-path>`");
     expect(contract).toContain("$wiki-doctor");
@@ -36,7 +36,7 @@ describe("public onboarding documentation", () => {
     expect(readme).toContain("reference/INSTALLATION_FLOW.md");
     expect(readme).toContain("stay in the same setup session");
     expect(flow).toContain("Read the shared flow plus the active harness section only");
-    expect(flow).toContain("Claude-only setup does not install the user-level `llmwiki` launcher");
+    expect(flow).toContain("Every harness install includes the same user-level `llmwiki` launcher");
     expect(flow).toContain("`llmwiki doctor --harness codex`");
     expect(flow).toContain("`llmwiki doctor --harness opencode`");
     expect(flow).toContain("Inspect and trust both current llmwiki hook hashes");

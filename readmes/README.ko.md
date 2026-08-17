@@ -61,14 +61,15 @@ clone 한 것은 거기서 llmwiki를 돌리겠다는 결정이 아니기 때문
 다시 뜨지 않습니다.
 
 - `llmwiki status <repo>` — 켜져 있는지, 아니면 왜 꺼져 있는지 확인
+- `llmwiki verify <repo> --harness <harness>` — 설치·등록·인덱스·cold-start 작업기억을 한 번에 확인
 - `llmwiki disable <repo>` — 다시 끄기(위키 파일은 그대로 유지)
 - CLI에서 찾기: `llmwiki --help`는 첫 사용 순서와 명령군을 보여주고,
   `llmwiki <command> --help`는 명령을 실행하지 않고 사용법을 보여주며, `llmwiki --version`은
   엔진 버전을 출력합니다.
 - 자동 연동은 **git 전용·워크트리 단위** — 연결된 워크트리 두 개는 각각 등록, 저장소를 옮기면
   `init` 재실행 필요(표식이 정규 경로를 기록함)
-- `llmwiki` 런처는 Codex·OpenCode 배선이 설치함 — **Claude 단독 설치에는 이 명령이 없으므로**
-  클론에서 직접 실행: `bun ~/llmwiki/src/cli.ts init /내/프로젝트/절대경로`(`status`·`disable`도 동일)
+- 모든 하네스 설치가 같은 사용자 `llmwiki` 런처를 설치함 — 필요한 경우 setup이 출력한
+  `PATH` 명령을 한 번 적용
 - **에이전트는 작업할 프로젝트 디렉터리에서 시작**: 세션은 자기 cwd의 위키를 읽고, 거기로 캡처되고,
   거기에 기록됩니다. 편집이 실제로는 다른 등록 레포로 간 세션은 마감 시 추출 헤더의 `# ⚠ route:`
   한 줄로 표시되어 올바른 위키에 기록되도록 안내됩니다
@@ -136,8 +137,7 @@ MCP 서버·Docker·외부 데이터베이스·벡터 DB·클라우드 서비스
 ```
 
 - setup이 출력한 다음 명령을 그대로 사용
-    - Claude-only: clone 고정 `bun <clone>/src/cli.ts …`
-    - macOS·Linux·WSL2의 Codex/OpenCode: 사용자 `llmwiki …`
+    - macOS·Linux·WSL2의 모든 하네스: 사용자 `llmwiki …`
     - 네이티브 Windows의 모든 하네스: 명시적 `bun <clone>/src/cli.ts …`; 선택형 `llmwiki`
       런처는 Git Bash 전용이고 Codex/OpenCode는 PowerShell을 사용
 - 출력된 수동 단계 완료

@@ -10,6 +10,7 @@ import packageJson from "../package.json" with { type: "json" };
 import { commandSpec, renderCommandHelp, renderRootHelp, type CommandName } from "./commands/catalog.ts";
 import { MissingCliFlagValueError, UnknownCliFlagError, parseCliArgs, type ParsedCliArgs as Parsed } from "./cli-args.ts";
 import { createMaintenanceHandlers } from "./commands/maintenance.ts";
+import { runDoctor, type DoctorHarness } from "./engine/doctor.ts";
 import * as excerpt from "./engine/excerpt.ts";
 import { rebuildReferenceGraph, referenceGraphCounts } from "./engine/refs.ts";
 import { effectiveKo, getConfig, isRepoKorean, CONFIG_BASENAME, CONFIGS_DIR } from "./engine/config.ts";
@@ -794,6 +795,56 @@ function cmdStatus(p: Parsed) {
   if (st.markerPath) console.log(`  marker: ${st.markerPath}`);
 }
 
+// One post-install receipt for the only state a person should care about: is the machine wiring
+// healthy, is this worktree enrolled, and can a new session receive non-empty work memory? The
+// command is read-only and intentionally composes existing authorities instead of inventing a
+// second doctor/enrollment contract.
+function cmdVerify(p: Parsed) {
+  const ws = p.positionals[0] || process.cwd();
+  const rawHarness = String(p.flags["--harness"] ?? "all");
+  if (!(["all", "claude", "codex", "opencode"] as const).includes(rawHarness as DoctorHarness)) {
+    die("verify --harness must be one of: all, codex, claude, opencode");
+  }
+  const harness = rawHarness as DoctorHarness;
+  const machineIssues = runDoctor(false, harness);
+  const st = enrollment.inspectEnrollment(ws);
+  const root = st.enabled && st.worktree ? wikiRootFor(resolve(ws), st.worktree) : resolve(ws);
+  const wikiPath = join(root, "docs", "wiki");
+  const wikiReady = statSafe(wikiPath)?.isDirectory() === true;
+  let indexPath = "";
+  let indexReady = false;
+  try {
+    indexPath = idx(root).dbPath;
+    indexReady = statSafe(indexPath)?.isFile() === true;
+  } catch {
+    /* reported below */
+  }
+  let contextReady = false;
+  if (st.enabled && wikiReady) {
+    try {
+      contextReady = buildContext(root).trim().length > 0;
+    } catch {
+      contextReady = false;
+    }
+  }
+
+  console.log(`=== project work-memory readiness (${root}) ===`);
+  console.log(`  [project] ${st.enabled ? "✅ enrolled" : "❌ not enrolled"}`);
+  console.log(`  [wiki] ${wikiReady ? `✅ ${wikiPath}` : `❌ missing or unreadable: ${wikiPath}`}`);
+  console.log(`  [index] ${indexReady ? `✅ ${indexPath}` : "❌ derived index missing — re-run llmwiki init"}`);
+  console.log(`  [memory] ${contextReady ? "✅ cold-start context is non-empty" : "❌ no cold-start context"}`);
+  if (harness === "codex") console.log("  [codex] • hook trust remains visible only in Codex `/hooks` (one-time install action)");
+  if (harness === "opencode") console.log("  [opencode] • restart once after setup or clone re-pointing so the global plugin reloads");
+
+  const ready = machineIssues === 0 && st.enabled && wikiReady && indexReady && contextReady;
+  console.log(
+    ready
+      ? "=== READY: automatic work-memory read and capture mechanics are active for this project ==="
+      : "=== NOT READY: fix the item(s) above, then re-run this command ===",
+  );
+  if (!ready) process.exitCode = 1;
+}
+
 // Local runtime state: report it, or delete exactly the artifacts llmwiki created. Reached
 // through `setup.sh --uninstall [--purge-data]`; exposed here so the installed CLI can do it too.
 // Where the engine keeps this project's derived state. Scripts and skills need a way to ask —
@@ -1489,6 +1540,7 @@ const HANDLERS: Record<CommandName, (p: Parsed) => void | Promise<void>> = {
   init: cmdInit,
   disable: cmdDisable,
   status: cmdStatus,
+  verify: cmdVerify,
   enabled: cmdEnabled,
   "purge-state": cmdPurgeState,
   "migrate-state": cmdMigrateState,

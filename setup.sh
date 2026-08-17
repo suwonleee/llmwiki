@@ -39,6 +39,8 @@ OpenCode installs:
   - the global read-injection plugin under \$XDG_CONFIG_HOME/opencode/plugin
   - /wiki-save, /wiki-deep, /wiki-ask, /wiki-quiz, /wiki-doctor commands
   - the same user-level llmwiki command
+
+Every harness install gets the same user-level llmwiki command in ~/.local/bin.
 EOF
 }
 
@@ -138,7 +140,10 @@ if [ "$UNINSTALL" -eq 1 ]; then
     echo "--- 4) OpenCode plugin + commands + launcher ---"
     run_uninstall_step "OpenCode wiring" "$BUN" "$ROOT/src/daemon/wire-opencode.ts" --revert
     echo
-    echo "--- 5) local runtime state ---"
+    echo "--- 5) shared user CLI ---"
+    run_uninstall_step "shared user CLI" "$BUN" "$ROOT/src/daemon/wire-launcher.ts" --revert
+    echo
+    echo "--- 6) local runtime state ---"
     if [ "$PURGE_DATA" -eq 1 ] && [ "$DAEMON_STOPPED" -ne 1 ]; then
         echo "🔴 local runtime state purge skipped because the background service was not confirmed stopped." >&2
     elif [ "$PURGE_DATA" -eq 1 ]; then
@@ -251,6 +256,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
     echo "  harness: $HARNESS (Codex=$USE_CODEX, Claude=$USE_CLAUDE, OpenCode=$USE_OPENCODE)"
     echo "  would  : run doctor (pre)"
     echo "  would  : install capture daemon"
+    "$BUN" "$ROOT/src/daemon/wire-launcher.ts" --dry-run
     [ "$USE_CLAUDE" -eq 1 ] && "$BUN" "$ROOT/src/daemon/wire.ts" --dry-run
     [ "$USE_CODEX" -eq 1 ] && "$BUN" "$ROOT/src/daemon/wire-codex.ts" --dry-run
     [ "$USE_OPENCODE" -eq 1 ] && "$BUN" "$ROOT/src/daemon/wire-opencode.ts" --dry-run
@@ -300,8 +306,18 @@ if [ "$USE_OPENCODE" -eq 1 ]; then
     STEP=$((STEP + 1))
 fi
 
+echo "--- $STEP) shared user CLI (all harnesses) ---"
+"$BUN" "$ROOT/src/daemon/wire-launcher.ts" --dry-run
+echo
+STEP=$((STEP + 1))
+
 echo "--- $STEP) capture daemon (macOS launchd · Linux systemd/cron) ---"
 bash "$ROOT/daemon/install.sh"
+echo
+STEP=$((STEP + 1))
+
+echo "--- $STEP) shared user CLI ---"
+"$BUN" "$ROOT/src/daemon/wire-launcher.ts"
 echo
 STEP=$((STEP + 1))
 
@@ -340,7 +356,7 @@ fi
 echo "=== setup installed. ==="
 # How to spell the engine command in the closing instructions.
 #
-# The ~/.local/bin launcher that the Codex and OpenCode wirings install is a `#!/bin/sh` script.
+# The ~/.local/bin launcher every harness install gets is a `#!/bin/sh` script.
 # On Windows only Git Bash can run it, and Git Bash puts ~/bin — not ~/.local/bin — on PATH, so
 # telling a Windows adopter to run `llmwiki init` hands them a command that exists in none of the
 # shells they have open. The explicit interpreter spelling is correct everywhere; only longer.
@@ -353,11 +369,12 @@ case "$(uname -s)" in
         CLI="bun \"$(cygpath -m "$ROOT" 2>/dev/null || echo "$ROOT")/src/cli.ts\""
         ;;
     *)
-        if [ "$USE_CODEX" -eq 1 ] || [ "$USE_OPENCODE" -eq 1 ]; then CLI="llmwiki"; fi
+        CLI="llmwiki"
         ;;
 esac
 echo "  • Initialize a project: $CLI init <repo>"
 echo "  • Verify the installation anytime: $CLI doctor --harness $DOCTOR_HARNESS"
+echo "  • Verify machine + project work memory after init: $CLI verify <repo> --harness $DOCTOR_HARNESS"
 echo "  • Engine-only project diagnosis: $CLI wiki-doctor <repo> (add --fix for safe derived-state repair)"
 if [ "$USE_CODEX" -eq 1 ]; then
     echo "  • One-time Codex activation: start Codex, open /hooks, trust both llmwiki hooks."

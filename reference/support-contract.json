@@ -34,10 +34,10 @@
     "macos": {
       "claude": {
         "install": "./setup.sh --harness claude",
-        "verify": "bun <absolute-clone-path>/src/cli.ts doctor --harness claude",
-        "init": "bun <absolute-clone-path>/src/cli.ts init <absolute-project-path>",
+        "verify": "llmwiki doctor --harness claude",
+        "init": "llmwiki init <absolute-project-path>",
         "manual_actions": [],
-        "public_surfaces": ["capture-daemon", "sessionstart-hook", "userpromptsubmit-hook", "wiki-commands"]
+        "public_surfaces": ["capture-daemon", "sessionstart-hook", "userpromptsubmit-hook", "wiki-commands", "user-launcher"]
       },
       "codex": {
         "install": "./setup.sh --harness codex",
@@ -57,10 +57,10 @@
     "linux": {
       "claude": {
         "install": "./setup.sh --harness claude",
-        "verify": "bun <absolute-clone-path>/src/cli.ts doctor --harness claude",
-        "init": "bun <absolute-clone-path>/src/cli.ts init <absolute-project-path>",
+        "verify": "llmwiki doctor --harness claude",
+        "init": "llmwiki init <absolute-project-path>",
         "manual_actions": [],
-        "public_surfaces": ["capture-daemon", "sessionstart-hook", "userpromptsubmit-hook", "wiki-commands"]
+        "public_surfaces": ["capture-daemon", "sessionstart-hook", "userpromptsubmit-hook", "wiki-commands", "user-launcher"]
       },
       "codex": {
         "install": "./setup.sh --harness codex",
@@ -83,7 +83,7 @@
         "verify": "bun <absolute-clone-path>/src/cli.ts doctor --harness claude",
         "init": "bun <absolute-clone-path>/src/cli.ts init <absolute-project-path>",
         "manual_actions": [],
-        "public_surfaces": ["capture-daemon", "sessionstart-hook", "userpromptsubmit-hook", "wiki-commands"]
+        "public_surfaces": ["capture-daemon", "sessionstart-hook", "userpromptsubmit-hook", "wiki-commands", "git-bash-launcher"]
       },
       "codex": {
         "install": "./setup.sh --harness codex",
@@ -103,10 +103,10 @@
     "windows-wsl2": {
       "claude": {
         "install": "./setup.sh --harness claude",
-        "verify": "bun <absolute-clone-path>/src/cli.ts doctor --harness claude",
-        "init": "bun <absolute-clone-path>/src/cli.ts init <absolute-project-path>",
+        "verify": "llmwiki doctor --harness claude",
+        "init": "llmwiki init <absolute-project-path>",
         "manual_actions": [],
-        "public_surfaces": ["capture-daemon", "sessionstart-hook", "userpromptsubmit-hook", "wiki-commands"]
+        "public_surfaces": ["capture-daemon", "sessionstart-hook", "userpromptsubmit-hook", "wiki-commands", "user-launcher"]
       },
       "codex": {
         "install": "./setup.sh --harness codex",

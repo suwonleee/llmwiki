@@ -67,7 +67,6 @@ Installation is machine-level, but it stays **inert everywhere until you enroll 
 
 ```bash
 llmwiki init /absolute/path/to/my-project     # one project-level activation step
-# Claude-only install has no `llmwiki` launcher — use: bun <clone>/src/cli.ts init <path>
 ```
 
 `init` scaffolds the wiki and records a marker under that worktree's `.git/` directory. Until it
@@ -77,15 +76,16 @@ sessions — even if it already contains a complete `docs/wiki/`, because a wiki
 there are no further prompts or confirmations, ever.
 
 - `llmwiki status <repo>` — is it on, and why not
+- `llmwiki verify <repo> --harness <harness>` — one receipt for machine wiring, enrollment, index,
+  and non-empty cold-start work memory
 - `llmwiki disable <repo>` — turn it back off (your wiki files are untouched)
 - CLI discovery: `llmwiki --help` shows the first-use path and command groups;
   `llmwiki <command> --help` shows one command without running it; `llmwiki --version` prints the
   engine version.
 - automatic integration is **git-only** and per-worktree; two linked worktrees enroll separately,
   and moving a repository requires re-running `init` (the marker records its canonical path)
-- the `llmwiki` launcher is installed by the Codex and OpenCode wiring. On a **Claude-only**
-  install there is no such command — run the CLI from the clone instead:
-  `bun ~/llmwiki/src/cli.ts init /absolute/path/to/my-project` (same for `status` and `disable`)
+- every harness install gets the same user-level `llmwiki` launcher; setup prints a one-time `PATH`
+  line when the shell does not already include it
 - **start your agent from the project directory**: a session reads, captures into, and files the
   wiki at its cwd. A session whose edits actually went to a different enrolled repo is flagged at
   close-out (`# ⚠ route:` on the extract header) so its record lands in the right wiki
@@ -195,8 +195,7 @@ do not use `auto` unless you want every detected harness wired.
 ```
 
 - Follow the exact next command printed by setup
-    - Claude-only: clone-pinned `bun <clone>/src/cli.ts …`
-    - Codex/OpenCode on macOS, Linux, or WSL2: user-level `llmwiki …`
+    - macOS, Linux, or WSL2: user-level `llmwiki …` for every harness
     - Native Windows, every harness: explicit `bun <clone>/src/cli.ts …`; the optional
       `llmwiki` launcher is a Git Bash-only shell script, while Codex/OpenCode use PowerShell
 - Complete any printed manual action
@@ -363,7 +362,7 @@ The canonical machine-readable platform, runtime, CI-evidence, and privacy contr
 | | Required | Notes |
 |---|---|---|
 | **Bun ≥ 1.1** (1.2+ recommended) | ✔ required | Single binary — POSIX: `curl -fsSL https://bun.sh/install \| bash`; native Windows: `irm bun.sh/install.ps1 \| iex` in PowerShell (the POSIX installer does not run there). Runs `.ts` directly, and `bun:sqlite` bundles FTS5 — zero build·`node_modules`. Running the engine and `bun test` work with no install; only `bun run typecheck` (tsc) needs a one-time `bun install` (dev-only). Below 1.2 there is no in-process zstd: Codex's compressed rollouts (`*.jsonl.zst`) are read only if a `zstd` binary is on `PATH`, and `llmwiki doctor` says which route it found. |
-| **git** | ✔ required | The capture loop asks git whether a directory is a worktree, and cannot distinguish "git is missing" from "not a worktree" — so without it the engine installs cleanly and captures nothing. It is searched for beyond `PATH` (Homebrew · MacPorts · Nix · `~/.local/bin`), baked into the daemon's service environment at install time, and reported by `llmwiki doctor` under `[deps]`. |
+| **git** | ✔ required | The capture loop asks git whether a directory is a worktree. Setup searches beyond `PATH` (Homebrew · MacPorts · Nix · `~/.local/bin`) and stops before mutation if it is absent; the resolved path is baked into the daemon environment and reported by `llmwiki doctor` under `[deps]`. |
 | **Codex · OpenCode CLI** | their quick starts only | `codex` / `opencode` on `PATH`. Codex additionally needs lifecycle-hook support with the stable `hooks` feature enabled. Setup checks support — and any existing feature setting — before changing hooks, skills, or services. |
 | **LLM CLI** | optional, opt-in | Capture·read-injection·`/wiki-*`·`ingest` (capture-only, queues pending updates) work without it, and **nothing is sent anywhere by default**. `autoupdate·review` and `ingest`'s consolidation launch a generative subprocess only when you set `LLMWIKI_LLM_CMD` in your shell environment (e.g. `export LLMWIKI_LLM_CMD='claude -p {prompt} --model {model} --disallowedTools Write Edit NotebookEdit Bash'`). Unset → those passes report "unavailable" and skip; everything deterministic keeps working. |
 | **OS** | macOS / Linux / Windows | macOS=launchd, Linux=systemd (`--user`) falling back to cron+nohup, Windows=per-user Startup folder (unelevated; starts at logon, no restart-on-crash) — for the capture daemon AND for unattended update (`daemon/autoupdate-schedule.sh`). macOS and Linux run the full suite in CI; Windows runs a platform-contract job (typecheck, LF checkout, and the generated harness pages/hooks) and the rest is verified by hand. Daemon details in [`daemon/README.md`](daemon/README.md) |

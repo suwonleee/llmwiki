@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -287,6 +287,20 @@ describe("setup command contract", () => {
     expect(existsSync(join(home, ".config", "systemd", "user", "llmwiki-daemon.service"))).toBe(false);
     expect(existsSync(join(profile, "settings.json"))).toBe(false);
     expect(existsSync(join(commandDir, "wiki-save.md"))).toBe(true);
+  });
+
+  test("Claude setup refuses a user-owned llmwiki command before daemon mutation", () => {
+    const localBin = join(home, ".local", "bin");
+    mkdirSync(localBin, { recursive: true });
+    writeFileSync(join(localBin, "llmwiki"), "#!/bin/sh\necho user-owned\n");
+
+    const result = run(["--harness", "claude"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(new TextDecoder().decode(result.stderr)).toContain("refusing to overwrite unrelated command");
+    expect(readFileSync(join(localBin, "llmwiki"), "utf8")).toContain("user-owned");
+    expect(existsSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"))).toBe(false);
+    expect(existsSync(join(home, ".config", "systemd", "user", "llmwiki-daemon.service"))).toBe(false);
   });
 
   test("Claude preflight never treats an unrelated /skill/ symlink as llmwiki-owned", () => {

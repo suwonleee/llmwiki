@@ -60,14 +60,14 @@ llmwiki init /absolute/path/to/my-project
 不要です。
 
 - `llmwiki status <repo>` — 有効か、無効なら理由を表示
+- `llmwiki verify <repo> --harness <harness>` — 導入・登録・索引・cold-start作業記憶を一括確認
 - `llmwiki disable <repo>` — wikiを残したまま無効化
 - CLIで探す: `llmwiki --help` は初回の流れとコマンド群を表示し、
   `llmwiki <command> --help` は実行せずに個別の使い方を表示し、`llmwiki --version` は
   エンジンのバージョンを表示します。
 - 自動連携はGit専用・ワークツリー単位。リポジトリを移動した場合は `init` を再実行
-- `llmwiki` ランチャーはCodex・OpenCodeの配線が導入します。**Claude単独構成にはこのコマンドがない**ため、
-  クローンから直接実行してください: `bun ~/llmwiki/src/cli.ts init /absolute/path/to/my-project`
-  (`status`・`disable` も同様)
+- すべてのハーネス構成が同じユーザー用 `llmwiki` ランチャーを導入します。必要な場合は
+  setupが表示する `PATH` コマンドを一度適用します
 - **エージェントは作業するプロジェクトのディレクトリから起動**: セッションは自分のcwdのwikiを読み、
   そこにキャプチャされ、そこに記録されます。編集が実際には別の登録済みリポジトリに向かったセッションは、
   クローズアウト時に抽出ヘッダーの `# ⚠ route:` 行で示され、正しいwikiに記録されるよう誘導されます
@@ -135,8 +135,7 @@ MCPサーバー、Docker、外部データベース、ベクトルDB、クラウ
 ```
 
 - setupが表示した次のコマンドをそのまま使用
-    - Claude-only: clone固定の `bun <clone>/src/cli.ts …`
-    - macOS・Linux・WSL2のCodex/OpenCode: ユーザー用 `llmwiki …`
+    - macOS・Linux・WSL2の全ハーネス: ユーザー用 `llmwiki …`
     - ネイティブWindowsの全ハーネス: 明示的な `bun <clone>/src/cli.ts …`; 任意の
       `llmwiki` ランチャーはGit Bash専用で、Codex/OpenCodeはPowerShellを使用
 - 表示された手動アクションを完了
