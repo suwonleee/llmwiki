@@ -10,7 +10,9 @@
   "scripts": {
     "cli": "bun run src/cli.ts",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check:quick": "bun run src/dev/check.ts --quick",
+    "check": "bun run src/dev/check.ts"
   },
   "engines": {
     "bun": ">=1.1.0"

@@ -549,6 +549,13 @@ guide = "Quarterly goals; changes need human sign-off."
 The complete reproducible command set and the claims each result permits are maintained in
 [`reference/RELEASE_GATES.md`](reference/RELEASE_GATES.md).
 
+## Contributing
+
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) for the clean-clone workflow and executable checks,
+then use [ARCHITECTURE.md](ARCHITECTURE.md) to find the owning module and safety boundary for a
+change. `bun run check:quick` is the iteration gate; `bun run check` runs the complete contributor
+gate before review.
+
 ## Principles
 
 - transcript = raw and immutable — citation only, no wiki→wiki re-derivation; incremental = only what's past the watermark
