@@ -35,6 +35,10 @@ is a `#!/bin/sh` script for Git Bash, while Codex and OpenCode execute commands 
 - Do not commit or push.
 - Do not add an MCP server, Docker service, external database, vector database, cloud service, or new project dependency.
 - Do not overwrite unrelated user configuration. The setup scripts already merge or reject conflicts at their owned boundaries.
+- On Codex, llmwiki owns only its entries in `$CODEX_HOME/hooks.json`, its five installed wiki
+  skills, the user launcher, and the capture service. It never edits `$CODEX_HOME/config.toml`,
+  `developer_instructions`, `AGENTS.md`, or another orchestrator's state; diagnose errors from
+  those surfaces with their owner.
 - Do not copy private project files, transcripts, credentials, or wiki content into this public engine clone.
 - Do not create `llmwiki.config.toml` unless the human asks for custom conventions.
 - Do not migrate an existing wiki unless the human explicitly approves the migration after seeing the dry-run.

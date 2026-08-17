@@ -23,6 +23,9 @@ describe("public onboarding documentation", () => {
     expect(contract).toContain("Open `/hooks`");
     expect(contract).toContain("`llmwiki wiki-doctor <project-path>`");
     expect(contract).toContain("$wiki-doctor");
+    expect(contract).toContain("`$CODEX_HOME/config.toml`");
+    expect(contract).toContain("`developer_instructions`");
+    expect(contract).toContain("another orchestrator's state");
   });
 
   test("keeps the README human-first and moves conditional installation detail to the agent flow", () => {
@@ -37,6 +40,8 @@ describe("public onboarding documentation", () => {
     expect(flow).toContain("`llmwiki doctor --harness codex`");
     expect(flow).toContain("`llmwiki doctor --harness opencode`");
     expect(flow).toContain("Inspect and trust both current llmwiki hook hashes");
+    expect(flow).toContain("llmwiki does not edit `$CODEX_HOME/config.toml`");
+    expect(flow).toContain("another orchestrator's runtime or preflight state");
     expect(flow).toContain("Restart OpenCode after initial setup or clone re-pointing");
     expect(flow).toContain("Do not migrate automatically");
   });

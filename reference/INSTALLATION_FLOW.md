@@ -108,6 +108,11 @@ wiring). On such an install, read every `llmwiki <args>` in this document as
     - Native `SessionStart` and `UserPromptSubmit` hooks in `$CODEX_HOME/hooks.json`
     - `$wiki-save`, `$wiki-deep`, `$wiki-doctor`, `$wiki-ask`, `$wiki-quiz`
     - User-level `llmwiki` launcher
+- Ownership boundary
+    - llmwiki does not edit `$CODEX_HOME/config.toml`, `developer_instructions`, `AGENTS.md`, or
+      another orchestrator's runtime or preflight state
+    - Diagnose failures from those surfaces with their owner; do not bypass or repair them by
+      changing llmwiki wiring
 - Required manual activation
     - Start Codex inside an initialized project
     - Open `/hooks`

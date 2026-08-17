@@ -105,6 +105,24 @@ describe("Codex wiring", () => {
     expect(existsSync(join(home, ".local"))).toBe(false);
   });
 
+  test("leaves Codex config and foreign orchestration instructions byte-for-byte unchanged", () => {
+    const configPath = join(codexHome, "config.toml");
+    const foreignConfig = [
+      'model = "gpt-5.6-sol"',
+      'developer_instructions = "foreign orchestrator policy"',
+      "",
+      "[features]",
+      "multi_agent = true",
+      "",
+    ].join("\n");
+    writeFileSync(configPath, foreignConfig);
+
+    for (const args of [[], ["--dry-run"], ["--revert"]]) {
+      expect(run(home, codexHome, args).exitCode).toBe(0);
+      expect(readFileSync(configPath, "utf8")).toBe(foreignConfig);
+    }
+  });
+
   test("does not overwrite an unrelated llmwiki command", () => {
     const bin = join(home, ".local", "bin");
     mkdirSync(bin, { recursive: true });
