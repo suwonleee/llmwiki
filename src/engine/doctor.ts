@@ -671,9 +671,14 @@ export function reportCaptureHealth(harness: Harness | "all" = "all"): number {
   return issues;
 }
 
-export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
+export function runDoctor(
+  fix = false,
+  harness: DoctorHarness = "all",
+  options: { readonly installationOnly?: boolean } = {},
+): number {
+  const scope = options.installationOnly ? ", installation-only" : "";
   console.log(
-    `=== llmwiki doctor (root=${CLONE_ROOT}, harness=${harness}${fix ? ", --fix" : ""}) ===`,
+    `=== llmwiki doctor (root=${CLONE_ROOT}, harness=${harness}${fix ? ", --fix" : ""}${scope}) ===`,
   );
   let issues = 0;
   let actions = 0;
@@ -817,7 +822,10 @@ export function runDoctor(fix = false, harness: DoctorHarness = "all"): number {
   }
 
   reportEngineUpdate();
-  issues += reportCaptureHealth(harness);
+  // Setup and `verify` need a machine-wiring verdict, not a verdict on every historical project
+  // the daemon has ever observed. A stale temp repository or an expiring old transcript remains
+  // visible in the ordinary doctor, but cannot turn a correct fresh install into exit 1.
+  if (!options.installationOnly) issues += reportCaptureHealth(harness);
 
   // SessionStart read-injection hooks across profiles. A Codex-only setup must not fail
   // because an independently managed Claude profile points at another llmwiki clone.

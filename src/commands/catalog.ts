@@ -22,7 +22,7 @@ export const COMMANDS = [
   { name: "status", group: "Project setup", usage: "status [workspace]", summary: "Explain whether a worktree is enrolled." },
   { name: "verify", group: "Project setup", usage: "verify [workspace] [--harness all|claude|codex|opencode]", summary: "Prove machine wiring and project work-memory readiness in one receipt." },
   { name: "enabled", group: "Project setup", usage: "enabled [workspace]", summary: "Return enrollment as an exit code for adapters." },
-  { name: "doctor", group: "Project setup", usage: "doctor [--harness all|claude|codex|opencode] [--fix]", summary: "Check the machine installation and selected harness wiring." },
+  { name: "doctor", group: "Project setup", usage: "doctor [--harness all|claude|codex|opencode] [--fix] [--installation-only]", summary: "Check the machine installation and selected harness wiring." },
   { name: "wiki-doctor", group: "Project setup", usage: "wiki-doctor [workspace] [--fix] [--date YYYY-MM-DD]", summary: "Check and safely repair one project wiki." },
   { name: "locate", group: "Project setup", usage: "locate [claude|codex|opencode] [path]", summary: "Find and verify harness transcript storage." },
   { name: "connect", group: "Project setup", usage: "connect <harness> <path> | connect <harness> --forget", summary: "Persist or forget one verified harness data location." },

@@ -344,7 +344,8 @@ fi
 
 echo "--- $STEP) doctor (post) ---"
 POST=0
-"$BUN" "$ROOT/src/cli.ts" doctor --harness "$DOCTOR_HARNESS" || POST=$?
+PATH="${LLMWIKI_BIN_DIR:-$HOME/.local/bin}:$PATH" \
+    "$BUN" "$ROOT/src/cli.ts" doctor --harness "$DOCTOR_HARNESS" --installation-only || POST=$?
 echo
 
 if [ "$POST" -ne 0 ]; then

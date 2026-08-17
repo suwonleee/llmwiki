@@ -95,7 +95,9 @@ describe("setup lifecycle across every harness", () => {
   }
 
   test("install → user edit → reinstall → unified purge uninstall is complete and narrow", () => {
-    expect(setup("--harness", "all").exitCode).toBe(0);
+    const installed = setup("--harness", "all");
+    expect(installed.exitCode).toBe(0);
+    expect(installed.stdout?.toString() ?? "").toContain("installation-only");
 
     const settingsPath = join(claude, "settings.json");
     const edited = JSON.parse(readFileSync(settingsPath, "utf-8"));

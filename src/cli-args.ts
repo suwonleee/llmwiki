@@ -18,6 +18,7 @@ const BOOLEAN_FLAG_NAMES = [
   "--check", "--commit", "--confirm", "--downstream-read", "--ensure", "--errors-only",
   "--fix", "--force", "--forget", "--help", "--if-due", "--keep", "--list", "--notice",
   "--normalize", "--report", "--sealed", "--skipped", "--topic", "--tune-only",
+  "--installation-only",
 ] as const;
 
 const BOOLEAN_FLAGS = new Set<string>(BOOLEAN_FLAG_NAMES);

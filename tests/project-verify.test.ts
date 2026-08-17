@@ -48,6 +48,7 @@ describe("single project readiness receipt", () => {
     const verified = run([process.execPath, join(ROOT, "src", "cli.ts"), "verify", repo, "--harness", "claude"]);
     const output = verified.stdout.toString() + verified.stderr.toString();
     expect(verified.exitCode, output).toBe(0);
+    expect(output).toContain("installation-only");
     expect(output).toContain("project work-memory readiness");
     expect(output).toContain("[project] ✅ enrolled");
     expect(output).toContain("[memory] ✅ cold-start context is non-empty");

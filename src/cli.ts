@@ -806,7 +806,7 @@ function cmdVerify(p: Parsed) {
     die("verify --harness must be one of: all, codex, claude, opencode");
   }
   const harness = rawHarness as DoctorHarness;
-  const machineIssues = runDoctor(false, harness);
+  const machineIssues = runDoctor(false, harness, { installationOnly: true });
   const st = enrollment.inspectEnrollment(ws);
   const root = st.enabled && st.worktree ? wikiRootFor(resolve(ws), st.worktree) : resolve(ws);
   const wikiPath = join(root, "docs", "wiki");

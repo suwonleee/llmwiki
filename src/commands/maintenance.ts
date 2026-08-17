@@ -123,7 +123,11 @@ export function createMaintenanceHandlers(dependencies: MaintenanceDependencies)
     doctor: (args) => {
       const harness = getFlagValue(args, "--harness") ?? "all";
       if (isDoctorHarness(harness)) {
-        process.exit(runDoctor(Boolean(args.flags["--fix"]), harness));
+        process.exit(
+          runDoctor(Boolean(args.flags["--fix"]), harness, {
+            installationOnly: Boolean(args.flags["--installation-only"]),
+          }),
+        );
       }
       die("doctor --harness must be one of: all, codex, claude, opencode");
     },
