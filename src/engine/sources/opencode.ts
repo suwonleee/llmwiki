@@ -821,6 +821,74 @@ function readMeta(path: string): ExportMeta | null {
   }
 }
 
+/** Read-only routing seam for deterministic tests/benchmarks and the production registry. */
+export function discoverOpenCodeRoutes(dbPaths: readonly string[] = opencodeDbPaths()): DiscoveredRoute[] {
+  const out: DiscoveredRoute[] = [];
+  for (const dbPath of dbPaths) {
+    const db = openRO(dbPath);
+    if (!db) continue;
+    try {
+      let sessions: any[];
+      try {
+        sessions = db
+          .query("SELECT id, directory FROM session WHERE time_archived IS NULL ORDER BY time_updated DESC")
+          .all() as any[];
+      } catch {
+        continue; // schema drift
+      }
+      for (const s of sessions) {
+        const id = String(s.id ?? "");
+        if (!id) continue;
+        const repo = typeof s.directory === "string" ? s.directory : null;
+        out.push({
+          path: exportPath(exportKey(dbPath, id)),
+          sessionId: id,
+          repo,
+          sourcePath: dbPath,
+          alwaysMaterialize: true,
+        });
+      }
+    } finally {
+      db.close();
+    }
+  }
+  return out;
+}
+
+export function materializeOpenCodeRoute(
+  route: DiscoveredRoute,
+  allowedDbPaths: readonly string[] = opencodeDbPaths(),
+): DiscoveredSession | null {
+  const id = route.sessionId;
+  if (!id || !route.repo || !route.sourcePath) return null;
+  let sourcePath: string;
+  try {
+    sourcePath = realpathSync(route.sourcePath);
+  } catch {
+    return null;
+  }
+  if (!allowedDbPaths.includes(sourcePath)) return null;
+  const db = openRO(sourcePath);
+  if (!db) return null;
+  try {
+    let row: any;
+    try {
+      row = db.query("SELECT id, directory, title FROM session WHERE id = ?").get(id);
+    } catch {
+      return null;
+    }
+    if (!row || typeof row.directory !== "string") return null;
+    const routedRepo = canonicalWorktree(route.repo);
+    const currentRepo = canonicalWorktree(row.directory);
+    if (!routedRepo || !currentRepo || routedRepo !== currentRepo || !isEnrolledFresh(currentRepo)) return null;
+    const result = exportSession(db, sourcePath, id, currentRepo, row.title ?? null);
+    if (result.lines <= 1) return null;
+    return { path: result.path, sessionId: id, repo: currentRepo, lines: result.lines };
+  } finally {
+    db.close();
+  }
+}
+
 export const opencodeSource: TranscriptSource = {
   kind: "opencode",
 
@@ -830,69 +898,13 @@ export const opencodeSource: TranscriptSource = {
   // this split, a daemon sweep wrote a full plaintext transcript to disk for every session on
   // the machine — including projects the user had never enrolled — merely to discover them.
   discoverRoutes(): DiscoveredRoute[] {
-    const out: DiscoveredRoute[] = [];
-    for (const dbPath of opencodeDbPaths()) {
-      const db = openRO(dbPath);
-      if (!db) continue;
-      try {
-        let sessions: any[];
-        try {
-          sessions = db
-            .query("SELECT id, directory FROM session WHERE time_archived IS NULL ORDER BY time_updated DESC")
-            .all() as any[];
-        } catch {
-          continue; // schema drift
-        }
-        for (const s of sessions) {
-          const id = String(s.id ?? "");
-          if (!id) continue;
-          const repo = typeof s.directory === "string" ? s.directory : null;
-          out.push({
-            path: exportPath(exportKey(dbPath, id)),
-            sessionId: id,
-            repo,
-            sourcePath: dbPath,
-            alwaysMaterialize: true,
-          });
-        }
-      } finally {
-        db.close();
-      }
-    }
-    return out;
+    return discoverOpenCodeRoutes();
   },
 
   // Stage 2 — only for an ENROLLED repository: read the title, export the new message rows to
   // the append-only file, and report its size.
   materialize(route: DiscoveredRoute): DiscoveredSession | null {
-    const id = route.sessionId;
-    if (!id || !route.repo || !route.sourcePath) return null;
-    let sourcePath: string;
-    try {
-      sourcePath = realpathSync(route.sourcePath);
-    } catch {
-      return null;
-    }
-    if (!opencodeDbPaths().includes(sourcePath)) return null;
-    const db = openRO(sourcePath);
-    if (!db) return null;
-    try {
-      let row: any;
-      try {
-        row = db.query("SELECT id, directory, title FROM session WHERE id = ?").get(id);
-      } catch {
-        return null;
-      }
-      if (!row || typeof row.directory !== "string") return null;
-      const routedRepo = canonicalWorktree(route.repo);
-      const currentRepo = canonicalWorktree(row.directory);
-      if (!routedRepo || !currentRepo || routedRepo !== currentRepo || !isEnrolledFresh(currentRepo)) return null;
-      const result = exportSession(db, sourcePath, id, currentRepo, row.title ?? null);
-      if (result.lines <= 1) return null;
-      return { path: result.path, sessionId: id, repo: currentRepo, lines: result.lines };
-    } finally {
-      db.close();
-    }
+    return materializeOpenCodeRoute(route);
   },
 
   discover(): DiscoveredSession[] {

@@ -71,6 +71,7 @@ export const COMMANDS = [
 
   { name: "bench", group: "Evaluate changes", usage: "bench <workspace> [--tune-only|--sealed] [--transcript FILE] [--limit N] [--downstream-read]", summary: "Run the deterministic retrieval benchmark." },
   { name: "bench-scale", group: "Evaluate changes", usage: "bench-scale [--repeats N]", summary: "Run generated 10/100/1000-page correctness tiers." },
+  { name: "bench-capture", group: "Evaluate changes", usage: "bench-capture [--repeats N] [--sessions N,N,...]", summary: "Measure Claude/Codex/OpenCode discovery and revision-gate scale." },
   { name: "downstream-read", group: "Evaluate changes", usage: "downstream-read [workspace] [--transcript FILE] [--limit N]", summary: "Measure whether injected pointers were opened later." },
   { name: "compare-arm", group: "Evaluate changes", usage: "compare-arm <repo-template> --corpus DIR --label NAME [--keep] [--topic] [--write-model MODEL] [--verify-model MODEL]", summary: "Build and score one frozen-corpus comparison arm." },
   { name: "compare-verdict", group: "Evaluate changes", usage: "compare-verdict <current.json> <challenger.json>", summary: "Judge two compatible arm reports with regression gates." },

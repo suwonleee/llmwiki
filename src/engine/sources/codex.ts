@@ -272,6 +272,19 @@ function routeMeta(path: string): { cwd: string | null; session: string | null }
   return scanIdentity(path, CODEX_IDENTITY);
 }
 
+/** Plain-rollout discovery seam for deterministic tests/benchmarks. Compressed routes stay indexed. */
+export function discoverCodexFileRoutes(root: string = sessionsRoot()): DiscoveredRoute[] {
+  const files: string[] = [];
+  walkJsonl(root, files);
+  const out: DiscoveredRoute[] = [];
+  for (const path of files) {
+    if (path.endsWith(".zst")) continue;
+    const { cwd, session } = routeMeta(path);
+    out.push({ path, sessionId: session, repo: cwd });
+  }
+  return out;
+}
+
 function probeMeta(path: string): { cwd: string | null; session: string | null; lines: number } {
   let cwd: string | null = null;
   let session: string | null = null;
@@ -368,14 +381,7 @@ export const codexSource: TranscriptSource = {
   // queue keeps resolving its .zst sibling through the condense path, and an explicit `ingest`
   // remains an intentional full read.
   discoverRoutes(): DiscoveredRoute[] {
-    const files: string[] = [];
-    walkJsonl(sessionsRoot(), files);
-    const out: DiscoveredRoute[] = [];
-    for (const path of files) {
-      if (path.endsWith(".zst")) continue;
-      const { cwd, session } = routeMeta(path);
-      out.push({ path, sessionId: session, repo: cwd });
-    }
+    const out = discoverCodexFileRoutes();
     out.push(...indexedCompressedRoutes());
     return out;
   },

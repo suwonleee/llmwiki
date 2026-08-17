@@ -102,12 +102,22 @@ function walkJsonl(dir: string, out: string[]): void {
   }
 }
 
-function scanTranscripts(): string[] {
+/** Deterministic discovery seam for tests/benchmarks; production passes the owned profile roots. */
+export function scanTranscriptsIn(projectDirs: readonly string[]): string[] {
   const found: string[] = [];
-  for (const proj of claudeProjectDirs()) walkJsonl(proj, found);
+  for (const proj of projectDirs) walkJsonl(proj, found);
   // subagent transcripts are not standalone sessions → never condensed on their own.
   // Normalize separators so the match holds on Windows (backslash) paths too.
   return found.filter((p) => !p.replace(/\\/g, "/").includes("/subagents/"));
+}
+
+export function discoverClaudeRoutes(projectDirs: readonly string[] = claudeProjectDirs()): DiscoveredRoute[] {
+  const out: DiscoveredRoute[] = [];
+  for (const path of scanTranscriptsIn(projectDirs)) {
+    const { cwd, session } = routeMeta(path);
+    out.push({ path, sessionId: session, repo: cwd });
+  }
+  return out;
 }
 
 // ---- stage 1: routing metadata, under a hard budget -------------------------------------
@@ -358,12 +368,7 @@ export const claudeJsonlSource: TranscriptSource = {
   summaryFor,
 
   discoverRoutes(): DiscoveredRoute[] {
-    const out: DiscoveredRoute[] = [];
-    for (const path of scanTranscripts()) {
-      const { cwd, session } = routeMeta(path);
-      out.push({ path, sessionId: session, repo: cwd });
-    }
-    return out;
+    return discoverClaudeRoutes();
   },
 
   materialize(route: DiscoveredRoute): DiscoveredSession | null {

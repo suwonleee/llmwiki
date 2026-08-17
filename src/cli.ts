@@ -1123,6 +1123,20 @@ function cmdBenchScale(p: Parsed) {
   console.log(JSON.stringify(runScaleSuite(repeats), null, 2));
 }
 
+// Historical-session scale: deterministic counts, observational timing. `--sessions` accepts a
+// comma-separated subset so contributors can run a quick tier before the public 100/1k/10k pass.
+async function cmdBenchCapture(p: Parsed) {
+  const { CAPTURE_SCALE_TIERS, runCaptureScaleSuite } = await import("./engine/bench-capture.ts");
+  const repeats = Number(String(p.flags["--repeats"] ?? "3"));
+  if (!Number.isInteger(repeats) || repeats < 1) die("bench-capture --repeats must be a positive integer");
+  const raw = typeof p.flags["--sessions"] === "string" ? String(p.flags["--sessions"]) : "";
+  const tiers = raw ? raw.split(",").map((value) => Number(value.trim())) : [...CAPTURE_SCALE_TIERS];
+  if (!tiers.length || tiers.some((tier) => !Number.isInteger(tier) || tier < 1)) {
+    die("bench-capture --sessions must be a comma-separated list of positive integers");
+  }
+  console.log(JSON.stringify(runCaptureScaleSuite(repeats, tiers), null, 2));
+}
+
 // The follow-through half of the read loop, standalone. `bench` folds it in when a repo has a
 // golden set; most repos never will, and the question "does anyone open what we point at" is
 // worth asking without one. Reads captured transcripts only — no wiki writes, no session cost.
@@ -1489,6 +1503,7 @@ const HANDLERS: Record<CommandName, (p: Parsed) => void | Promise<void>> = {
   "wiki-doctor": MAINTENANCE_HANDLERS["wiki-doctor"],
   bench: cmdBench,
   "bench-scale": cmdBenchScale,
+  "bench-capture": cmdBenchCapture,
   "downstream-read": cmdDownstreamRead,
   "compare-arm": cmdCompareArm,
   "compare-verdict": cmdCompareVerdict,

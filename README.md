@@ -545,6 +545,10 @@ guide = "Quarterly goals; changes need human sign-off."
 - **`llmwiki bench-scale --repeats 2`** — deterministic generated-corpus scale report
     - runs the public 10/100/1000-page tiers and gates search/context correctness
     - timing and disk distributions are observational diagnostics, never release thresholds
+- **`llmwiki bench-capture --repeats 2 [--sessions 100,1000,10000]`** — deterministic historical-session scale report
+    - compares Claude, Codex, and OpenCode discovery, unchanged revision candidates, and bounded sample materialization
+    - includes the fixed Bun CLI startup and enrollment-probe cost paid by synchronous hook adapters
+    - structural counts are deterministic; timing and source-byte distributions remain observational
 
 The complete reproducible command set and the claims each result permits are maintained in
 [`reference/RELEASE_GATES.md`](reference/RELEASE_GATES.md).
