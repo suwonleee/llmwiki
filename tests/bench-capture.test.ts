@@ -11,30 +11,30 @@ describe("deterministic capture-scale benchmark", () => {
     expect(CAPTURE_SCALE_TIERS).toEqual([100, 1_000, 10_000]);
   });
 
-  test("reports exact structural counts without turning timings into gates", () => {
-    const suite = runCaptureScaleSuite(2, [10]);
+  test("gates every public tier and measures the real automatic-hook entrypoint", () => {
+    const suite = runCaptureScaleSuite(1);
 
-    expect(suite.schema_version).toBe(1);
+    expect(suite.schema_version).toBe(2);
     expect(suite.gating).toContain("structural counts are deterministic");
-    expect(suite.tiers).toHaveLength(1);
-    const tier = suite.tiers[0]!;
-    expect(tier.sessions).toBe(10);
-    for (const harness of ["claude", "codex", "opencode"] as const) {
-      const report = tier.harnesses[harness];
-      expect(report.discovered).toBe(10);
-      expect(report.initial_candidates).toBe(10);
-      expect(report.sample_materializations).toBe(CAPTURE_SAMPLE_MATERIALIZATIONS);
-      expect(report.successful_materializations).toBe(CAPTURE_SAMPLE_MATERIALIZATIONS);
-      expect(report.source_bytes).toBeGreaterThan(0);
-      for (const timing of Object.values(report.timings_ms)) {
-        expect(timing.samples).toHaveLength(2);
-        expect(timing.p95).toBeGreaterThanOrEqual(timing.median);
+    expect(suite.entrypoints).toEqual({ public_cli: "src/cli.ts", automatic_hook: "src/hook-cli.ts" });
+    expect(suite.tiers.map((tier) => tier.sessions)).toEqual([...CAPTURE_SCALE_TIERS]);
+    for (const tier of suite.tiers) {
+      for (const harness of ["claude", "codex", "opencode"] as const) {
+        const report = tier.harnesses[harness];
+        expect(report.discovered).toBe(tier.sessions);
+        expect(report.initial_candidates).toBe(tier.sessions);
+        expect(report.sample_materializations).toBe(CAPTURE_SAMPLE_MATERIALIZATIONS);
+        expect(report.successful_materializations).toBe(CAPTURE_SAMPLE_MATERIALIZATIONS);
+        expect(report.source_bytes).toBeGreaterThan(0);
+        expect(report.unchanged_candidates).toBe(0);
+        for (const timing of Object.values(report.timings_ms)) {
+          expect(timing.samples).toHaveLength(1);
+          expect(timing.p95).toBeGreaterThanOrEqual(timing.median);
+        }
       }
     }
-    expect(tier.harnesses.claude.unchanged_candidates).toBe(0);
-    expect(tier.harnesses.codex.unchanged_candidates).toBe(0);
-    expect(tier.harnesses.opencode.unchanged_candidates).toBe(0);
-    expect(suite.hook_cli_ms.module_startup.samples).toHaveLength(2);
-    expect(suite.hook_cli_ms.enrollment_probe.samples).toHaveLength(2);
-  }, 20_000);
+    expect(suite.public_cli_ms.version.samples).toHaveLength(1);
+    expect(suite.hook_cli_ms.empty_turn.samples).toHaveLength(1);
+    expect(suite.hook_cli_ms.enrollment_probe.samples).toHaveLength(1);
+  }, 60_000);
 });

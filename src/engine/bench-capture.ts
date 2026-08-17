@@ -60,11 +60,18 @@ export interface CaptureScaleReport {
 }
 
 export interface CaptureScaleSuiteReport {
-  readonly schema_version: 1;
+  readonly schema_version: 2;
   readonly repeats: number;
   readonly tiers: readonly CaptureScaleReport[];
+  readonly entrypoints: {
+    readonly public_cli: "src/cli.ts";
+    readonly automatic_hook: "src/hook-cli.ts";
+  };
+  readonly public_cli_ms: {
+    readonly version: SampleSummary;
+  };
   readonly hook_cli_ms: {
-    readonly module_startup: SampleSummary;
+    readonly empty_turn: SampleSummary;
     readonly enrollment_probe: SampleSummary;
   };
   readonly gating: "structural counts are deterministic; timing and byte distributions are observational";
@@ -222,17 +229,23 @@ function measureHarness(
   };
 }
 
-function measureCommand(args: readonly string[], repeats: number): SampleSummary {
+function measureCommand(
+  entrypoint: "cli.ts" | "hook-cli.ts",
+  args: readonly string[],
+  repeats: number,
+  input?: string,
+): SampleSummary {
   const samples: number[] = [];
   for (let repeat = 0; repeat < repeats; repeat += 1) {
     const result = elapsed(() =>
-      spawnSync(process.execPath, [join(CLONE_ROOT, "src", "cli.ts"), ...args], {
+      spawnSync(process.execPath, [join(CLONE_ROOT, "src", entrypoint), ...args], {
         cwd: CLONE_ROOT,
         encoding: "utf-8",
+        input,
       }),
     );
-    if (result.value.status !== 0 && args[0] === "--version") {
-      throw new Error(`hook CLI startup failed: ${result.value.stderr ?? ""}`);
+    if (result.value.status !== 0) {
+      throw new Error(`${entrypoint} ${args[0] ?? ""} failed: ${result.value.stderr ?? ""}`);
     }
     samples.push(result.ms);
   }
@@ -286,12 +299,16 @@ export function runCaptureScaleSuite(
     }
 
     return {
-      schema_version: 1,
+      schema_version: 2,
       repeats,
       tiers: reports,
+      entrypoints: { public_cli: "src/cli.ts", automatic_hook: "src/hook-cli.ts" },
+      public_cli_ms: {
+        version: measureCommand("cli.ts", ["--version"], repeats),
+      },
       hook_cli_ms: {
-        module_startup: measureCommand(["--version"], repeats),
-        enrollment_probe: measureCommand(["enabled", probeRepo], repeats),
+        empty_turn: measureCommand("hook-cli.ts", ["turn-context-hook", probeRepo], repeats, ""),
+        enrollment_probe: measureCommand("hook-cli.ts", ["enabled", probeRepo], repeats),
       },
       gating: "structural counts are deterministic; timing and byte distributions are observational",
     };

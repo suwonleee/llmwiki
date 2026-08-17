@@ -160,6 +160,15 @@ if [ "$UNINSTALL" -eq 1 ]; then
     exit 0
 fi
 
+# Git is the capture loop's one hard dependency. Resolve it with the same beyond-PATH search the
+# daemon and doctor use, and refuse before any harness or service mutation. Without this gate setup
+# can look healthy while every repository is later indistinguishable from "not a git worktree".
+GIT_BIN="$("$BUN" "$ROOT/src/engine/tool-locate.ts" --git 2>/dev/null || true)"
+if [ -z "$GIT_BIN" ]; then
+    echo "🔴 git was not found — install Git, then re-run setup. No llmwiki files were changed." >&2
+    exit 1
+fi
+
 USE_CODEX=0
 USE_CLAUDE=0
 USE_OPENCODE=0

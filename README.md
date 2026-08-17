@@ -547,7 +547,7 @@ guide = "Quarterly goals; changes need human sign-off."
     - timing and disk distributions are observational diagnostics, never release thresholds
 - **`llmwiki bench-capture --repeats 2 [--sessions 100,1000,10000]`** — deterministic historical-session scale report
     - compares Claude, Codex, and OpenCode discovery, unchanged revision candidates, and bounded sample materialization
-    - includes the fixed Bun CLI startup and enrollment-probe cost paid by synchronous hook adapters
+    - measures the actual lightweight automatic-hook entrypoint (empty turn + enrollment probe), with full public-CLI startup reported separately as a reference
     - structural counts are deterministic; timing and source-byte distributions remain observational
 
 The complete reproducible command set and the claims each result permits are maintained in

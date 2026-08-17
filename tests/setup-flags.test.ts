@@ -170,6 +170,35 @@ describe("setup command contract", () => {
     expect(existsSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"))).toBe(false);
   });
 
+  test("missing Git fails before any mutation", () => {
+    const bin = inertSupervisorBin(join(dir, "missing-git-bin"), {
+      bun:
+        "#!/bin/sh\n" +
+        "if [ \"${1:-}\" = --version ]; then printf '1.3.8\\n'; exit 0; fi\n" +
+        "if [ \"${1:-}\" = \"" + ROOT + "/src/engine/tool-locate.ts\" ] && [ \"${2:-}\" = --git ]; then exit 1; fi\n" +
+        "exit 99\n",
+      claude: "#!/bin/sh\nexit 0\n",
+    });
+
+    const result = Bun.spawnSync(["/bin/bash", join(ROOT, "setup.sh"), "--harness", "claude"], {
+      cwd: ROOT,
+      env: {
+        ...process.env,
+        HOME: home,
+        CLAUDE_CONFIG_DIR: join(dir, "claude"),
+        PATH: `${bin}:/usr/bin:/bin`,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(new TextDecoder().decode(result.stderr)).toContain("git was not found");
+    expect(existsSync(join(dir, "claude", "settings.json"))).toBe(false);
+    expect(existsSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"))).toBe(false);
+    expect(existsSync(join(home, ".config", "systemd", "user", "llmwiki-daemon.service"))).toBe(false);
+  });
+
   test("Codex setup fails before mutation when the Codex CLI is missing", () => {
     const bin = inertSupervisorBin(join(dir, "bun-only-bin"));
     symlinkSync(process.execPath, join(bin, "bun"));
