@@ -17,7 +17,7 @@ const VALUE_FLAGS = new Set<string>(VALUE_FLAG_NAMES);
 const BOOLEAN_FLAG_NAMES = [
   "--check", "--commit", "--confirm", "--downstream-read", "--ensure", "--errors-only",
   "--fix", "--force", "--forget", "--help", "--if-due", "--keep", "--list", "--notice",
-  "--sealed", "--skipped", "--topic", "--tune-only",
+  "--normalize", "--report", "--sealed", "--skipped", "--topic", "--tune-only",
 ] as const;
 
 const BOOLEAN_FLAGS = new Set<string>(BOOLEAN_FLAG_NAMES);

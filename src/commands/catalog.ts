@@ -29,7 +29,7 @@ export const COMMANDS = [
   { name: "conventions", group: "Project setup", usage: "conventions [workspace]", summary: "Render the effective authoring rules for an agent." },
   { name: "state-path", group: "Project setup", usage: "state-path <workspace> [subpath] [--ensure]", summary: "Print or create this worktree's engine-held state path." },
   { name: "migrate-state", group: "Project setup", usage: "migrate-state [--commit]", summary: "Plan or apply migration from the legacy state root." },
-  { name: "purge-state", group: "Project setup", usage: "purge-state [--confirm]", summary: "Describe or remove only llmwiki-owned machine state." },
+  { name: "purge-state", group: "Project setup", usage: "purge-state [--report|--confirm]", summary: "Describe or remove only llmwiki-owned machine state." },
 
   { name: "index", group: "Index and retrieve", usage: "index <workspace>", summary: "Incrementally index wiki pages and rebuild references." },
   { name: "reindex", group: "Index and retrieve", usage: "reindex <workspace>", summary: "Rebuild the project index from disk." },
@@ -62,7 +62,7 @@ export const COMMANDS = [
   { name: "distill-verify", group: "Maintain the wiki", usage: "distill-verify <old-snapshot.md> <new-page.md>", summary: "Check citation and conflict-callout preservation." },
   { name: "topics", group: "Maintain the wiki", usage: "topics [workspace]", summary: "Render the deterministic topic relationship view." },
   { name: "gaps", group: "Maintain the wiki", usage: "gaps <workspace> [--date YYYY-MM-DD] [--check]", summary: "Refresh or check the self-closing gap queue." },
-  { name: "overview", group: "Maintain the wiki", usage: "overview <workspace> [--check]", summary: "Normalize the bounded overview entry point." },
+  { name: "overview", group: "Maintain the wiki", usage: "overview <workspace> [--normalize|--check]", summary: "Normalize the bounded overview entry point." },
   { name: "migrate", group: "Maintain the wiki", usage: "migrate <workspace> [--commit] [--map old=new,...]", summary: "Plan or apply configured wiki-structure migration." },
   { name: "db-health", group: "Maintain the wiki", usage: "db-health <workspace> [--notice]", summary: "Inspect derived database integrity and storage." },
   { name: "compact", group: "Maintain the wiki", usage: "compact <workspace> [--commit]", summary: "Plan or apply eligible derived-database compaction." },
@@ -90,8 +90,7 @@ export function renderRootHelp(version: string): string {
   const lines = [
     `llmwiki ${version} — local-first project wiki`,
     "",
-    "Usage:",
-    "  llmwiki <command> [options]",
+    "usage: llmwiki <command> [options]",
     "  llmwiki <command> --help",
     "",
     "Get started:",
@@ -109,7 +108,16 @@ export function renderRootHelp(version: string): string {
       lines.push(`    ${command.name.padEnd(20)} ${command.summary}`);
     }
   }
-  lines.push("", "Global options:", "  --help       Show this help.", "  --version    Show the installed engine version.", "");
+  // Keep the compact command line for existing doctor checks and lightweight shell consumers.
+  lines.push(
+    "",
+    `commands: ${COMMANDS.map((command) => command.name).join(", ")}`,
+    "",
+    "Global options:",
+    "  --help       Show this help.",
+    "  --version    Show the installed engine version.",
+    "",
+  );
   return lines.join("\n");
 }
 

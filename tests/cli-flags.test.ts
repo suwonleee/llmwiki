@@ -74,6 +74,8 @@ describe("cli flag allowlist", () => {
     expect(result.exitCode).toBe(0);
     const output = new TextDecoder().decode(result.stdout);
     expect(output).toContain("Get started:");
+    expect(output).toContain("usage: llmwiki <command> [options]");
+    expect(output).toContain("\ncommands: init, disable, status,");
     expect(output).toContain("llmwiki init <workspace>");
     expect(output).toContain("llmwiki <command> --help");
     expect(output).toContain("excerpt");
@@ -124,6 +126,11 @@ describe("cli flag allowlist", () => {
 
   test("rejects an unknown flag before a command can run", () => {
     expect(() => parseCliArgs(["status", "--definitely-not-a-flag"])).toThrow(UnknownCliFlagError);
+  });
+
+  test("keeps established no-op compatibility aliases while rejecting unknown flags", () => {
+    expect(parseCliArgs(["purge-state", "--report"]).flags["--report"]).toBe(true);
+    expect(parseCliArgs(["overview", "--normalize"]).flags["--normalize"]).toBe(true);
   });
 
   test("every flag read as a value is declared as a value flag", () => {
