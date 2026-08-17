@@ -147,7 +147,16 @@ export function classify(root: string, files: readonly string[], localOnly: stri
   // (above) instead of masking a real version drift in the others.
   const atHead = (rel: string): any | null => {
     try {
-      return JSON.parse(execFileSync("git", ["-C", root, "show", `HEAD:${rel}`], { encoding: "utf-8" }));
+      // A manifest absent at HEAD is an expected outcome (reported as "missing" above), but git
+      // still prints `fatal: path … does not exist` — and execFileSync passes stderr through, so
+      // every suite run showed two fatal lines that read like a real failure. The catch is the
+      // handler; the noise was the defect.
+      return JSON.parse(
+        execFileSync("git", ["-C", root, "show", `HEAD:${rel}`], {
+          encoding: "utf-8",
+          stdio: ["ignore", "pipe", "ignore"],
+        }),
+      );
     } catch {
       return null;
     }
