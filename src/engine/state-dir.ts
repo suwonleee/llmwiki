@@ -151,10 +151,15 @@ export function effectiveStateRoot(): string {
 export function setEffectiveStateRoot(dir: string | null): void {
   stateRootOverride = dir;
   if (dir === null) {
-    // "" is the sentinel for "there was no variable before the override" — restoring it as an
-    // empty string would leave a variable that resolves to nothing, which is not the same thing.
-    if (savedStateDirEnv === undefined || savedStateDirEnv === "") delete process.env.LLMWIKI_STATE_DIR;
-    else process.env.LLMWIKI_STATE_DIR = savedStateDirEnv;
+    // `undefined` means no override was ever installed, so there is nothing of ours to undo and
+    // the environment is somebody else's to keep. Deleting it here was a measured leak: several
+    // suites clear the override in an afterAll, and doing so removed the variable the test
+    // preload had pinned — after which every later file, and every subprocess they spawned,
+    // resolved the machine default and wrote project state into the developer's real store.
+    // "" is a different case: it is the sentinel for "the override replaced no variable at all",
+    // and restoring that as an empty string would leave a variable resolving to nothing.
+    if (savedStateDirEnv === "") delete process.env.LLMWIKI_STATE_DIR;
+    else if (savedStateDirEnv !== undefined) process.env.LLMWIKI_STATE_DIR = savedStateDirEnv;
     savedStateDirEnv = undefined;
     return;
   }

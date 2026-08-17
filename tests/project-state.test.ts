@@ -217,4 +217,26 @@ describe("state root override", () => {
     expect(process.env.LLMWIKI_STATE_DIR).toBe(before); // restored, not clobbered
     setEffectiveStateRoot(stateRoot); // put the suite's own override back for afterEach
   });
+
+  test("clearing an override that was never installed leaves the environment alone", () => {
+    // Regression, measured: a full `bun test` run wrote 10 project directories into the
+    // developer's real ~/.local/share/llmwiki. Several suites clear the override in an
+    // afterAll without having set one in that flow; clearing used to DELETE the variable,
+    // which removed the temp root tests/support/preload.ts pins. Every later test file — and
+    // every subprocess inheriting the env — then resolved the machine default and wrote there.
+    // Nothing was saved, so there is nothing to undo: the variable must survive untouched.
+    setEffectiveStateRoot(null); // drain the single save slot so nothing of ours is pending
+    const pinned = mkdtempSync(join(tmpdir(), "llmwiki-ps-pinned-"));
+    made.push(pinned);
+    const before = process.env.LLMWIKI_STATE_DIR;
+    process.env.LLMWIKI_STATE_DIR = pinned;
+    try {
+      setEffectiveStateRoot(null);
+      expect(process.env.LLMWIKI_STATE_DIR).toBe(pinned);
+    } finally {
+      if (before === undefined) delete process.env.LLMWIKI_STATE_DIR;
+      else process.env.LLMWIKI_STATE_DIR = before;
+    }
+    setEffectiveStateRoot(stateRoot); // put the suite's own override back for afterEach
+  });
 });
