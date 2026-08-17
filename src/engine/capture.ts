@@ -637,13 +637,52 @@ function hasUnreadTail(row: { transcript_path: string; byte_offset: number }): b
   return !row.transcript_path.endsWith(".zst") && existsSync(`${row.transcript_path}.zst`);
 }
 
+/**
+ * What a call actually recorded. `enqueue` is idempotent by design — the daemon re-offers every
+ * discovered session on every sweep, and a session that has not grown since the last one writes
+ * nothing. Reporting that lets the caller log the sweeps that changed something instead of all of
+ * them: measured on this machine, seven idle OpenCode sessions were re-announced every minute with
+ * an unchanged line count, which is ~10k log lines a day describing no work.
+ */
+export type EnqueueOutcome = "new" | "grew" | "regenerated" | "identity" | "unchanged";
+
+/**
+ * Is this row already exactly what the offer would write?
+ *
+ * A pending row keeps `byte_offset` at 0 until something distils it, so `size > byte_offset` is
+ * true on every later sweep and the UPDATE re-ran forever — same status, same lines, same repo.
+ * The watermark is the wrong thing to compare a re-offer against; the recorded row is the right
+ * one. Only the fields the UPDATE would actually change are checked, and a COALESCE column counts
+ * as settled solely when it is already non-null, so a row still missing its repo, session id or
+ * file identity is never mistaken for a complete one.
+ */
+function alreadyRecorded(
+  row: {
+    status: string | null;
+    lines: number | null;
+    repo: string | null;
+    session_id: string | null;
+    file_id: string | null;
+  },
+  lines: number,
+  repo: string | null,
+  sessionId: string | null,
+  currentFileId: string | null,
+): boolean {
+  if (row.status !== "pending" || row.lines !== lines) return false;
+  if (repo !== null && row.repo === null) return false;
+  if (sessionId !== null && row.session_id === null) return false;
+  if (currentFileId !== null && row.file_id === null) return false;
+  return true;
+}
+
 export function enqueue(
   transcriptPath: string,
   sessionId: string | null,
   repo: string | null,
   lines = 0,
   sourceKind = "claude-jsonl",
-): void {
+): EnqueueOutcome {
   // File the row under the wiki root the session's READS bind to — one answer for both halves
   // (the hook-binding rule, applied to the write side it was missing from). A raw cwd keys the
   // row under a bare subdirectory that no update-status or cold-start backlog ever queries:
@@ -652,9 +691,21 @@ export function enqueue(
   const db = connect();
   const size = sizeOf(transcriptPath);
   const currentFileId = fileIdentity(transcriptPath);
+  let recorded: EnqueueOutcome = "unchanged";
   const row = db
-    .query("SELECT byte_offset, source_kind, file_id FROM capture_queue WHERE transcript_path = ?")
-    .get(transcriptPath) as { byte_offset: number; source_kind: string | null; file_id: string | null } | null;
+    .query(
+      "SELECT byte_offset, source_kind, file_id, status, lines, repo, session_id " +
+        "FROM capture_queue WHERE transcript_path = ?",
+    )
+    .get(transcriptPath) as {
+    byte_offset: number;
+    source_kind: string | null;
+    file_id: string | null;
+    status: string | null;
+    lines: number | null;
+    repo: string | null;
+    session_id: string | null;
+  } | null;
   if (row === null) {
     db.run(
       "INSERT INTO capture_queue " +
@@ -662,6 +713,7 @@ export function enqueue(
         "VALUES (?, ?, ?, ?, 'pending', ?, ?)",
       [transcriptPath, sessionId, repo, lines, sourceKind, currentFileId],
     );
+    recorded = "new";
   } else if (
     sourceKind === "opencode" &&
     row.source_kind === "opencode" &&
@@ -681,18 +733,22 @@ export function enqueue(
         "WHERE transcript_path=?",
       [repo, sessionId, lines, currentFileId, transcriptPath],
     );
-  } else if (size > row.byte_offset) {
+    recorded = "regenerated";
+  } else if (size > row.byte_offset && !alreadyRecorded(row, lines, repo, sessionId, currentFileId)) {
     db.run(
       "UPDATE capture_queue SET status='pending', repo=COALESCE(repo, ?), " +
         "session_id=COALESCE(session_id, ?), lines=?, file_id=COALESCE(file_id, ?) WHERE transcript_path=?",
       [repo, sessionId, lines, currentFileId, transcriptPath],
     );
+    recorded = "grew";
   } else if (row.file_id === null && currentFileId !== null) {
     // Additive migration for a live row created before file identity was recorded. Do not reset
     // its watermark: there is no earlier identity to compare against.
     db.run("UPDATE capture_queue SET file_id=? WHERE transcript_path=?", [currentFileId, transcriptPath]);
+    recorded = "identity";
   }
   db.close();
+  return recorded;
 }
 
 export function pending(repo: string | null = null): CaptureRow[] {

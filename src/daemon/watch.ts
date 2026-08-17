@@ -146,8 +146,14 @@ function process_(d: DiscoveredSession, kind: string): "enqueued" | "skipped_sho
   // Re-check immediately before the write. Materialization can take a while on a large session,
   // and `llmwiki disable` during that window must not still land a row.
   if (!isEnrolledFresh(d.repo)) return "skipped_unenrolled";
-  capture.enqueue(d.path, d.sessionId, d.repo, d.lines, kind);
-  log(`captured sess=${(d.sessionId || "?").slice(0, 8)} repo=${d.repo} lines=${d.lines} [${kind}]`);
+  const outcome = capture.enqueue(d.path, d.sessionId, d.repo, d.lines, kind);
+  // Every sweep re-offers every discovered session, so most calls record nothing. Announcing
+  // those too buried the real events: idle sessions were re-logged every minute, and daemon.log
+  // reached 11 MB of lines that described no change. The row is still offered exactly as before —
+  // only the narration is now conditional, so "captured" in the log means something happened.
+  if (outcome !== "unchanged") {
+    log(`captured sess=${(d.sessionId || "?").slice(0, 8)} repo=${d.repo} lines=${d.lines} [${kind}] ${outcome}`);
+  }
   return "enqueued";
 }
 

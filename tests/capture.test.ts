@@ -41,6 +41,21 @@ describe("capture queue", () => {
     expect(capture.stats().distilled).toBe(1);
   });
 
+  test("re-offering an unchanged session records nothing, and says so", () => {
+    // The daemon re-offers every discovered session on every sweep. Enqueue was already
+    // idempotent, but it reported nothing back, so the caller announced "captured" each time:
+    // measured, seven idle OpenCode sessions produced ~10k log lines a day and an 11 MB
+    // daemon.log describing no work. The outcome is what lets the caller stay quiet.
+    expect(capture.enqueue(transcript, "sess1", "/repo/x", 2)).toBe("new");
+    expect(capture.enqueue(transcript, "sess1", "/repo/x", 2)).toBe("unchanged");
+    expect(capture.enqueue(transcript, "sess1", "/repo/x", 2)).toBe("unchanged");
+    expect(capture.pending().length).toBe(1); // still exactly one row — idempotence intact
+
+    // A session that actually grows must still be picked up and reported.
+    writeFileSync(transcript, "line one\nline two\nline three\n");
+    expect(capture.enqueue(transcript, "sess1", "/repo/x", 3)).toBe("grew");
+  });
+
   test("pending filtered by repo", () => {
     capture.enqueue(transcript, "sess1", "/repo/x", 2);
     expect(capture.pending("/repo/x").length).toBe(1);
