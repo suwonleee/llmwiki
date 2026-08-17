@@ -109,8 +109,9 @@ Run /wiki-doctor for this project. Repair safe generated state and evidence-grou
 
 ### What the public clone is verified to do
 
-Every release candidate is checked from a fresh, pinned clone through setup, project enrollment,
-session capture, deterministic close-out mechanics, restart, and next-session retrieval. The public
+Every release candidate is checked from fresh, pinned clones through the installed Claude hooks,
+Codex hooks, and OpenCode plugin callbacks, project enrollment, session capture, exact-session
+close-out mechanics, restart, and next-session retrieval. The public
 retrieval fixtures also gate correctness at 10, 100, and 1,000 generated wiki pages. Release checks
 cover the documented macOS/Linux/native-Windows/WSL2 harness branches, local-only data boundaries,
 and the exact files allowed into the public package.

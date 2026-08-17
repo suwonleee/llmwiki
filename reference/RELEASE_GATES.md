@@ -7,7 +7,7 @@ row; it does not substitute for observed-user evidence.
 | gate ID | disposition | claim permitted by fresh evidence |
 |---|---|---|
 | `support-contract` | `automated-pass-required` | The documented OS × harness install, verify, init, surfaces, and manual actions match the public contract and setup wiring. |
-| `full-loop-oracle` | `automated-pass-required` | A pinned local release can install, enroll, capture, close from a seeded artifact boundary, restart, and retrieve without host-private leakage. The generative middle is not claimed by this oracle. |
+| `full-loop-oracle` | `automated-pass-required` | A pinned local release exercises installed Claude hooks, Codex hooks, and OpenCode plugin callbacks through enrollment, capture, and exact-session close-out selection; the seeded deterministic tail proves restart retrieval without host-private leakage. The generative middle is not claimed by this oracle. |
 | `retrieval-baseline` | `automated-pass-required` | The tracked correctness-only retrieval fixture matches its frozen expected result. |
 | `retrieval-scale` | `automated-pass-required` | Generated 10/100/1000-page fixtures retain complete search/context correctness. Timing/resource distributions are observational, not release thresholds. |
 | `privacy-boundary` | `automated-pass-required` | Static write boundaries, provider opt-in, public-artifact poison scans, and usability-event privacy validation pass. |
@@ -26,7 +26,7 @@ to make an unexplained regression green.
 
 2. Privacy-safe pinned full-loop oracle
 
-   `bun test tests/fresh-public-loop.test.ts`
+   `bun test tests/fresh-public-loop.test.ts tests/fresh-public-harness-loop.test.ts`
 
    This is a deterministic automation oracle. It deliberately seeds the close-out artifact and is
    not evidence that an LLM authored a good page or that a person understood the workflow.
