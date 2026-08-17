@@ -2,7 +2,7 @@
 # llmwiki SessionStart read-injection (the "read" loop of the compounding cycle).
 #
 # Thin Claude-Code adapter: the cold-start logic now lives in the engine
-# (src/engine/context.ts → `llmwiki context <repo>`) so it is HARNESS-NEUTRAL — any
+# (src/engine/context.ts → the lightweight `context-hook` entrypoint) so it is HARNESS-NEUTRAL — any
 # harness can inject the same blob (Codex via AGENTS.md, manual paste, etc.). This file
 # is only the Claude Code SessionStart wiring.
 #
@@ -48,5 +48,5 @@ if [ -n "$CLAUDE_PLUGIN_ROOT" ]; then
   fi
 fi
 
-[ -n "$BUN" ] && "$BUN" "$ROOT/src/cli.ts" context "$PROJ" --hook-event SessionStart 2>/dev/null
+[ -n "$BUN" ] && "$BUN" "$ROOT/src/hook-cli.ts" context-hook "$PROJ" 2>/dev/null
 exit 0

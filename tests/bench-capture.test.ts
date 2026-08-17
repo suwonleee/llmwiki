@@ -34,6 +34,7 @@ describe("deterministic capture-scale benchmark", () => {
       }
     }
     expect(suite.public_cli_ms.version.samples).toHaveLength(1);
+    expect(suite.hook_cli_ms.cold_start.samples).toHaveLength(1);
     expect(suite.hook_cli_ms.empty_turn.samples).toHaveLength(1);
     expect(suite.hook_cli_ms.enrollment_probe.samples).toHaveLength(1);
   }, 60_000);

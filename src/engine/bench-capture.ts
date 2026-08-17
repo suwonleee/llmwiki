@@ -71,6 +71,7 @@ export interface CaptureScaleSuiteReport {
     readonly version: SampleSummary;
   };
   readonly hook_cli_ms: {
+    readonly cold_start: SampleSummary;
     readonly empty_turn: SampleSummary;
     readonly enrollment_probe: SampleSummary;
   };
@@ -307,6 +308,12 @@ export function runCaptureScaleSuite(
         version: measureCommand("cli.ts", ["--version"], repeats),
       },
       hook_cli_ms: {
+        cold_start: measureCommand(
+          "hook-cli.ts",
+          ["context-hook", probeRepo],
+          repeats,
+          JSON.stringify({ cwd: probeRepo, session_id: "capture-benchmark" }),
+        ),
         empty_turn: measureCommand("hook-cli.ts", ["turn-context-hook", probeRepo], repeats, ""),
         enrollment_probe: measureCommand("hook-cli.ts", ["enabled", probeRepo], repeats),
       },

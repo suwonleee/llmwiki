@@ -17,11 +17,11 @@ function hasFlag(name: string): boolean {
   return Bun.argv.includes(name);
 }
 
-function writeTurnEnvelope(text: string): void {
+function writeEnvelope(event: "SessionStart" | "UserPromptSubmit", text: string): void {
   if (!text) return;
   process.stdout.write(
     JSON.stringify({
-      hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: text },
+      hookSpecificOutput: { hookEventName: event, additionalContext: text },
     }) + "\n",
   );
 }
@@ -29,6 +29,37 @@ function writeTurnEnvelope(text: string): void {
 async function enabled(repo: string): Promise<void> {
   const { isEnrolled } = await import("./engine/enrollment.ts");
   if (!isEnrolled(repo || process.cwd())) process.exitCode = 1;
+}
+
+async function contextHook(repo: string): Promise<void> {
+  if ((process.env.LLMWIKI_ENGINE_SUBPROCESS ?? "") !== "") return;
+  let payload: Payload;
+  try {
+    payload = JSON.parse(await Bun.stdin.text()) as Payload;
+  } catch {
+    return;
+  }
+  const target = String(payload.cwd ?? "").trim() || repo || process.cwd();
+  const sessionId = String(payload.session_id ?? "").trim();
+  const transcript = String(payload.transcript_path ?? "").trim();
+  const { inspectEnrollment, isEnrolled } = await import("./engine/enrollment.ts");
+  if (!isEnrolled(target)) return;
+  const status = inspectEnrollment(target);
+  if (transcript && status.worktree) {
+    const [{ resolve }, capture] = await Promise.all([import("node:path"), import("./engine/capture.ts")]);
+    const normalized = transcript.replaceAll("\\", "/");
+    const kind = normalized.includes("/.codex/") ? "codex" : normalized.endsWith(".jsonl") ? "claude-jsonl" : null;
+    capture.recordRouteHint(resolve(transcript), target, sessionId || null, kind);
+  }
+  const [{ wikiRootFor }, { buildContext }, { recordEmission }] = await Promise.all([
+    import("./engine/wiki-root.ts"),
+    import("./engine/context.ts"),
+    import("./engine/observe.ts"),
+  ]);
+  const root = wikiRootFor(target, status.worktree);
+  const out = buildContext(root);
+  if (out && sessionId) recordEmission(root, sessionId, "cold_start", out);
+  writeEnvelope("SessionStart", out);
 }
 
 async function turnContextHook(repo: string): Promise<void> {
@@ -55,7 +86,7 @@ async function turnContextHook(repo: string): Promise<void> {
   const root = wikiRootFor(target, inspectEnrollment(target).worktree);
   const out = buildTurnContext(root, prompt, sessionId);
   if (out) recordEmission(root, sessionId, "turn_context", out);
-  writeTurnEnvelope(out);
+  writeEnvelope("UserPromptSubmit", out);
 }
 
 async function openCodeContext(repo: string): Promise<void> {
@@ -84,6 +115,7 @@ const command = Bun.argv[2] ?? "";
 const repo = Bun.argv[3] ?? "";
 try {
   if (command === "enabled") await enabled(repo);
+  else if (command === "context-hook") await contextHook(repo);
   else if (command === "turn-context-hook") await turnContextHook(repo);
   else if (command === "opencode-context") await openCodeContext(repo);
   else process.exitCode = 2;
