@@ -59,6 +59,8 @@ const ALLOWED_MUTATORS: Record<string, string> = {
   "engine/bench-capture.ts":
     "engine-development capture-scale harness creating/removing disposable transcript stores and a Git fixture in the OS temp directory; never repository content",
   "daemon/wire.ts": "installs/removes Claude Code hooks and commands in the user's harness config",
+  "daemon/wire-launcher.ts":
+    "installs/removes the shared llmwiki launcher in the user's machine-local bin directory",
   "daemon/wire-codex.ts": "installs/removes Codex hooks, skills and launcher in the harness config",
   "daemon/wire-opencode.ts": "installs/removes the OpenCode plugin, commands and launcher",
 };
