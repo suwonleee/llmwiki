@@ -68,6 +68,9 @@ llmwiki init /absolute/path/to/my-project
 - 自動連携はGit専用・ワークツリー単位。リポジトリを移動した場合は `init` を再実行
 - すべてのハーネス構成が同じユーザー用 `llmwiki` ランチャーを導入します。必要な場合は
   setupが表示する `PATH` コマンドを一度適用します
+- **OpenCodeのみ — セットアップ後に一度再起動**（クローンの再指定後も同様）: OpenCodeは
+  プロセス起動時に読み取り注入プラグインを読み込むため、インストール時点で開いていたセッションは
+  プラグインなしのまま動き続けます。Claude CodeとCodexは次のセッションで反映されます。
 - **エージェントは作業するプロジェクトのディレクトリから起動**: セッションは自分のcwdのwikiを読み、
   そこにキャプチャされ、そこに記録されます。編集が実際には別の登録済みリポジトリに向かったセッションは、
   クローズアウト時に抽出ヘッダーの `# ⚠ route:` 行で示され、正しいwikiに記録されるよう誘導されます
@@ -262,6 +265,25 @@ package.json·tsconfig.json   Bunメタデータ（typecheck用; ランタイム
 - キャプチャキュー — 中央: `<clone>/.state/capture.db`
 - コンテンツ — 各リポジトリの `docs/wiki/`（コロケーション; markdown = 真実源）
 - インデックス — `<repo>/.llmwiki/index.db`（いつでも再生成可能）
+
+## エンジンの更新
+
+```bash
+cd ~/llmwiki
+git pull && ./setup.sh          # pullだけでは不十分です — 下記参照
+```
+
+`git pull` はクローン内のファイルだけを変更します。ハーネスが実際に実行する面はインストール時に
+書かれたもので、渡された対象を指し続けます — キャプチャデーモンは起動時にコードを固定し、
+OpenCodeプラグインは設定ディレクトリ内のコピーです。それらを指し直すのが `setup.sh` の再実行で、
+冪等であり、デーモンの再起動も代行します。
+
+忘れた場合は `llmwiki doctor` がドリフトを報告します。
+
+- `[update] ⚠️ v… → v… available` — クローン自体が `origin` より古い
+- `[daemon] ⚠️ running code older than this clone` — 動作中のループがpull以前のコード
+  （`llmwiki doctor --fix` で再起動）
+- `[opencode] ⚠️ plugin stale` — インストール済みプラグインのコピーがクローンのアダプタより古い
 
 ## アンインストール
 

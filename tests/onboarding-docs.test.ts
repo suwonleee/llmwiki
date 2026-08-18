@@ -87,6 +87,32 @@ describe("public onboarding documentation", () => {
     }
   });
 
+  test("every README tells an updater that a pull alone leaves the installed surfaces behind", () => {
+    // The three drift modes this documents were all hit on the author's own machine in one day:
+    // the daemon kept sweeping pre-pull code, the OpenCode plugin copy stayed old, and doctor said
+    // so while the README had no update procedure at all to send anyone to.
+    for (const path of ["README.md", "readmes/README.ko.md", "readmes/README.ja.md", "readmes/README.zh.md"]) {
+      const content = read(path);
+      expect(content, path).toContain("git pull && ./setup.sh");
+      // The reason, not just the command — a bare command is the thing people skip.
+      expect(content, path).toContain("[daemon] ⚠️ running code older than this clone");
+      expect(content, path).toContain("[opencode] ⚠️ plugin stale");
+    }
+  });
+
+  test("every README names the one activation step only OpenCode needs", () => {
+    // OpenCode loads the plugin at process start, so a session open during setup runs without it.
+    // setup.sh's closing notes and the support contract both say so; the READMEs did not.
+    for (const [path, phrase] of [
+      ["README.md", "restart it once after setup"],
+      ["readmes/README.ko.md", "설치 후 한 번 재시작"],
+      ["readmes/README.ja.md", "セットアップ後に一度再起動"],
+      ["readmes/README.zh.md", "安装后重启一次"],
+    ] as const) {
+      expect(read(path), path).toContain(phrase);
+    }
+  });
+
   test("keeps retired command names out of current user-facing surfaces", () => {
     const surfaces = [
       "README.md",

@@ -66,6 +66,8 @@ llmwiki init /absolute/path/to/my-project
 - 自动集成仅用于Git，且按worktree隔离；移动仓库后需重新运行 `init`
 - 所有harness安装都会提供同一个用户级 `llmwiki` 启动器；如有需要，只需执行一次setup输出的
   `PATH` 命令
+- **仅OpenCode — 安装后重启一次**（重新指向克隆后同样如此）：OpenCode在进程启动时加载读取注入
+  插件，因此安装时已打开的会话会在没有插件的情况下继续运行。Claude Code和Codex会在下一个会话中生效。
 - **从要工作的项目目录启动智能体**：会话读取、捕获并记录其cwd处的wiki。若某个会话的编辑实际落在
   另一个已登记的仓库，收尾时抽取头部会以一行 `# ⚠ route:` 标出，引导记录进正确的wiki
 
@@ -259,6 +261,24 @@ package.json·tsconfig.json   Bun 元数据（供 typecheck; 运行时直接执�
 - 捕获队列 — 中央: `<clone>/.state/capture.db`
 - 内容 — 各仓库自己的 `docs/wiki/`（同址存放; markdown = 事实源）
 - 索引 — `<repo>/.llmwiki/index.db`（随时可再生）
+
+## 更新引擎
+
+```bash
+cd ~/llmwiki
+git pull && ./setup.sh          # 仅执行pull是不够的 — 见下文
+```
+
+`git pull` 只改变克隆中的文件。harness实际运行的表面是在安装时写入的，会继续指向当时给定的目标 ——
+捕获守护进程在启动时冻结了自己的代码，而OpenCode插件是配置目录中的一份副本。重新运行 `setup.sh`
+才会让它们重新指向新代码；该命令是幂等的，并会替你重启守护进程。
+
+如果忘记了，`llmwiki doctor` 会报告这种漂移：
+
+- `[update] ⚠️ v… → v… available` — 克隆本身落后于 `origin`
+- `[daemon] ⚠️ running code older than this clone` — 正在扫描的循环早于你的pull
+  （`llmwiki doctor --fix` 可重启）
+- `[opencode] ⚠️ plugin stale` — 已安装的插件副本比克隆中的适配器旧
 
 ## 卸载
 

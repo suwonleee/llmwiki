@@ -70,6 +70,9 @@ clone 한 것은 거기서 llmwiki를 돌리겠다는 결정이 아니기 때문
   `init` 재실행 필요(표식이 정규 경로를 기록함)
 - 모든 하네스 설치가 같은 사용자 `llmwiki` 런처를 설치함 — 필요한 경우 setup이 출력한
   `PATH` 명령을 한 번 적용
+- **OpenCode만 — 설치 후 한 번 재시작**(클론 재지정 후에도): OpenCode는 프로세스 시작 시
+  읽기-주입 플러그인을 로드하므로, 설치 시점에 이미 열려 있던 세션은 플러그인 없이 계속 돕니다.
+  Claude Code와 Codex는 다음 세션에서 자동으로 반영됩니다.
 - **에이전트는 작업할 프로젝트 디렉터리에서 시작**: 세션은 자기 cwd의 위키를 읽고, 거기로 캡처되고,
   거기에 기록됩니다. 편집이 실제로는 다른 등록 레포로 간 세션은 마감 시 추출 헤더의 `# ⚠ route:`
   한 줄로 표시되어 올바른 위키에 기록되도록 안내됩니다
@@ -264,6 +267,25 @@ package.json·tsconfig.json   Bun 메타(typecheck용; 런타임은 .ts 직접 �
 - 캡처 큐 — 중앙: `<clone>/.state/capture.db`
 - 콘텐츠 — 각 레포의 `docs/wiki/` (co-location; markdown = 진실원)
 - 인덱스 — `<repo>/.llmwiki/index.db` (언제든 재생성 가능)
+
+## 엔진 업데이트
+
+```bash
+cd ~/llmwiki
+git pull && ./setup.sh          # pull 만으로는 부족합니다 — 아래 참고
+```
+
+`git pull` 은 클론의 파일만 바꿉니다. 하네스가 실제로 실행하는 표면은 설치 시점에 쓰인 것이라
+받은 대상을 계속 가리킵니다 — 캡처 데몬은 시작할 때 코드를 얼렸고, OpenCode 플러그인은 설정
+디렉터리에 있는 사본입니다. 그것들을 다시 가리키게 하는 것이 `setup.sh` 재실행이며, 멱등하고
+데몬 재시작까지 대신해 줍니다.
+
+잊었다면 `llmwiki doctor` 가 드리프트를 알려줍니다.
+
+- `[update] ⚠️ v… → v… available` — 클론 자체가 `origin` 보다 뒤처짐
+- `[daemon] ⚠️ running code older than this clone` — 돌고 있는 루프가 pull 이전 코드
+  (`llmwiki doctor --fix` 로 재시작)
+- `[opencode] ⚠️ plugin stale` — 설치된 플러그인 사본이 클론의 어댑터보다 오래됨
 
 ## 제거
 

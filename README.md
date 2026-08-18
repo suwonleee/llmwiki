@@ -86,6 +86,9 @@ there are no further prompts or confirmations, ever.
   and moving a repository requires re-running `init` (the marker records its canonical path)
 - every harness install gets the same user-level `llmwiki` launcher; setup prints a one-time `PATH`
   line when the shell does not already include it
+- **OpenCode only — restart it once after setup** (and after re-pointing the clone): OpenCode loads
+  the read-injection plugin at process start, so a session already open when you installed keeps
+  running without it. Claude Code and Codex pick the hooks up on their next session.
 - **start your agent from the project directory**: a session reads, captures into, and files the
   wiki at its cwd. A session whose edits actually went to a different enrolled repo is flagged at
   close-out (`# ⚠ route:` on the extract header) so its record lands in the right wiki
@@ -323,6 +326,25 @@ Storage principle — three homes, one owner each:
 - capture queue — central: `<state>/capture.db`, where `<state>` defaults to `$XDG_DATA_HOME/llmwiki` (an existing `<clone>/.state` from an older install keeps being used; `llmwiki migrate-state` moves it)
 - content — each repo's own `docs/wiki/` (co-located; markdown = source of truth)
 - index — engine-held, one directory per project under the state root (`llmwiki state-path <repo>`); regenerable at any time, so the repository carries only `docs/wiki/`
+
+## Updating the engine
+
+```bash
+cd ~/llmwiki
+git pull && ./setup.sh          # pull alone is not enough — see below
+```
+
+`git pull` changes the files in the clone and nothing else. The surfaces the harnesses actually run
+were written at install time and keep pointing at what they were given: the capture daemon froze its
+code when it started, and the OpenCode plugin is a copy under your config directory. Re-running
+`setup.sh` is what re-points them — it is idempotent, and it restarts the daemon for you.
+
+`llmwiki doctor` reports the drift if you forget:
+
+- `[update] ⚠️ v… → v… available` — the clone itself is behind `origin`
+- `[daemon] ⚠️ running code older than this clone` — the loop that is sweeping predates your pull
+  (`llmwiki doctor --fix` restarts it)
+- `[opencode] ⚠️ plugin stale` — the installed plugin copy is older than the clone's adapter
 
 ## Uninstall
 
