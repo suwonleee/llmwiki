@@ -12,6 +12,7 @@ import { test, expect, describe } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { MissingCliFlagValueError, UnknownCliFlagError, parseCliArgs } from "../src/cli-args.ts";
+import { suggestCommands } from "../src/commands/catalog.ts";
 
 const CLI_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli.ts"), "utf8");
 const ARGUMENT_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli-args.ts"), "utf8");
@@ -79,6 +80,55 @@ describe("cli flag allowlist", () => {
     expect(output).toContain("llmwiki init <workspace>");
     expect(output).toContain("llmwiki <command> --help");
     expect(output).toContain("excerpt");
+  });
+
+  test("a mistyped command gets one terse line and a nearest match, not the catalog", () => {
+    // The full root help is ~5.7KB. In an agent session every typo would park that much text in
+    // the conversation for the rest of it, so the error path answers in one screen line.
+    const result = Bun.spawnSync([process.execPath, "src/cli.ts", "overvie"], {
+      cwd: ROOT,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(result.exitCode).not.toBe(0);
+    const err = new TextDecoder().decode(result.stderr);
+    expect(err).toContain("unknown command: overvie");
+    expect(err).toContain("did you mean: overview?");
+    expect(err).toContain("llmwiki --help");
+    expect(err.length).toBeLessThan(400);
+    expect(err).not.toContain("Get started:"); // the catalog stays behind --help
+  });
+
+  test("a whole command line fused into one argument diagnoses the quoting, then still matches", () => {
+    // zsh does not word-split unquoted variables, so `$cmd` hands the entire line over as ONE
+    // argument. The error names the real problem instead of only refusing the string.
+    const result = Bun.spawnSync([process.execPath, "src/cli.ts", "overview /repo --check"], {
+      cwd: ROOT,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(result.exitCode).not.toBe(0);
+    const err = new TextDecoder().decode(result.stderr);
+    expect(err).toContain("ONE argument");
+    expect(err).toContain("did you mean: overview?");
+  });
+
+  test("bare invocation keeps the full catalog — that reader asked what exists", () => {
+    const result = Bun.spawnSync([process.execPath, "src/cli.ts"], {
+      cwd: ROOT,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(result.exitCode).not.toBe(0);
+    expect(new TextDecoder().decode(result.stderr)).toContain("Get started:");
+  });
+
+  test("suggestions rank prefixes and near-misses, and stay quiet with nothing close", () => {
+    expect(suggestCommands("overvie")).toEqual(["overview"]);
+    expect(suggestCommands("wiki")).toContain("wiki-doctor");
+    expect(suggestCommands("qz")).toEqual([]);
+    expect(suggestCommands("zzzzzz")).toEqual([]);
+    expect(suggestCommands("")).toEqual([]);
   });
 
   test("prints the package version", () => {

@@ -88,6 +88,39 @@ export function commandSpec(name: string): CommandSpec | undefined {
   return COMMANDS.find((command) => command.name === name);
 }
 
+/**
+ * Closest command names for a typo, cheapest-first. The error path deliberately does NOT print the
+ * full catalog: in an agent session every mistyped command would land ~5.7KB of help in the
+ * conversation and stay there for the rest of it — measured, that is the entire root help per typo,
+ * for a reader who needed one line. A human who wants the catalog asks for it with `--help`.
+ */
+export function suggestCommands(input: string, limit = 3): string[] {
+  // An agent shell can hand the whole command line over as ONE argument (no word splitting) —
+  // "overview /repo --check" arrives as a single unknown command. Match on its first word.
+  const word = input.trim().split(/\s+/)[0] ?? "";
+  if (!word) return [];
+  const distance = (a: string, b: string): number => {
+    if (Math.abs(a.length - b.length) > 3) return 99;
+    let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i += 1) {
+      const row = [i];
+      for (let j = 1; j <= b.length; j += 1) {
+        row.push(Math.min(prev[j]! + 1, row[j - 1]! + 1, prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1)));
+      }
+      prev = row;
+    }
+    return prev[b.length]!;
+  };
+  return COMMANDS.map((command) => ({
+    name: command.name,
+    rank: command.name.startsWith(word) || word.startsWith(command.name) ? 0 : distance(word, command.name),
+  }))
+    .filter((entry) => entry.rank <= 2)
+    .sort((a, b) => a.rank - b.rank)
+    .slice(0, limit)
+    .map((entry) => entry.name);
+}
+
 export function renderRootHelp(version: string): string {
   const lines = [
     `llmwiki ${version} — local-first project wiki`,

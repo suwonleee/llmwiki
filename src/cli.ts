@@ -7,7 +7,7 @@
 import { WikiIndex, dedupeByPage } from "./engine/db.ts";
 import { today } from "./engine/today.ts";
 import packageJson from "../package.json" with { type: "json" };
-import { commandSpec, renderCommandHelp, renderRootHelp, type CommandName } from "./commands/catalog.ts";
+import { commandSpec, renderCommandHelp, renderRootHelp, suggestCommands, type CommandName } from "./commands/catalog.ts";
 import { MissingCliFlagValueError, UnknownCliFlagError, parseCliArgs, type ParsedCliArgs as Parsed } from "./cli-args.ts";
 import { createMaintenanceHandlers } from "./commands/maintenance.ts";
 import { runDoctor, type DoctorHarness } from "./engine/doctor.ts";
@@ -1627,7 +1627,19 @@ if (!AUTOMATIC_COMMANDS.has(parsed.cmd)) {
 }
 const handler = HANDLERS[parsed.cmd as CommandName];
 if (!handler) {
-  die(`${parsed.cmd ? `unknown command: ${parsed.cmd}\n\n` : ""}${renderRootHelp(packageJson.version).trimEnd()}`);
+  // Bare `llmwiki` is a person asking what exists — give them the catalog. A WRONG command is
+  // usually an agent mid-session, and echoing the whole catalog charges ~5.7KB of context per
+  // typo; one line and a nearest match answer the actual question.
+  if (!parsed.cmd) die(renderRootHelp(packageJson.version).trimEnd());
+  const nearest = suggestCommands(parsed.cmd);
+  die(
+    [
+      `unknown command: ${parsed.cmd}`,
+      ...(parsed.cmd.includes(" ") ? ["  (the whole line arrived as ONE argument — check shell quoting/splitting)"] : []),
+      ...(nearest.length ? [`  did you mean: ${nearest.join(", ")}?`] : []),
+      "  `llmwiki --help` lists commands; `llmwiki <command> --help` explains one.",
+    ].join("\n"),
+  );
 }
 // A harness hook may now reach this CLI without going through hooks/*.sh — on Windows the Codex
 // wiring calls it directly, because `bash` is not on the Windows PATH and Codex runs hook commands
