@@ -141,6 +141,27 @@ describe("Codex doctor status", () => {
     expect(inspectCodexInstall(codexHome, home).staleSkills).toEqual(["wiki-save"]);
   });
 
+  test("reports skills installed without a Codex invocation gate", () => {
+    // The fixture writes SKILL.md only — exactly the shape that let Codex self-invoke $wiki-save
+    // after unrelated work (measured across 16 sessions before the gate existed).
+    expect(inspectCodexInstall(codexHome, home).ungatedSkills).toEqual([
+      "wiki-save",
+      "wiki-ask",
+      "wiki-deep",
+      "wiki-quiz",
+      "wiki-doctor",
+    ]);
+  });
+
+  test("a gated install reports no ungated skills", () => {
+    for (const name of ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"]) {
+      const agents = join(home, ".agents", "skills", name, "agents");
+      mkdirSync(agents, { recursive: true });
+      writeFileSync(join(agents, "openai.yaml"), "policy:\n  allow_implicit_invocation: false\n");
+    }
+    expect(inspectCodexInstall(codexHome, home).ungatedSkills).toEqual([]);
+  });
+
   test("reports legacy $llmwiki-* skill names for migration", () => {
     const legacy = join(home, ".agents", "skills", "llmwiki-fast");
     mkdirSync(legacy, { recursive: true });

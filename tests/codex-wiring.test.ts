@@ -160,6 +160,29 @@ describe("Codex wiring", () => {
     expect(readFileSync(hooksPath, "utf8")).toBe(malformed);
   });
 
+  test("installs a human-invocation gate next to every skill", () => {
+    expect(run(home, codexHome).exitCode).toBe(0);
+    for (const name of ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"]) {
+      const policy = readFileSync(join(home, ".agents", "skills", name, "agents", "openai.yaml"), "utf8");
+      // Codex reads this file only; without the gate the model self-invokes the skill mid-task.
+      expect(policy).toContain("allow_implicit_invocation: false");
+      expect(policy).toContain(`display_name: "$${name}"`);
+      expect(policy).toContain("llmwiki-codex-managed");
+    }
+  });
+
+  test("revert removes the managed gate but leaves a hand-written one", () => {
+    expect(run(home, codexHome).exitCode).toBe(0);
+    const managed = join(home, ".agents", "skills", "wiki-save", "agents", "openai.yaml");
+    const foreign = join(home, ".agents", "skills", "wiki-ask", "agents", "openai.yaml");
+    expect(existsSync(managed)).toBe(true);
+    writeFileSync(foreign, "policy:\n  allow_implicit_invocation: false\n");
+
+    expect(run(home, codexHome, ["--revert"]).exitCode).toBe(0);
+    expect(existsSync(managed)).toBe(false);
+    expect(readFileSync(foreign, "utf8")).toContain("allow_implicit_invocation");
+  });
+
   test("revert removes managed skill files but preserves user-added files", () => {
     expect(run(home, codexHome).exitCode).toBe(0);
     const skillDir = join(home, ".agents", "skills", "wiki-save");

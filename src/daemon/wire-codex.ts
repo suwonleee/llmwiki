@@ -78,6 +78,15 @@ const TURN_CMD =
     ? `${HOOK_CLI_SHELL} turn-context-hook`
     : `bash ${shellQuote(`${CLONE_ROOT_SHELL}/${TURN_MARK}`)}`;
 const SKILLS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"] as const;
+// Codex reads a skill's invocation policy from <skill>/agents/openai.yaml. Without it the model
+// may invoke a wiki skill ITSELF — measured: 16 Codex sessions ran 275 write-class `llmwiki`
+// commands (update-status/update-next/consolidate/reconcile/…) after finishing unrelated work,
+// with no wiki request anywhere in the session. That breaks the design these skills state in
+// their own body ("Why a human-invoked command and not a hook"): close-out is warm and
+// human-present, and undistilled transcript is consumed only when a person calls a wiki command.
+// Claude Code expresses the same gate as `disable-model-invocation: true` in frontmatter; Codex
+// only honors this file, so the wiring has to emit it alongside every SKILL.md.
+const SKILL_POLICY_REL = join("agents", "openai.yaml");
 
 /**
  * Is this handler one llmwiki owns?
@@ -342,6 +351,25 @@ function codexSkill(sourceName: (typeof SKILLS)[number]): string {
   return insertAfterFrontmatter(body, marker);
 }
 
+function codexSkillPolicy(sourceName: (typeof SKILLS)[number]): string {
+  // The description is lifted from the source skill's frontmatter so the two never drift; Codex
+  // shows SKILL.md's own description in `/skills` regardless, this is the manifest's copy.
+  const source = readFileSync(join(CLONE_ROOT, "skill", `${sourceName}.md`), "utf8");
+  const described = /^description:\s*(.+)$/m.exec(source)?.[1]?.trim() ?? sourceName;
+  const summary = described.length > 96 ? `${described.slice(0, 95)}…` : described;
+  return (
+    `# ${OWNER_MARK}\n` +
+    "# Invocation gate: these skills are human-invoked by design (see SKILL.md). Codex reads\n" +
+    "# allow_implicit_invocation from this file; dropping it lets the model run a close-out or a\n" +
+    "# deep pass on its own, mid-task, which is exactly what the wiki design rules out.\n" +
+    "interface:\n" +
+    `  display_name: "$${sourceName}"\n` +
+    `  short_description: ${JSON.stringify(summary)}\n` +
+    "\npolicy:\n" +
+    "  allow_implicit_invocation: false\n"
+  );
+}
+
 function skillSourceHash(sourceName: (typeof SKILLS)[number]): string {
   return createHash("sha256")
     .update(readFileSync(join(CLONE_ROOT, "skill", `${sourceName}.md`)))
@@ -375,6 +403,16 @@ function removeManagedSkill(name: string, currentCloneOnly = false): boolean {
     const content = readFileSync(file, "utf8");
     if (!content.includes(currentCloneOnly ? OWNER_MARK : MANAGED)) return false;
     rmSync(file, { force: true });
+    // Same ownership test as SKILL.md: a hand-written policy file is left alone.
+    const policy = join(dir, SKILL_POLICY_REL);
+    try {
+      if (readFileSync(policy, "utf8").includes(currentCloneOnly ? OWNER_MARK : MANAGED)) {
+        rmSync(policy, { force: true });
+        rmdirSync(dirname(policy));
+      }
+    } catch {
+      /* absent, foreign, or the agents/ directory still holds other files */
+    }
     try {
       rmdirSync(dir);
     } catch {
@@ -425,6 +463,7 @@ function apply(dryRun: boolean): number {
     console.log("=== llmwiki Codex wiring [DRY-RUN] ===");
     console.log(`  hooks : merge ${HOOKS_PATH} (preserve unrelated entries; re-point ${repointed})`);
     console.log(`  skills: ${SKILLS.map((skill) => join(SKILLS_ROOT, skill, "SKILL.md")).join(", ")}`);
+    console.log(`  policy: ${SKILLS.map((skill) => join(SKILLS_ROOT, skill, SKILL_POLICY_REL)).join(", ")}`);
     if (RETIRED_CODEX_SKILLS.some((name) => existsSync(join(SKILLS_ROOT, name, "SKILL.md")))) {
       console.log(
         `  migrate: remove managed retired skill names (${RETIRED_CODEX_SKILLS.map((name) => `$${name}`).join(", ")})`,
@@ -440,8 +479,9 @@ function apply(dryRun: boolean): number {
   for (const name of [...SKILLS, ...RETIRED_CODEX_SKILLS]) removeManagedSkill(name);
   for (const sourceName of SKILLS) {
     const dir = join(SKILLS_ROOT, sourceName);
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(join(dir, dirname(SKILL_POLICY_REL)), { recursive: true });
     writeFileSync(join(dir, "SKILL.md"), codexSkill(sourceName), "utf8");
+    writeFileSync(join(dir, SKILL_POLICY_REL), codexSkillPolicy(sourceName), "utf8");
   }
   mkdirSync(BIN_DIR, { recursive: true });
   writeFileSync(LAUNCHER, launcherBody(), "utf8");

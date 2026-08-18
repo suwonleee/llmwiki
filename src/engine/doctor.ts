@@ -165,6 +165,10 @@ export interface CodexInstallStatus {
    *  ownership marker above the opening `---` and Codex rejected all five skills while this
    *  report called them present. */
   malformedSkills: string[];
+  /** Installed without <skill>/agents/openai.yaml. Codex reads the invocation policy from that
+   *  file only; without it the model can invoke a close-out or deep pass ITSELF, mid-task, which
+   *  the skills' own bodies rule out ("Why a human-invoked command and not a hook"). */
+  ungatedSkills: string[];
   legacySkills: string[];
   launcher: "missing" | "managed" | "foreign";
   launcherOnPath: boolean;
@@ -242,6 +246,7 @@ export function inspectCodexInstall(
     reviewRecords: false,
     missingSkills: [],
     staleSkills: [],
+    ungatedSkills: [],
     malformedSkills: [],
     legacySkills: [],
     launcher: "missing",
@@ -290,6 +295,16 @@ export function inspectCodexInstall(
   result.malformedSkills = CODEX_SKILLS.filter((name) => {
     const installed = join(home, ".agents", "skills", name, "SKILL.md");
     return existsSync(installed) && !opensWithFrontmatter(installed);
+  });
+  result.ungatedSkills = CODEX_SKILLS.filter((name) => {
+    const dir = join(home, ".agents", "skills", name);
+    if (!existsSync(join(dir, "SKILL.md"))) return false;
+    const policy = join(dir, "agents", "openai.yaml");
+    try {
+      return !/allow_implicit_invocation:\s*false/.test(readFileSync(policy, "utf8"));
+    } catch {
+      return true;
+    }
   });
   result.legacySkills = RETIRED_CODEX_SKILLS.filter((name) =>
     existsSync(join(home, ".agents", "skills", name, "SKILL.md")),
@@ -1030,6 +1045,13 @@ export function runDoctor(
           console.log(
             `  [codex] ⚠️ stale/wrong-clone skill(s): ${status.staleSkills.map((name) => `$${name}`).join(", ")} — ` +
               "re-run setup after moving or updating the clone",
+          );
+          issues += 1;
+        }
+        if (status.ungatedSkills.length) {
+          console.log(
+            `  [codex] ⚠️ no invocation gate: ${status.ungatedSkills.map((name) => `$${name}`).join(", ")} — ` +
+              "Codex may run these itself mid-task; re-run setup to install agents/openai.yaml",
           );
           issues += 1;
         }
