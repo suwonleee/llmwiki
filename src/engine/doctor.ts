@@ -7,7 +7,7 @@
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { basename, delimiter, dirname, join } from "node:path";
+import { basename, delimiter, dirname, join, relative } from "node:path";
 import {
   CLAUDE_COMMANDS,
   commandFileState,
@@ -30,7 +30,13 @@ import {
   verifyHarnessPath,
   type Harness,
 } from "./harness-locate.ts";
-import { DAEMON_WINDOWS_STARTUP, watchProcessRunning } from "./daemon-control.ts";
+import {
+  DAEMON_WINDOWS_STARTUP,
+  newestEngineSourceMtime,
+  restartDaemon,
+  watchProcessRunning,
+  watchProcessStartedAt,
+} from "./daemon-control.ts";
 import { autoConnect, harnessInstalled, renderHandoff } from "./harness-autoconnect.ts";
 import { locateGit } from "./tool-locate.ts";
 import { gitMissingDetail } from "./enrollment.ts";
@@ -671,6 +677,42 @@ export function reportCaptureHealth(harness: Harness | "all" = "all"): number {
   return issues;
 }
 
+
+/**
+ * Is the running capture daemon still executing the code that is on disk?
+ *
+ * A daemon freezes its module graph at start. `git pull` rewrites the files and nothing else — the
+ * loop keeps sweeping with the OLD logic until something restarts it. `setup.sh` does restart it,
+ * which is why the update instruction is `git pull && ./setup.sh`; a pull on its own leaves every
+ * other check green. Measured on the author's machine: twenty-one commits of capture work sat in
+ * the clone while the live process ran the previous engine for ninety minutes, and doctor said
+ * `[daemon] ✅ loaded` and `[update] ✅ no newer version` the whole time — the version line compares
+ * the CLONE against origin, so applying the update is exactly what silences it.
+ *
+ * Advisory: capture is still running and still correct, just older, so this never fails doctor. It
+ * also stays quiet whenever the answer would be a guess — no daemon for this clone, or a platform
+ * that cannot report a process start time.
+ */
+const DAEMON_FRESHNESS_TOLERANCE_MS = 5_000;
+
+function reportDaemonFreshness(fix: boolean): void {
+  if (!watchProcessRunning()) return;
+  const started = watchProcessStartedAt();
+  const newest = newestEngineSourceMtime();
+  if (started === null || newest === null) return;
+  if (newest.at <= started + DAEMON_FRESHNESS_TOLERANCE_MS) {
+    console.log("  [daemon] ✅ running the engine code currently on disk");
+    return;
+  }
+  const minutes = Math.max(1, Math.round((newest.at - started) / 60_000));
+  console.log(
+    `  [daemon] ⚠️ running code older than this clone — ${relative(CLONE_ROOT, newest.path)} changed ` +
+      `${minutes} minute(s) after the daemon started; capture still works, but the fixes on disk are not live`,
+  );
+  if (fix) console.log(`  [daemon] 🔧 ${restartDaemon().detail}`);
+  else console.log("  [daemon]    apply it with `llmwiki doctor --fix`, or re-run ./setup.sh");
+}
+
 export function runDoctor(
   fix = false,
   harness: DoctorHarness = "all",
@@ -821,6 +863,7 @@ export function runDoctor(
     }
   }
 
+  reportDaemonFreshness(fix);
   reportEngineUpdate();
   // Setup and `verify` need a machine-wiring verdict, not a verdict on every historical project
   // the daemon has ever observed. A stale temp repository or an expiring old transcript remains

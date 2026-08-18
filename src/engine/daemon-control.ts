@@ -9,7 +9,7 @@
 //   2. "Restart it" was a launchctl command line printed for the user to copy — on every platform,
 //      including the ones where that command does not exist. The engine knows which supervisor it
 //      installed; it can just do it.
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { CLONE_ROOT, normalizeConfigPath } from "./paths.ts";
@@ -165,6 +165,81 @@ export function watchProcessRunning(): boolean {
   if (pgrep.ok && pgrep.code === 0) return true;
   const fromProc = watchPidsFromProc(script);
   return fromProc !== null && fromProc.length > 0;
+}
+
+/**
+ * Elapsed-time field from `ps`, in seconds — `[[dd-]hh:]mm:ss`.
+ *
+ * That format is the one elapsed-time spelling BSD and procps agree on. `etimes` (plain seconds)
+ * is a procps extension macOS answers with "keyword not found", and `lstart` prints a date in the
+ * machine's locale — on a Korean desktop it reads "2026년 8월 18일 …", which no parser should be
+ * asked to guess the language of.
+ */
+export function parseElapsedSeconds(field: string): number | null {
+  const m = field.trim().match(/^(?:(\d+)-)?(?:(\d+):)?(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  return Number(m[1] ?? 0) * 86400 + Number(m[2] ?? 0) * 3600 + Number(m[3]) * 60 + Number(m[4]);
+}
+
+/**
+ * When THIS clone's capture daemon started, as epoch ms — null when none is running, or when the
+ * platform cannot say. Several daemons for one clone is a broken state the caller reports
+ * elsewhere; the EARLIEST start is returned because that is the one holding the oldest code.
+ *
+ * Windows returns null deliberately: reading another process's start time there needs a different
+ * tool per shell, and a freshness check that guesses is worse than one that stays quiet.
+ */
+export function watchProcessStartedAt(now: number = Date.now()): number | null {
+  if (WINDOWS) return null;
+  const script = watchScript();
+  const ps = run(["ps", "-axo", "pid=,etime=,command="]);
+  if (!ps.ok || ps.code !== 0) return null;
+  let earliest: number | null = null;
+  for (const line of ps.stdout.split("\n")) {
+    if (!line.includes(script)) continue;
+    const row = line.trim().match(/^(\d+)\s+(\S+)\s/);
+    if (!row || Number(row[1]) === process.pid) continue;
+    const seconds = parseElapsedSeconds(row[2]!);
+    if (seconds === null) continue;
+    const started = now - seconds * 1000;
+    if (earliest === null || started < earliest) earliest = started;
+  }
+  return earliest;
+}
+
+/**
+ * Newest modification time among the sources the daemon actually LOADS, with the file that carries
+ * it. Only TypeScript under `src/` counts: watch.ts and its import graph are what a running process
+ * froze at start, while shell installers and hook scripts are re-read by whoever runs them next.
+ */
+export function newestEngineSourceMtime(root: string = CLONE_ROOT): { at: number; path: string } | null {
+  const start = join(root, "src");
+  let newest: { at: number; path: string } | null = null;
+  const walk = (dir: string, depth: number): void => {
+    if (depth > 8) return;
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full, depth + 1);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith(".ts")) continue;
+      try {
+        const at = statSync(full).mtimeMs;
+        if (newest === null || at > newest.at) newest = { at, path: full };
+      } catch {
+        /* a file that vanished mid-walk cannot be the newest one that matters */
+      }
+    }
+  };
+  walk(start, 0);
+  return newest;
 }
 
 export type DaemonMechanism = "launchd" | "systemd" | "windows-startup" | "unsupervised" | "absent";
