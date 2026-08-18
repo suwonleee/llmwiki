@@ -26,7 +26,11 @@ describe("deterministic capture-scale benchmark", () => {
         expect(report.sample_materializations).toBe(CAPTURE_SAMPLE_MATERIALIZATIONS);
         expect(report.successful_materializations).toBe(CAPTURE_SAMPLE_MATERIALIZATIONS);
         expect(report.source_bytes).toBeGreaterThan(0);
-        expect(report.unchanged_candidates).toBe(0);
+        // The gating claim, stated in both directions: a cold gate admits every discovered route,
+        // and a gate that has already seen them admits none. Reading only the zero would leave
+        // "the benchmark discovered nothing" indistinguishable from "the gate worked".
+        expect(report.initial_candidates).toBe(report.discovered);
+        expect(report.second_pass_candidates).toBe(0);
         for (const timing of Object.values(report.timings_ms)) {
           expect(timing.samples).toHaveLength(1);
           expect(timing.p95).toBeGreaterThanOrEqual(timing.median);

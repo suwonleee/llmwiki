@@ -2,8 +2,10 @@
 //
 // This suite measures the part bench-scale intentionally does not: historical session discovery,
 // revision gating, bounded sample materialization, and the fixed cost of launching the hook CLI.
-// Timings remain observational. Structural counts (discovered routes and unchanged candidates) are
-// deterministic evidence and can become regression assertions without making CI timing-sensitive.
+// Timings remain observational. The structural counts are deterministic evidence and can become
+// regression assertions without making CI timing-sensitive: `initial_candidates` is how many routes
+// a cold gate admits, and `second_pass_candidates` is how many survive a gate that has already seen
+// them — so gating works exactly when the first equals `discovered` and the second is zero.
 import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
 import {
@@ -41,8 +43,11 @@ export type CaptureHarness = "claude" | "codex" | "opencode";
 
 export interface CaptureHarnessReport {
   readonly discovered: number;
+  /** Routes a cold revision gate admits — every discovered route, since it has observed none. */
   readonly initial_candidates: number;
-  readonly unchanged_candidates: number;
+  /** Routes that STILL demand materialization once the gate has observed them. Zero means the
+   *  revision gate recognized every unchanged route; a non-zero value is a gating regression. */
+  readonly second_pass_candidates: number;
   readonly sample_materializations: number;
   readonly successful_materializations: number;
   readonly timings_ms: {
@@ -181,7 +186,7 @@ function measureHarness(
   const materializationSamples: number[] = [];
   let discovered = -1;
   let initialCandidates = -1;
-  let unchangedCandidates = -1;
+  let secondPassCandidates = -1;
   let sampleMaterializations = 0;
   let successfulMaterializations = 0;
 
@@ -191,7 +196,8 @@ function measureHarness(
     const routes = discovery.value;
     const revisions: Record<string, string | number> = {};
     const initial = routes.filter((route) => routeNeedsMaterialization(route, revisions));
-    const unchanged = routes.filter((route) => routeNeedsMaterialization(route, revisions));
+    // Same map, second look: every route the gate just recorded must now be recognized as unchanged.
+    const secondPass = routes.filter((route) => routeNeedsMaterialization(route, revisions));
     const sample = initial.slice(0, CAPTURE_SAMPLE_MATERIALIZATIONS);
     const materialization = elapsed(() =>
       source.materializeMany
@@ -203,13 +209,13 @@ function measureHarness(
     if (discovered < 0) {
       discovered = routes.length;
       initialCandidates = initial.length;
-      unchangedCandidates = unchanged.length;
+      secondPassCandidates = secondPass.length;
       sampleMaterializations = sample.length;
       successfulMaterializations = materialization.value.filter(Boolean).length;
     } else if (
       discovered !== routes.length ||
       initialCandidates !== initial.length ||
-      unchangedCandidates !== unchanged.length ||
+      secondPassCandidates !== secondPass.length ||
       sampleMaterializations !== sample.length
     ) {
       throw new Error(`capture-scale structural counts changed between repeats for ${source.kind}`);
@@ -219,7 +225,7 @@ function measureHarness(
   return {
     discovered,
     initial_candidates: initialCandidates,
-    unchanged_candidates: unchangedCandidates,
+    second_pass_candidates: secondPassCandidates,
     sample_materializations: sampleMaterializations,
     successful_materializations: successfulMaterializations,
     timings_ms: {
