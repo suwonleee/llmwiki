@@ -186,7 +186,16 @@ export class Linter {
     this.ko = effectiveKo(cfg);
     const f = cfg.files;
     this.l0Pages = new Set([f.l0, f.overview]);
-    this.rootPages = new Set([f.overview, "index.md", "readme.md", f.log, f.l0]);
+    // The destination `oversized-l0` sends detail to (context.ts/budgets.ts name it by this
+    // spelling). Derived from the configured L0 so a renamed l0 keeps its satellite. It is the
+    // SAME kind of page as the L0 — a curated state/backlog surface, not a claim-making content
+    // page — so it inherits the root-page exemptions. Without this, following the engine's own
+    // trim advice immediately earned a `no-citation` warning the source page was exempt from:
+    // the advice loop marked its own outcome as a defect.
+    // Deliberately NOT in l0Pages: the whole point is that this page is never injected, so a size
+    // ceiling on it would defeat the trim it exists to absorb.
+    const l0Detail = f.l0.replace(/\.md$/i, "-detail.md");
+    this.rootPages = new Set([f.overview, "index.md", "readme.md", f.log, f.l0, l0Detail]);
     this.ledgerPages = new Set([f.log]);
   }
 

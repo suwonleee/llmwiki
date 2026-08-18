@@ -262,3 +262,38 @@ describe("formatReport errors-only", () => {
     expect(formatReport([], 3, "repo", { errorsOnly: true })).toContain("Lint passed");
   });
 });
+
+describe("the L0 detail page inherits the L0's exemptions", () => {
+  // `oversized-l0` tells the author to move detail OUT of the L0, and context.ts/budgets.ts name
+  // the destination `current-state-detail`. Before this, following that advice earned the
+  // destination a `no-citation` warning the source page was exempt from — the advice loop flagged
+  // its own outcome. The name is derived from the configured l0 so a renamed L0 keeps its satellite.
+  const doc = (filename: string): WikiDoc => ({
+    id: `doc-${filename}`,
+    path: "/docs/wiki/",
+    filename,
+    relative_path: `docs/wiki/${filename}`,
+  });
+  const uncited = "---\ntitle: T\n---\n\n## 1. section\n\n- a claim with no footnote\n";
+
+  test("the derived detail page is exempt, like the L0 and overview it accompanies", () => {
+    const linter = new Linter(null, null);
+    expect(linter._noCitation(doc("current-state-detail.md"), uncited)).toEqual([]);
+    expect(linter._noCitation(doc("current-state.md"), uncited)).toEqual([]);
+    expect(linter._noCitation(doc("overview.md"), uncited)).toEqual([]);
+  });
+
+  test("an ordinary content page still gets the warning — the exemption is not a hole", () => {
+    const issues = new Linter(null, null)._noCitation(doc("2026-08-18-some-milestone.md"), uncited);
+    expect(issues.length).toBe(1);
+    expect(issues[0]!.code).toBe("no-citation");
+  });
+
+  test("the satellite name follows a renamed L0 instead of being hardcoded", () => {
+    const cfg = { ...defaults(), files: { ...defaults().files, l0: "state-now.md" } };
+    const linter = new Linter(null, null, cfg);
+    expect(linter._noCitation(doc("state-now-detail.md"), uncited)).toEqual([]);
+    // …and the old spelling is no longer special once the L0 is renamed.
+    expect(linter._noCitation(doc("current-state-detail.md"), uncited).length).toBe(1);
+  });
+});
