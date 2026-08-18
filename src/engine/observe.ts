@@ -40,6 +40,9 @@ export interface Emission {
   session: string; // harness session id, exactly as the hook/plugin handed it over
   channel: Channel;
   root: string; // wiki root the pointers are relative to
+  // UTF-8 bytes actually handed to the harness. Optional because lines written before this field
+  // existed cannot be re-measured — the report says how many it could weigh rather than guessing.
+  bytes?: number;
   pages: string[]; // repo-relative docs/wiki paths
 }
 
@@ -55,6 +58,9 @@ export interface LedgerChannelStat {
   injected: number;
   matched: number;
   reach: number;
+  emissions: number; // ledger lines on this channel, including pointer-free ones
+  bytes: number; // summed over the emissions that recorded a cost
+  weighed: number; // how many of those emissions carried one
 }
 
 export interface LedgerReport {
@@ -63,6 +69,8 @@ export interface LedgerReport {
   injected: number; // pointer occurrences across all emissions
   matched: number;
   pointer_reach: number;
+  bytes: number; // total measured injection cost
+  weighed: number; // emissions the cost could be read from (older lines predate the field)
   by_channel: Record<Channel, LedgerChannelStat>;
   matched_by_harness: Record<string, number>; // which observer answered ("claude"|"codex"|"opencode")
 }
@@ -91,7 +99,10 @@ export function recordEmission(
   try {
     if (!session.trim()) return; // unmatchable — a session-less line is noise, not data
     const pages = [...emittedText.matchAll(PAGE_RE)].map((m) => m[1]!);
-    if (!pages.length) return;
+    // A pointer-free emission used to be dropped as "nothing to match later". That silently hid
+    // the WORST case the ledger can show: bytes spent to point at nothing. The reach numbers are
+    // unaffected (no pages, no pointer occurrences), and the cost is now visible.
+    if (!emittedText) return;
     const dir = ensureProjectStateDir(root, "observe");
     const file = join(dir, LEDGER_NAME);
     try {
@@ -105,6 +116,7 @@ export function recordEmission(
       channel,
       root: resolve(root).replace(/\\/g, "/"),
       pages,
+      bytes: Buffer.byteLength(emittedText, "utf8"),
     });
     appendFileSync(file, line + "\n");
   } catch {
@@ -145,6 +157,9 @@ export function readEmissionsFor(root: string): Emission[] {
             channel: e.channel,
             root: String(e.root ?? ""),
             pages: e.pages.filter((p: unknown) => typeof p === "string"),
+            ...(typeof e.bytes === "number" && Number.isFinite(e.bytes) && e.bytes >= 0
+              ? { bytes: e.bytes }
+              : {}),
           });
         }
       } catch {
@@ -303,8 +318,8 @@ function splitWiki(abs: string): { root: string; page: string } | null {
  */
 export function matchEmissions(emissions: readonly Emission[], reads: readonly LedgerRead[]): LedgerReport {
   const by: Record<Channel, LedgerChannelStat> = {
-    turn_context: { injected: 0, matched: 0, reach: 0 },
-    cold_start: { injected: 0, matched: 0, reach: 0 },
+    turn_context: { injected: 0, matched: 0, reach: 0, emissions: 0, bytes: 0, weighed: 0 },
+    cold_start: { injected: 0, matched: 0, reach: 0, emissions: 0, bytes: 0, weighed: 0 },
   };
   const matchedByHarness: Record<string, number> = {};
   const bySession = new Map<string, LedgerRead[]>();
@@ -316,8 +331,17 @@ export function matchEmissions(emissions: readonly Emission[], reads: readonly L
   const sessions = new Set<string>();
   let injected = 0;
   let matched = 0;
+  let bytes = 0;
+  let weighed = 0;
   for (const e of emissions) {
     sessions.add(e.session);
+    by[e.channel].emissions += 1;
+    if (typeof e.bytes === "number") {
+      by[e.channel].bytes += e.bytes;
+      by[e.channel].weighed += 1;
+      bytes += e.bytes;
+      weighed += 1;
+    }
     const candidates = bySession.get(e.session) ?? [];
     for (const page of e.pages) {
       by[e.channel].injected += 1;
@@ -342,6 +366,8 @@ export function matchEmissions(emissions: readonly Emission[], reads: readonly L
     injected,
     matched,
     pointer_reach: injected ? matched / injected : 0,
+    bytes,
+    weighed,
     by_channel: by,
     matched_by_harness: matchedByHarness,
   };

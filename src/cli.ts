@@ -1243,6 +1243,31 @@ function printLedgerSection(root: string): void {
     const c = r.by_channel[k];
     if (c.injected) console.log(`    ${k.replace("_", "-")}: ${pct(c.reach)} (${c.matched}/${c.injected})`);
   }
+  // The other half of the same question. Reach alone says whether a pointer paid off; it cannot
+  // say what saying it COST, and injected text is re-sent with every later turn of that session.
+  // Per-emission averages are what a trimming decision is actually made against, so they are what
+  // gets printed — a total would grow with usage and mean nothing on its own.
+  if (r.weighed) {
+    const kb = (n: number) => `${(n / 1024).toFixed(1)}KB`;
+    console.log(
+      ko
+        ? `  주입 비용 (${r.weighed}/${r.emissions}건 계측):`
+        : `  injection cost (measured on ${r.weighed}/${r.emissions}):`,
+    );
+    for (const k of ["turn_context", "cold_start"] as const) {
+      const c = r.by_channel[k];
+      if (!c.weighed) continue;
+      const per = c.bytes / c.weighed;
+      const perPointer = c.injected ? ` · ${Math.round(c.bytes / c.injected)}B per pointer` : " · no pointers";
+      console.log(`    ${k.replace("_", "-")}: ${Math.round(per)}B avg × ${c.weighed} = ${kb(c.bytes)}${perPointer}`);
+    }
+  } else if (r.emissions) {
+    console.log(
+      ko
+        ? "  주입 비용: 미계측 — 원장의 기존 줄은 크기 기록 이전이다 (다음 세션들부터 측정됨)"
+        : "  injection cost: not measured — these ledger lines predate the field (measured from the next sessions on)",
+    );
+  }
   const by = Object.entries(r.matched_by_harness);
   if (by.length) console.log(`  matched by: ${by.map(([h, n]) => `${h} ${n}`).join(" · ")}`);
   console.log(

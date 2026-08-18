@@ -54,11 +54,48 @@ describe("emission ledger", () => {
     expect(got[0]!.channel).toBe("turn_context");
   });
 
-  test("no session or no pages → nothing is written", () => {
+  test("no session or no text → nothing is written", () => {
     const repo = tempRepo();
-    recordEmission(repo, "", "turn_context", banner([PAGE]));
-    recordEmission(repo, "sess-1", "turn_context", "no pointers here");
+    recordEmission(repo, "", "turn_context", banner([PAGE])); // unmatchable line, not data
+    recordEmission(repo, "sess-1", "turn_context", ""); // silence is silence
     expect(readEmissionsFor(repo).length).toBe(0);
+  });
+
+  test("a pointer-free emission is recorded — bytes spent to point at nothing is the worst case", () => {
+    // It used to be dropped as "nothing to match later", which hid exactly the emission a reader
+    // would most want to see. Reach is unaffected: no pages means no pointer occurrences.
+    const repo = tempRepo();
+    recordEmission(repo, "sess-1", "cold_start", "prose with no pointers at all");
+    const got = readEmissionsFor(repo);
+    expect(got.length).toBe(1);
+    expect(got[0]!.pages).toEqual([]);
+    expect(got[0]!.bytes).toBe(29);
+
+    const r = matchEmissions(got, []);
+    expect(r.injected).toBe(0);
+    expect(r.by_channel.cold_start.emissions).toBe(1);
+    expect(r.bytes).toBe(29);
+  });
+
+  test("cost is the emission's real UTF-8 size, not its character count", () => {
+    const repo = tempRepo();
+    const body = `${banner([PAGE])}\n한글 본문`; // multi-byte, so length !== byteLength
+    recordEmission(repo, "sess-1", "turn_context", body);
+    const got = readEmissionsFor(repo);
+    expect(got[0]!.bytes).toBe(Buffer.byteLength(body, "utf8"));
+    expect(got[0]!.bytes).toBeGreaterThan(body.length);
+  });
+
+  test("lines written before the field are reported as unweighed, never as zero cost", () => {
+    // Honesty over a tidy number: an upgraded install must not read as "injection is free".
+    const priced = em({ session: "new", bytes: 500 });
+    const legacy = em({ session: "old" }); // no bytes — predates the field
+    const r = matchEmissions([priced, legacy], []);
+    expect(r.emissions).toBe(2);
+    expect(r.weighed).toBe(1);
+    expect(r.bytes).toBe(500);
+    expect(r.by_channel.turn_context.weighed).toBe(1);
+    expect(r.by_channel.turn_context.emissions).toBe(2);
   });
 
   test("the ledger rotates once at the size cap instead of growing forever", () => {
