@@ -26,6 +26,7 @@ import { insertAfterFrontmatter } from "../engine/frontmatter.ts";
 import { RETIRED_CODEX_SKILLS } from "../engine/install-history.ts";
 import { CLONE_ROOT, CLONE_ROOT_SHELL, ENGINE_CLI_TOKEN, engineCliCommand, hookCliCommand } from "../engine/paths.ts";
 import { envValueOutsideRepoFiles } from "../engine/env-policy.ts";
+import { FRONTMATTER_GATE, SKILL_POLICY_REL, skillPolicyYaml } from "../engine/skill-policy.ts";
 
 const HOME = process.env.HOME?.trim() || homedir();
 const CODEX_HOME = envValueOutsideRepoFiles("CODEX_HOME")?.trim() || join(HOME, ".codex");
@@ -78,15 +79,7 @@ const TURN_CMD =
     ? `${HOOK_CLI_SHELL} turn-context-hook`
     : `bash ${shellQuote(`${CLONE_ROOT_SHELL}/${TURN_MARK}`)}`;
 const SKILLS = ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"] as const;
-// Codex reads a skill's invocation policy from <skill>/agents/openai.yaml. Without it the model
-// may invoke a wiki skill ITSELF — measured: 16 Codex sessions ran 275 write-class `llmwiki`
-// commands (update-status/update-next/consolidate/reconcile/…) after finishing unrelated work,
-// with no wiki request anywhere in the session. That breaks the design these skills state in
-// their own body ("Why a human-invoked command and not a hook"): close-out is warm and
-// human-present, and undistilled transcript is consumed only when a person calls a wiki command.
-// Claude Code expresses the same gate as `disable-model-invocation: true` in frontmatter; Codex
-// only honors this file, so the wiring has to emit it alongside every SKILL.md.
-const SKILL_POLICY_REL = join("agents", "openai.yaml");
+// The invocation gate itself lives in engine/skill-policy.ts — one rule, both install surfaces.
 
 /**
  * Is this handler one llmwiki owns?
@@ -333,7 +326,7 @@ function writeJsonAtomic(path: string, value: unknown): boolean {
 function codexSkill(sourceName: (typeof SKILLS)[number]): string {
   const name = sourceName;
   let body = readFileSync(join(CLONE_ROOT, "skill", `${sourceName}.md`), "utf8");
-  body = body.replace(/^---(\r?\n)/, `---$1name: ${name}$1`);
+  body = body.replace(/^---(\r?\n)/, `---$1name: ${name}$1${FRONTMATTER_GATE}$1`);
   body = body
     .replaceAll("Read `~/llmwiki/skill/wiki-save.md`", "invoke `$wiki-save` before continuing")
     .replaceAll(ENGINE_CLI_TOKEN, CLI_INVOCATION)
@@ -352,22 +345,8 @@ function codexSkill(sourceName: (typeof SKILLS)[number]): string {
 }
 
 function codexSkillPolicy(sourceName: (typeof SKILLS)[number]): string {
-  // The description is lifted from the source skill's frontmatter so the two never drift; Codex
-  // shows SKILL.md's own description in `/skills` regardless, this is the manifest's copy.
   const source = readFileSync(join(CLONE_ROOT, "skill", `${sourceName}.md`), "utf8");
-  const described = /^description:\s*(.+)$/m.exec(source)?.[1]?.trim() ?? sourceName;
-  const summary = described.length > 96 ? `${described.slice(0, 95)}…` : described;
-  return (
-    `# ${OWNER_MARK}\n` +
-    "# Invocation gate: these skills are human-invoked by design (see SKILL.md). Codex reads\n" +
-    "# allow_implicit_invocation from this file; dropping it lets the model run a close-out or a\n" +
-    "# deep pass on its own, mid-task, which is exactly what the wiki design rules out.\n" +
-    "interface:\n" +
-    `  display_name: "$${sourceName}"\n` +
-    `  short_description: ${JSON.stringify(summary)}\n` +
-    "\npolicy:\n" +
-    "  allow_implicit_invocation: false\n"
-  );
+  return skillPolicyYaml(source, sourceName, OWNER_MARK);
 }
 
 function skillSourceHash(sourceName: (typeof SKILLS)[number]): string {
