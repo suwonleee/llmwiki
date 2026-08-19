@@ -1,5 +1,6 @@
 ---
 name: wiki-doctor
+disable-model-invocation: true
 description: Diagnose and repair the active llmwiki installation and this repository's wiki — owned wiring first, then deterministic state and evidence-aware page repair
 ---
 

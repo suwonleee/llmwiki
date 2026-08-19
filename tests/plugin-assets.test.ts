@@ -245,4 +245,17 @@ describe("plugin distribution surface", () => {
     expect(submission.match(/^### Positive /gm)).toHaveLength(5);
     expect(submission.match(/^### Negative /gm)).toHaveLength(3);
   });
+
+test("the bundled skills carry a human-invocation gate for both harnesses", () => {
+  // The bundle is the PUBLISHED surface: a plugin install never runs wire-codex.ts, so the gate
+  // has to travel with the assets. Both spellings are required — Claude Code and Qwen read the
+  // frontmatter key, Codex reads agents/openai.yaml and ignores the frontmatter.
+  for (const name of ["wiki-save", "wiki-ask", "wiki-deep", "wiki-quiz", "wiki-doctor"]) {
+    const skill = readFileSync(join(CLONE_ROOT, "skills", name, "SKILL.md"), "utf-8");
+    expect(skill).toContain("disable-model-invocation: true");
+    const policy = readFileSync(join(CLONE_ROOT, "skills", name, "agents", "openai.yaml"), "utf-8");
+    expect(policy).toContain("allow_implicit_invocation: false");
+  }
+});
+
 });

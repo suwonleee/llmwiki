@@ -1,5 +1,6 @@
 ---
 name: wiki-quiz
+disable-model-invocation: true
 description: The human memory loop — a few minutes of spaced-repetition quiz (day-granular forgetting curve) over this repo's wiki, decisions and direction first. The engine schedules deterministically (quiz-status/next/record); this session authors and grades questions warm, grounded in the pages, and records into docs/wiki/6_quiz/ (a human-only layer excluded from indexing/search)
 ---
 

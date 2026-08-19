@@ -1,5 +1,6 @@
 ---
 name: wiki-ask
+disable-model-invocation: true
 description: Ask this repo's wiki (docs/wiki), then file a good answer back into the wiki (query→file-back loop). Standalone, inline.
 ---
 

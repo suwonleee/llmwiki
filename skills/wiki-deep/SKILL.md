@@ -1,5 +1,6 @@
 ---
 name: wiki-deep
+disable-model-invocation: true
 description: Periodic deep pass (day end · weekly · when a close-out report recommends it) — drain the transcript backlog, run the semantic review, work the gap queue, re-distill oversized topic pages. The lossless catch-up safety net; the per-session close-out is `/wiki-save`
 ---
 

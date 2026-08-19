@@ -1,5 +1,6 @@
 ---
 name: wiki-save
+disable-model-invocation: true
 description: Session close-out (warm, O(this session)) — file THIS session into the log, consolidate its durable concepts into the topic encyclopedia (5_topic), refresh L0 (current-state), finish with overview·lint. The every-session habit; volume work (backlog · review · gaps · re-distill) defers to the periodic `/wiki-deep` deep pass
 ---
 

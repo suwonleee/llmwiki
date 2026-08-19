@@ -62,11 +62,37 @@ function skillBody(source: string, skillName: string): string {
   // SKILL.md frontmatter requires `name` alongside `description`; the sources carry only the
   // description (the installers name commands by filename). Inject it, then put the resolution
   // note right under the frontmatter so the rule precedes every engine reference.
-  const named = generic.startsWith("---\n") ? `---\nname: ${skillName}\n${generic.slice(4)}` : generic;
+  // …and the invocation gate alongside it. These skills are human-invoked BY DESIGN — the body
+  // says so itself ("Why a human-invoked command and not a hook"): close-out is warm and
+  // human-present, and undistilled transcript is consumed only when a person calls a wiki
+  // command. Without the flag the model runs a close-out or a deep pass on its own, mid-task;
+  // measured on Codex before the gate existed: 16 sessions, 275 write-class `llmwiki` calls with
+  // no wiki request anywhere in them. Claude Code and Qwen honor this frontmatter key, Codex
+  // honors agents/openai.yaml (written beside this file); the /name slash command is unaffected.
+  const named = generic.startsWith("---\n")
+    ? `---\nname: ${skillName}\ndisable-model-invocation: true\n${generic.slice(4)}`
+    : generic;
   const fmEnd = named.indexOf("\n---", 3);
   if (fmEnd < 0) return `${CODEX_CLI_NOTE}\n${named}`;
   const cut = fmEnd + "\n---\n".length;
   return `${named.slice(0, cut)}\n${CODEX_CLI_NOTE}${named.slice(cut)}`;
+}
+
+// Codex ignores the frontmatter key above and reads the gate from this file only, so the bundle
+// has to carry both spellings of the same rule.
+function skillPolicy(source: string, skillName: string): string {
+  const described = /^description:\s*(.+)$/m.exec(source)?.[1]?.trim() ?? skillName;
+  const summary = described.length > 96 ? `${described.slice(0, 95)}…` : described;
+  return (
+    `# ${PLUGIN_MARK.replace(/^<!-- | -->$/g, "")}\n` +
+    "# Invocation gate: these skills are human-invoked by design (see SKILL.md). Dropping\n" +
+    "# allow_implicit_invocation lets Codex run a close-out or a deep pass on its own, mid-task.\n" +
+    "interface:\n" +
+    `  display_name: "$${skillName}"\n` +
+    `  short_description: ${JSON.stringify(summary)}\n` +
+    "\npolicy:\n" +
+    "  allow_implicit_invocation: false\n"
+  );
 }
 
 export function buildAssets(root: string = CLONE_ROOT): string[] {
@@ -79,6 +105,11 @@ export function buildAssets(root: string = CLONE_ROOT): string[] {
     const sk = join(skillDir, "SKILL.md");
     writeFileSync(sk, `${skillBody(source, skillName).replace(/\n*$/, "\n")}\n${PLUGIN_MARK}\n`);
     written.push(sk);
+    const agentsDir = join(skillDir, "agents");
+    mkdirSync(agentsDir, { recursive: true });
+    const policy = join(agentsDir, "openai.yaml");
+    writeFileSync(policy, skillPolicy(source, skillName));
+    written.push(policy);
   }
   return written;
 }
