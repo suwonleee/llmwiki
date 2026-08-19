@@ -16,6 +16,10 @@ jobs:
   test:
     name: ${{ matrix.os }} · bun ${{ matrix.bun }}
     runs-on: ${{ matrix.os }}
+    # A full deterministic 1000-page scale pass is intentionally part of this
+    # job. Keep an outer bound for a genuinely stalled runner while allowing
+    # normal shared-runner filesystem variance inside individual tests.
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -28,7 +32,7 @@ jobs:
           - os: ubuntu-latest
             bun: "1.1.45"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -69,7 +73,7 @@ jobs:
     name: windows-latest · platform contract
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -191,7 +195,7 @@ jobs:
     runs-on: ubuntu-latest
     container: oven/bun:1-alpine
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Report the dependency instead of failing silently
         run: |

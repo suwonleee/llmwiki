@@ -111,5 +111,8 @@ describe("deterministic scale benchmark", () => {
         expect(resource.p95).toBeGreaterThanOrEqual(resource.median);
       }
     }
-  }, 20_000);
+    // Timings are observational rather than a release threshold. The suite's
+    // correctness work is bounded, but a shared CI runner can take slightly
+    // longer than 20 seconds to process the 1000-page tier twice.
+  }, 60_000);
 });
