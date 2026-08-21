@@ -6,9 +6,10 @@
 // engine-dev contract: zero per-session cost.
 //
 // Declared blind spots. They are REPORTED, never folded silently into the rate:
-//   • a page opened with `Bash cat/grep/sed` instead of the Read tool
 //   • a page read inside a subagent thread (isSidechain) — the pointer went to the main thread
 //   • harnesses whose transcript shape this parser does not read yet (Codex, OpenCode)
+//   • a Bash command that only greps a DIRECTORY — an open counts only when the command names a
+//     concrete `docs/wiki/….md` path (the same rule the Codex observer applies to shell opens)
 // And a page can be USED without being opened: a pointer line carries the page TITLE, and a title
 // alone often answers the question. So this is a read-through rate, not a value measure — a low
 // number is a prompt to look, not a verdict.
@@ -36,6 +37,7 @@ export interface ReadOccurrence {
   ts: number; // ms epoch from the record's timestamp; 0 when the record carries none
   root: string;
   page: string;
+  via: "read" | "bash"; // which tool opened it — reported separately, matched identically
 }
 
 export interface TranscriptScan {
@@ -59,6 +61,7 @@ export interface DownstreamReadReport {
   unique_injected_pages: number;
   unique_matched_pages: number;
   read_events: number; // Read tool calls on wiki pages, main thread only
+  bash_open_events: number; // Bash commands naming a concrete wiki page, main thread only
   malformed_lines: number;
   by_channel: Record<Channel, ChannelStat>;
   blind_spots: string[];
@@ -158,6 +161,12 @@ export function pointersIn(rec: any, seq: number): PointerOccurrence[] {
   return out;
 }
 
+// Claude opens wiki pages with Bash too (`cat`, `sed -n`, `grep -n … page.md`) — the same signal
+// the Codex observer already counts as a read, with the same rule: only a command that names a
+// concrete page counts, a directory grep does not. The command string is the MODEL's own tool_use
+// input, never a tool result, so the anti-self-pollution stance is preserved.
+const BASH_PAGE_RE = /(?:[A-Za-z]:)?[^\s"'`\\)]*docs\/wiki\/[^\s"'`\\)]+\.md/g;
+
 export function readsIn(rec: any, seq: number): ReadOccurrence[] {
   // A subagent's thread never received the pointer, so its Reads cannot answer it.
   if (rec?.isSidechain === true) return [];
@@ -167,12 +176,23 @@ export function readsIn(rec: any, seq: number): ReadOccurrence[] {
   const ts = Date.parse(String(rec?.timestamp ?? "")) || 0;
   const out: ReadOccurrence[] = [];
   for (const c of content) {
-    if (c?.type !== "tool_use" || c?.name !== "Read") continue;
-    const fp = String(c?.input?.file_path ?? "");
-    if (!fp) continue;
-    const abs = fp.startsWith("/") || /^[A-Za-z]:/.test(fp) ? fp : `${cwd}/${fp}`;
-    const split = splitWikiPath(abs);
-    if (split) out.push({ seq, ts, ...split });
+    if (c?.type !== "tool_use") continue;
+    if (c?.name === "Read") {
+      const fp = String(c?.input?.file_path ?? "");
+      if (!fp) continue;
+      const abs = fp.startsWith("/") || /^[A-Za-z]:/.test(fp) ? fp : `${cwd}/${fp}`;
+      const split = splitWikiPath(abs);
+      if (split) out.push({ seq, ts, via: "read", ...split });
+    } else if (c?.name === "Bash") {
+      const cmd = String(c?.input?.command ?? "");
+      if (!cmd.includes("docs/wiki/")) continue;
+      for (const m of cmd.match(BASH_PAGE_RE) ?? []) {
+        const raw = expandHome(norm(m));
+        const abs = raw.startsWith("/") || /^[A-Za-z]:/.test(raw) ? raw : `${cwd}/${raw}`;
+        const split = splitWikiPath(abs);
+        if (split) out.push({ seq, ts, via: "bash", ...split });
+      }
+    }
   }
   return out;
 }
@@ -248,10 +268,11 @@ function summarize(scans: readonly TranscriptScan[]): DownstreamReadReport {
   };
   const pages = { injected: new Set<string>(), matched: new Set<string>() };
   let reads = 0;
+  let bashOpens = 0;
   let malformed = 0;
   for (const s of scans) {
     matchScan(s, by, pages);
-    reads += s.reads.length;
+    for (const r of s.reads) r.via === "bash" ? (bashOpens += 1) : (reads += 1);
     malformed += s.malformed;
   }
   for (const c of Object.keys(by) as Channel[]) {
@@ -268,10 +289,11 @@ function summarize(scans: readonly TranscriptScan[]): DownstreamReadReport {
     unique_injected_pages: pages.injected.size,
     unique_matched_pages: pages.matched.size,
     read_events: reads,
+    bash_open_events: bashOpens,
     malformed_lines: malformed,
     by_channel: by,
     blind_spots: [
-      "Bash cat/grep opens are not counted (Read tool only)",
+      "Bash opens count only when the command names a concrete page (.md) — directory greps don't",
       "subagent (sidechain) reads are not counted — the pointer went to the main thread",
       "Codex and OpenCode transcripts are not parsed yet",
       "a pointer's TITLE can answer a prompt without the page being opened",

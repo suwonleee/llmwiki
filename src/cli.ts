@@ -1214,7 +1214,7 @@ function cmdDownstreamRead(p: Parsed) {
     if (c.injected) console.log(`    ${k.replace("_", "-")}: ${pct(c.reach)} (${c.matched}/${c.injected})`);
   }
   console.log(`  pages: ${r.unique_matched_pages}/${r.unique_injected_pages} distinct pointed pages were opened`);
-  console.log(`  wiki Read tool calls seen: ${r.read_events}${r.malformed_lines ? ` · ${r.malformed_lines} unparsable line(s)` : ""}`);
+  console.log(`  wiki opens seen: ${r.read_events} Read + ${r.bash_open_events} Bash${r.malformed_lines ? ` · ${r.malformed_lines} unparsable line(s)` : ""}`);
   console.log(ko ? "  집계 제외:" : "  not counted:");
   for (const b of r.blind_spots) console.log(`    - ${b}`);
   if (scope) printLedgerSection(resolve(scope));

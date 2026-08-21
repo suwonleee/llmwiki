@@ -130,13 +130,37 @@ describe("downstream-read", () => {
     expect(r.read_events).toBe(0);
   });
 
-  test("Bash cat is not a Read", () => {
+  test("Bash cat of a concrete page answers the pointer — Codex-observer symmetry", () => {
     const bash = {
       type: "assistant",
       cwd: REPO,
       message: { content: [{ type: "tool_use", name: "Bash", input: { command: `cat ${REPO}/${PAGE}` } }] },
     };
-    expect(reachOf([attachment(turnBanner(REPO, [PAGE])), bash]).matched).toBe(0);
+    const r = reachOf([attachment(turnBanner(REPO, [PAGE])), bash]);
+    expect(r.matched).toBe(1);
+    expect(r.read_events).toBe(0);
+    expect(r.bash_open_events).toBe(1);
+  });
+
+  test("a Bash directory grep is not an open — only a named page counts", () => {
+    const bash = {
+      type: "assistant",
+      cwd: REPO,
+      message: { content: [{ type: "tool_use", name: "Bash", input: { command: `grep -rn foo ${REPO}/docs/wiki/` } }] },
+    };
+    const r = reachOf([attachment(turnBanner(REPO, [PAGE])), bash]);
+    expect(r.matched).toBe(0);
+    expect(r.bash_open_events).toBe(0);
+  });
+
+  test("a relative Bash open resolves against the record's cwd", () => {
+    const bash = {
+      type: "assistant",
+      cwd: REPO,
+      message: { content: [{ type: "tool_use", name: "Bash", input: { command: `sed -n '1,40p' ${PAGE}` } }] },
+    };
+    const r = reachOf([attachment(turnBanner(REPO, [PAGE])), bash]);
+    expect(r.matched).toBe(1);
   });
 
   test("a subagent's Read does not answer the main thread's pointer", () => {
