@@ -149,3 +149,27 @@ test("every README says daemon-sync heals the stale-daemon drift and that the cl
     );
   }
 });
+
+// The daily-use table. It is the only place the README makes a claim from the author's own
+// operation rather than from the design, so it carries the two things such a claim can lose:
+// the scope that keeps it honest (one developer, one machine, a date) and the commands a reader
+// runs to check it. A parity test per gap, in every language.
+test("every README's daily-use table keeps its scope caveat and its verification commands", () => {
+  for (const path of [
+    "README.md",
+    "readmes/README.ko.md",
+    "readmes/README.ja.md",
+    "readmes/README.zh.md",
+  ]) {
+    const content = read(path);
+    // measured, dated, and bounded to one machine — never a projection
+    expect(content, `${path} must date the measurement`).toContain("2026-08-21");
+    expect(content, `${path} must state the corpus size`).toContain("997");
+    // a reader must be able to reproduce every number on their own wiki
+    for (const cmd of ["llmwiki doctor", "llmwiki bench", "llmwiki downstream-read"]) {
+      expect(content, `${path} must name ${cmd}`).toContain(cmd);
+    }
+    // the unflattering row stays: dropping it would turn the table into marketing
+    expect(content, `${path} must keep the open-through number`).toContain("2.1%");
+  }
+});

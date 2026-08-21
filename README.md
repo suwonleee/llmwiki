@@ -13,6 +13,25 @@
 
 Whatever project, terminal (default/tmux/iTerm2), or coding agent (Claude Code · Codex · OpenCode) you work in, project-specific LLM knowledge **compounds** instead of evaporating.
 
+## What it looks like after 11 weeks of daily use
+
+One developer, one machine, 19 repositories, 997 pages — measured 2026-08-21, not projected.
+Everything below is a number this engine reports about itself; `llmwiki doctor`, `llmwiki bench`
+and `llmwiki downstream-read` print them on your own wiki.
+
+| Observed in daily use | Measured | Why it matters |
+| --- | --- | --- |
+| Per-session cost does not grow with the wiki | 6.7KB injected at session start on the largest repo (236 pages) | Pointer counts are capped, not proportional — the wiki can keep growing without the session tax growing with it |
+| Retrieval stays interactive | search 0.11s · per-turn hook 0.16s, same repo | The loop runs on every prompt, so anything slower would be felt |
+| Derived data is cheap to rebuild | full reindex 6.9s | The wiki itself is plain Markdown in your git history; the index is disposable |
+| Local state is bounded, not cumulative | 167MB across all 19 wikis | Capture expires with the harness's own retention window instead of growing forever |
+| One wiki, more than one agent | opens recorded from both Codex and Claude Code against the same repo | Switching agents does not restart the knowledge |
+| Delivery is measured, including when it is low | pointer open-through 2.1% | Reported rather than assumed — the same instrument caught its own sampling bug, a "0%" that had read 5 of 54 sessions |
+
+These are one person's numbers on one machine over eleven weeks, on wikis in the languages that
+person writes in. They say the engine stays cheap and stays honest at this scale; they are not a
+claim about teams, other corpora, or answer quality.
+
 ## Everything you need to do
 
 Already have Git, [Bun](https://bun.sh), and one coding agent installed? The rest is one clone and one prompt.
