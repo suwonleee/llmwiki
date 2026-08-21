@@ -226,7 +226,7 @@ wikiが何が欠けているかを自分で報告し、人間は埋める判断�
 ```
 setup.sh       ワンクリック導入（パス非依存: doctor→デーモン→フック·コマンド→インデックス）
 src/           TypeScriptエンジン（Bunランタイム、bun:sqlite内蔵 — node_modules·ビルド 0）
-  cli.ts       CLIディスパッチャ — 40超のサブコマンド: init·status·disable·index·search·lint·doctor·wiki-doctor·db-health·wiki-clean·locate·connect·save-current·update-*·quiz-*·autoupdate·consolidate·review·gaps·overview·ingest·bench·…（全リスト: このファイル末尾のHANDLERS）
+  cli.ts       CLIディスパッチャ — 40超のサブコマンド: init·status·disable·index·search·lint·doctor·wiki-doctor·db-health·daemon-sync·wiki-clean·locate·connect·save-current·update-*·quiz-*·autoupdate·consolidate·review·gaps·overview·ingest·bench·…（全リスト: このファイル末尾のHANDLERS）
   engine/
     schema.sql   リポジトリ毎のインデックススキーマ（documents·chunks·FTS5·references）
     db.ts        WikiIndex: インデックス（content_hash増分）·検索·グラフ·staleness
@@ -282,7 +282,9 @@ OpenCodeプラグインは設定ディレクトリ内のコピーです。それ
 
 - `[update] ⚠️ v… → v… available` — クローン自体が `origin` より古い
 - `[daemon] ⚠️ running code older than this clone` — 動作中のループがpull以前のコード
-  （`llmwiki doctor --fix` で再起動）
+  （`llmwiki daemon-sync` は実際に遅れているときだけ再起動し、`llmwiki doctor --fix` も全体点検の中で同じことを行う。
+  どちらも手で呼ぶ機会はまれで、`/wiki-save`・`/wiki-deep` の締めが最後の決定的ステップとして `daemon-sync` を走らせるため、
+  いつも通りセッションを閉じればデーモンは今 pull したコードの上にいる。）
 - `[opencode] ⚠️ plugin stale` — インストール済みプラグインのコピーがクローンのアダプタより古い
 
 ## アンインストール

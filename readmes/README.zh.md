@@ -222,7 +222,7 @@ wiki 自己报告缺了什么，人只提供补上它的判断。
 ```
 setup.sh       一键上手（路径无关: doctor→守护进程→钩子·命令→索引）
 src/           TypeScript 引擎（Bun 运行时，内置 bun:sqlite — 零 node_modules·构建）
-  cli.ts       CLI 调度器 — 40 余个子命令: init·status·disable·index·search·lint·doctor·wiki-doctor·db-health·wiki-clean·locate·connect·save-current·update-*·quiz-*·autoupdate·consolidate·review·gaps·overview·ingest·bench·…（完整清单: 本文件底部的 HANDLERS）
+  cli.ts       CLI 调度器 — 40 余个子命令: init·status·disable·index·search·lint·doctor·wiki-doctor·db-health·daemon-sync·wiki-clean·locate·connect·save-current·update-*·quiz-*·autoupdate·consolidate·review·gaps·overview·ingest·bench·…（完整清单: 本文件底部的 HANDLERS）
   engine/
     schema.sql   按仓库的索引 schema（documents·chunks·FTS5·references）
     db.ts        WikiIndex: 索引（content_hash 增量）·搜索·图·staleness
@@ -277,7 +277,9 @@ git pull && ./setup.sh          # 仅执行pull是不够的 — 见下文
 
 - `[update] ⚠️ v… → v… available` — 克隆本身落后于 `origin`
 - `[daemon] ⚠️ running code older than this clone` — 正在扫描的循环早于你的pull
-  （`llmwiki doctor --fix` 可重启）
+  （`llmwiki daemon-sync` 只在确实落后时重启，`llmwiki doctor --fix` 也会在完整体检中做同样的事。
+  你很少需要手动调用：`/wiki-save` 与 `/wiki-deep` 的收尾会把 `daemon-sync` 作为最后一个确定性步骤运行，
+  因此正常关闭会话后，守护进程就运行在你刚拉取的代码上。）
 - `[opencode] ⚠️ plugin stale` — 已安装的插件副本比克隆中的适配器旧
 
 ## 卸载

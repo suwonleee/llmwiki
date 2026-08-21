@@ -287,7 +287,7 @@ The wiki reports what's missing on its own; the human supplies only the judgment
 ```
 setup.sh       one-click onboarding (path-agnostic: doctor→daemon→hooks·commands→index)
 src/           TypeScript engine (Bun runtime, bun:sqlite built in — zero node_modules·build)
-  cli.ts       CLI dispatcher — 40+ subcommands: init·status·disable·index·search·lint·doctor·wiki-doctor·db-health·wiki-clean·locate·connect·save-current·update-*·quiz-*·autoupdate·consolidate·review·gaps·overview·ingest·bench·… (full registry: HANDLERS at the bottom of this file)
+  cli.ts       CLI dispatcher — 40+ subcommands: init·status·disable·index·search·lint·doctor·wiki-doctor·db-health·daemon-sync·wiki-clean·locate·connect·save-current·update-*·quiz-*·autoupdate·consolidate·review·gaps·overview·ingest·bench·… (full registry: HANDLERS at the bottom of this file)
   engine/
     schema.sql   per-repo index schema (documents·chunks·FTS5·references)
     db.ts        WikiIndex: indexing(content_hash incremental)·search·graph·staleness
@@ -343,7 +343,10 @@ code when it started, and the OpenCode plugin is a copy under your config direct
 
 - `[update] ⚠️ v… → v… available` — the clone itself is behind `origin`
 - `[daemon] ⚠️ running code older than this clone` — the loop that is sweeping predates your pull
-  (`llmwiki doctor --fix` restarts it)
+  (`llmwiki daemon-sync` restarts it when it is actually behind, and `llmwiki doctor --fix` does the
+  same inside a full health run). You will rarely reach for either: the `/wiki-save` and
+  `/wiki-deep` close-outs run `daemon-sync` as their last deterministic step, so a session you close
+  normally leaves the daemon on the code you just pulled.
 - `[opencode] ⚠️ plugin stale` — the installed plugin copy is older than the clone's adapter
 
 ## Uninstall

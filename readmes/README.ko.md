@@ -228,7 +228,7 @@ MCP 서버·Docker·외부 데이터베이스·벡터 DB·클라우드 서비스
 ```
 setup.sh       원클릭 온보딩 (경로 무관: doctor→데몬→훅·커맨드→인덱스)
 src/           TypeScript 엔진 (Bun 런타임, bun:sqlite 내장 — node_modules·빌드 0)
-  cli.ts       CLI 디스패처 — 서브커맨드 40여 개: init·status·disable·index·search·lint·doctor·wiki-doctor·db-health·wiki-clean·locate·connect·save-current·update-*·quiz-*·autoupdate·consolidate·review·gaps·overview·ingest·bench·… (전체 목록: 이 파일 하단의 HANDLERS)
+  cli.ts       CLI 디스패처 — 서브커맨드 40여 개: init·status·disable·index·search·lint·doctor·wiki-doctor·db-health·daemon-sync·wiki-clean·locate·connect·save-current·update-*·quiz-*·autoupdate·consolidate·review·gaps·overview·ingest·bench·… (전체 목록: 이 파일 하단의 HANDLERS)
   engine/
     schema.sql   per-repo 인덱스 스키마 (documents·chunks·FTS5·references)
     db.ts        WikiIndex: 인덱싱(content_hash 증분)·검색·그래프·staleness
@@ -284,7 +284,9 @@ git pull && ./setup.sh          # pull 만으로는 부족합니다 — 아래 �
 
 - `[update] ⚠️ v… → v… available` — 클론 자체가 `origin` 보다 뒤처짐
 - `[daemon] ⚠️ running code older than this clone` — 돌고 있는 루프가 pull 이전 코드
-  (`llmwiki doctor --fix` 로 재시작)
+  (`llmwiki daemon-sync` 가 실제로 뒤처졌을 때만 재시작하고, `llmwiki doctor --fix` 도 전체 점검 안에서 같은 일을 한다.
+  둘 다 손으로 부를 일은 드물다 — `/wiki-save`·`/wiki-deep` 마감이 마지막 결정론 단계로 `daemon-sync` 를 돌리므로,
+  평소대로 세션을 닫으면 데몬은 방금 pull 한 코드 위에 있다.)
 - `[opencode] ⚠️ plugin stale` — 설치된 플러그인 사본이 클론의 어댑터보다 오래됨
 
 ## 제거

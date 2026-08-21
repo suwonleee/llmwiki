@@ -127,3 +127,25 @@ describe("public onboarding documentation", () => {
     for (const path of surfaces) expect(read(path)).not.toContain("wiki-fast");
   });
 });
+
+// A parity test per documented gap (the convention this file already follows): the daemon-drift
+// bullet now names the command that fixes it AND the fact that a normal close-out already ran it.
+// The English text drifting ahead of the translations is the failure mode these sections are most
+// exposed to, so every language is asserted, not just the source one.
+test("every README says daemon-sync heals the stale-daemon drift and that the close-out runs it", () => {
+  for (const path of [
+    "README.md",
+    "readmes/README.ko.md",
+    "readmes/README.ja.md",
+    "readmes/README.zh.md",
+  ]) {
+    const content = read(path);
+    expect(content, `${path} must name the command`).toContain("llmwiki daemon-sync");
+    // …and must not leave `doctor --fix` as the only route, which is what sent people to a full
+    // health run for a one-line fix.
+    expect(content, `${path} must point at the close-out`).toContain("/wiki-save");
+    expect(content, `${path} must list the command in the dispatcher registry`).toContain(
+      "db-health·daemon-sync·wiki-clean",
+    );
+  }
+});
