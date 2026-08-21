@@ -29,7 +29,7 @@ import { sourceForKind } from "./source.ts";
 import { collectGroundedFacts, assessGrounding } from "./grounding.ts";
 import { updateReferences } from "./refs.ts";
 import { appendLog, ensureSkeleton } from "./update.ts";
-import { effectiveKo, getConfig, isRepoKorean, renderBodyStyleRule, type WikiConfig } from "./config.ts";
+import { effectiveKo, getConfig, isRepoKorean, renderBodyStyleRule, renderMarkdownStyleRule, type WikiConfig } from "./config.ts";
 import { Linter, type LintIssue, type WikiIndexLike } from "./lint.ts";
 import { MODEL_HEAVY, MODEL_LIGHT } from "./models.ts";
 import { generativeModel } from "./session-model.ts";
@@ -167,6 +167,7 @@ OUTPUT CONTRACT (strict):
 - Body: a one-line TL;DR then fact bullets. EVERY new fact bullet ends with a footnote \`[^sN]\`, and the file
   ends with the matching \`[^sN]: {transcript_filename}\` definitions (keep existing ones on a merge).
 ${renderBodyStyleRule()}
+${renderMarkdownStyleRule()}
 - Ground every NEW claim ONLY in the extract below. Do not invent. Build the merge from the extract — never
   re-summarize the existing page's prose into new claims.
 - Write in the SAME language as the extract.

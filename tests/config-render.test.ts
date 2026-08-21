@@ -3,7 +3,7 @@
 import { test, expect } from "bun:test";
 import {
   defaults, isStockConventions, renderDomainBullets, renderDomainList,
-  renderBodyStyleRule, renderGroundingRule, renderTerminologyLine, renderRuleCategories, renderRuleHumanQueue,
+  renderBodyStyleRule, renderMarkdownStyleRule, renderGroundingRule, renderTerminologyLine, renderRuleCategories, renderRuleHumanQueue,
 } from "../src/engine/config.ts";
 import { schemaText, writePromptTemplate } from "../src/engine/autoupdate.ts";
 
@@ -27,6 +27,10 @@ test("schemaText renders the canonical stock prompt", () => {
     - Inside a section: one concrete claim, decision, result, or action per \`-\`; supporting detail at \`    -\`; deeper detail at \`        -\`. No fourth level.
     - A bullet enumerating more than three items becomes a parent plus one child per item — never a \`·\`-joined line.
     - Endings: noun phrases or telegraphic endings natural to the page language; keep verbs when actor, action, condition, or outcome would be unclear. No abstract framing, no child repeating its parent.
+- Markdown mechanics (advisory, new pages only):
+    - Link text names its target — a page title or what the reader gets. Never \`here\`, \`this\`, or a bare URL.
+    - Fenced code blocks with the language declared (\`\`\`ts, \`\`\`bash); never indent-only blocks.
+    - Tables only for parallel items sharing the same columns. Anything ragged, prose-filled, or under three rows is a list.
 - Write the page body in the SAME language as the session transcript / conversation (match the source; do not force or translate to a fixed language). Use English if the source language is unclear.
 - Regardless of the prose language, keep code identifiers, file paths, function/API names, CLI commands, config keys, and error strings VERBATIM in their original form (do not translate or transliterate them) — they are the language-invariant search anchors of this wiki.
 - Terminology (lint-enforced, advisory): avoid jargon a person wouldn't naturally say — e.g. when writing Korean prefer \`방향성\` (NOT 진북/북극성/north-star) and \`업데이트\`/\`update\` (NOT distill).`);
@@ -75,4 +79,19 @@ test("custom conventions take the generic branch with the config's own words", (
   expect(renderRuleHumanQueue("en", c)).toContain("(1_goal)");
   c.bannedTerms = [["foo", "bar"]];
   expect(renderTerminologyLine(c)).toContain("`foo` (prefer `bar`)");
+});
+
+// Adopted from Google's Markdown style guide (google/styleguide docguide, CC-BY 3.0), paraphrased.
+// Advisory by design: it rides the authoring prompts, and no lint rule enforces it — the corpus is
+// never swept retroactively. The two rules deliberately NOT adopted are pinned here too, because
+// "we considered and rejected these" is the part a future edit is most likely to undo by accident.
+test("markdown mechanics rule carries the three adopted rules and neither rejected one", () => {
+  const rule = renderMarkdownStyleRule();
+  expect(rule).toContain("Link text names its target");
+  expect(rule).toContain("Fenced code blocks with the language declared");
+  expect(rule).toContain("Tables only for parallel items");
+  // rejected: an 80-column wrap (fights Korean prose) and lazy `1.` numbering (collides with the
+  // numbered-section convention, where the number is a label a reader cites)
+  expect(rule).not.toContain("80");
+  expect(rule).not.toMatch(/lazy/i);
 });

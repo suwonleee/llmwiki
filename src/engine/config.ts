@@ -509,6 +509,25 @@ export function renderBodyStyleRule(): string {
   ].join("\n");
 }
 
+/**
+ * Markdown mechanics, advisory. Three rules adopted from Google's Markdown style guide
+ * (google/styleguide docguide, CC-BY 3.0) — the three that say something our body-style rule
+ * does not. Paraphrased, not copied, and deliberately NOT lint-enforced: they apply to pages
+ * being written now, never as a retroactive sweep over the corpus.
+ *
+ * Not adopted, on purpose: an 80-column wrap (fights Korean prose, which does not break on
+ * spaces the way the guide assumes) and lazy `1.` numbering (collides with our numbered-section
+ * convention, where the number is a section label a reader cites).
+ */
+export function renderMarkdownStyleRule(): string {
+  return [
+    "- Markdown mechanics (advisory, new pages only):",
+    "    - Link text names its target — a page title or what the reader gets. Never `here`, `this`, or a bare URL.",
+    "    - Fenced code blocks with the language declared (```ts, ```bash); never indent-only blocks.",
+    "    - Tables only for parallel items sharing the same columns. Anything ragged, prose-filled, or under three rows is a list.",
+  ].join("\n");
+}
+
 // Cold-start operating-rule fragments (rule 2's category listing + rule 3's human-queue line).
 // Stock conventions get the historical artisanal glosses verbatim; custom configs get a
 // mechanical `dir (guide)` render in the config's own words.
@@ -522,6 +541,23 @@ export function renderRuleCategories(lang: "ko" | "en", cfg: WikiConfig = getCon
   return lang === "ko"
     ? `2) 다음 작업에 도움될 것만 기록한다(잡내용 금지). 카테고리(읽기 순): ${cats}.`
     : `2) Record only what helps future work (no noise). Categories (reading order): ${cats}.`;
+}
+
+/**
+ * The cold-start's authoring rule, compressed to what a session must know BEFORE it authors:
+ * don't write mid-session, close with the save command, and where the full rules live.
+ *
+ * The long form (categories · human queue · grounding · frontmatter) is not dropped — it is
+ * carried by the /wiki-save skill at the moment authoring actually happens, and by
+ * `llmwiki conventions` for harnesses with no skill layer. Injecting it at every cold start
+ * bought a duplicate of both and cost ~1.3KB of every session, including the many that never
+ * touch the wiki. Measured on the largest wiki here (236 pages): the rules block was 24.2% of a 7.7KB cold start.
+ */
+export function renderRuleAuthoringBrief(lang: "ko" | "en", cfg: WikiConfig = getConfig()): string {
+  const q = cfg.queueDir;
+  return lang === "ko"
+    ? `2) 저작은 마감에서 — 작업 중에는 위키 페이지를 만들거나 고치지 않는다(예외: 사람이 '지금 적어두라'고 하거나 /wiki-* 를 부른 경우). 실질 작업이 있었으면 /wiki-save 로 닫고, 주기 딥패스는 /wiki-deep. 카테고리·${q}(사람 판단)·근거·frontmatter 규칙은 그 스킬이 싣는다 — 스킬이 없으면 \`llmwiki conventions\`.`
+    : `2) Authoring happens at close-out — do NOT create or edit wiki pages mid-session (exception: the human says to record now, or calls any /wiki-* command). If there was real work, close with /wiki-save; the periodic deep pass is /wiki-deep. The category · ${q} (human judgment) · grounding · frontmatter rules ride with that skill — without a skill layer, \`llmwiki conventions\`.`;
 }
 
 export function renderRuleHumanQueue(lang: "ko" | "en", cfg: WikiConfig = getConfig()): string {

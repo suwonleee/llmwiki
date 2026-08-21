@@ -33,7 +33,7 @@ import * as capture from "./capture.ts";
 import * as update from "./update.ts";
 import {
   domainToDir, effectiveKo, getConfig, isHumanReviewDir, isStockConventions,
-  renderBodyStyleRule, renderDomainBullets, renderDomainList, renderGroundingRule, renderTerminologyLine,
+  renderBodyStyleRule, renderMarkdownStyleRule, renderDomainBullets, renderDomainList, renderGroundingRule, renderTerminologyLine,
   type WikiConfig,
 } from "./config.ts";
 
@@ -84,6 +84,7 @@ ${renderDomainBullets(cfg)}
 ${renderGroundingRule(cfg)}
 - Usefulness rule: everything written must help the NEXT work session. No filler, no restating the obvious.
 ${renderBodyStyleRule()}
+${renderMarkdownStyleRule()}
 - Write the page body in the SAME language as the session transcript / conversation (match the source; do not force or translate to a fixed language). Use English if the source language is unclear.
 - Regardless of the prose language, keep code identifiers, file paths, function/API names, CLI commands, config keys, and error strings VERBATIM in their original form (do not translate or transliterate them) — they are the language-invariant search anchors of this wiki.
 ${renderTerminologyLine(cfg)}`;

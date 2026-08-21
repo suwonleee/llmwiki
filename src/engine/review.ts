@@ -7,7 +7,7 @@
 // ADVISORY ONLY: review never edits existing pages. It emits a report (default: print;
 // --commit writes docs/wiki/0_review/semantic-review-<date>.md, status: draft) for a
 // human to act on. Single WRITE pass (no VERIFY second model).
-import { getConfig, isRepoKorean, renderBodyStyleRule } from "./config.ts";
+import { getConfig, isRepoKorean, renderMarkdownStyleRule, renderBodyStyleRule } from "./config.ts";
 import { today as todayLocal } from "./today.ts";
 import { createHash } from "node:crypto";
 import { basename, join, relative as relpath, resolve } from "node:path";
@@ -88,6 +88,7 @@ Output format (strict): the ENTIRE output is saved verbatim as a \`.md\` file. N
   tags: [review, semantic, meta], status: draft, source: semantic-lint.
 - Body sections (these 5, in fixed order, no emoji), headings written in the report's language: Contradiction / Stale claim / Missing concept page / Cross-references & next questions / Grounding & citations. (Korean example: \`## 모순\` · \`## 낡은 주장\` · \`## 개념 누락\` · \`## 교차참조·다음 질문\` · \`## 근거·인용 부실\`.)
 ${renderBodyStyleRule()}
+${renderMarkdownStyleRule()}
 - Terminology (lint-enforced, advisory): avoid jargon a person wouldn't say — e.g. when writing Korean prefer \`방향성\` (not 진북/북극성/north-star) and \`업데이트\`/\`update\` (not distill).
 
 {scopenote}=== INPUT: wiki pages ===
