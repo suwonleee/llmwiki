@@ -284,3 +284,76 @@ describe("josa strip + identity witness (2026-08-04 retrieval quality pass)", ()
     expect(out).toBe(""); // 회의(2자) sits in a title, but identity promotion needs ≥3 dense chars
   });
 });
+
+// A pointer's stated reason. Showing every matched term was tried and discarded: the score gate
+// already requires each pointer to match the prompt, so all three printed the same list and the
+// "reason" asserted an equal relevance the engine never established. Only IDENTITY terms — a
+// prompt word in the page's title/description — differ between pointers, so only those are shown.
+describe("pointer reason", () => {
+  // Rendered per repo language; pinned here so the suite does not depend on ambient LLMWIKI_LANG.
+  const LABEL = /(제목|titled):/;
+  let root: string;
+  let wiki: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "llmwiki-why-"));
+    wiki = join(root, "docs", "wiki");
+    mkdirSync(join(wiki, "5_topic"), { recursive: true });
+    mkdirSync(join(wiki, "2_milestone"), { recursive: true });
+    // hub: the prompt's words are in the TITLE
+    writeFileSync(
+      join(wiki, "5_topic", "quality-loop.md"),
+      "---\ntitle: 품질 루프 — 생성 후 검수\n---\n" +
+        "품질 루프는 생성 직후 결정적 검수를 돌리고 표적 보강을 수행한다. 트랜스크립트 기준. ".repeat(10),
+    );
+    // mention-only: the same words appear in the BODY, never in the title
+    writeFileSync(
+      join(wiki, "2_milestone", "unrelated-run.md"),
+      "---\ntitle: 오케스트레이터 철거 실측\n---\n" +
+        "철거 과정에서 품질 루프 검수 절차를 그대로 두었다. 트랜스크립트 큐도 유지. ".repeat(10),
+    );
+    new WikiIndex(root).indexAll();
+  });
+
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  test("a title match states its reason; a body-only match stays silent", () => {
+    const out = buildTurnContext(root, "품질 루프 검수 절차를 확인하고 싶다");
+    const hub = out.split("\n").find((l) => l.includes("quality-loop.md")) ?? "";
+    const mention = out.split("\n").find((l) => l.includes("unrelated-run.md")) ?? "";
+
+    // the label is bilingual (제목 / titled) and another suite may have pinned LLMWIKI_LANG —
+    // assert the CONTRACT, not the ambient language
+    expect(hub).toMatch(LABEL);
+    expect(hub).toMatch(/품질|루프/);
+    // the discriminating half: a page that only MENTIONS the words claims no reason
+    expect(mention).not.toMatch(LABEL);
+  });
+
+  test("two-character Korean terms reach the reason even though they cannot promote the score", () => {
+    // 품질·루프·검수 are 2 chars each — below the identity-promotion floor that protects scoring
+    // from everyday vocabulary. Stating that a word is in the title is a fact about the title,
+    // not a relevance claim, so the reason carries no such floor.
+    const out = buildTurnContext(root, "품질 루프 검수 절차를 확인하고 싶다");
+    const hub = out.split("\n").find((l) => l.includes("quality-loop.md")) ?? "";
+    expect(hub).toMatch(new RegExp(`${LABEL.source}\\s*.*(품질|루프)`));
+  });
+
+  test("one concept spelled two ways is one reason, not two slots", () => {
+    // "L-GATE" and "GATE" both match a title that holds L-GATE; the shorter is a substring of the
+    // longer and must not spend a second slot restating it.
+    mkdirSync(join(wiki, "3_decision"), { recursive: true });
+    writeFileSync(
+      join(wiki, "3_decision", "lgate.md"),
+      "---\ntitle: L-GATE 접지 게이트 계약\n---\n" +
+        "L-GATE 는 출력측 신뢰 장치다. 스코프 감사와 본문 검증 두 단계로 나뉜다. ".repeat(10),
+    );
+    new WikiIndex(root).indexAll();
+    const line = buildTurnContext(root, "L-GATE 접지 게이트 계약이 뭐였지")
+      .split("\n")
+      .find((l) => l.includes("lgate.md")) ?? "";
+    expect(line).toContain("L-GATE");
+    // GATE is a substring of L-GATE — it must not appear as its own listed reason
+    expect(line).not.toMatch(new RegExp(`${LABEL.source}[^)]*·GATE`, "i"));
+  });
+});

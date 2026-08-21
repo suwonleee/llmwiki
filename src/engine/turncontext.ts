@@ -31,6 +31,9 @@ import { COLD_INDEX_RELATIVE_PATH } from "./cold-index.ts";
 
 const MAX_TERMS = 12;
 const MAX_PAGES = 3;
+// Terms shown as a pointer's reason. Three is the point where the reason still reads as a reason
+// rather than a term dump — and the per-pointer cost stays inside the noise of a 612B emission.
+const WHY_MAX_TERMS = 3;
 // Header language + L0/meta page names resolve per repo at call time (per-repo config).
 // The banner names the clone it is speaking for, because the pointer lines under it are
 // REPO-RELATIVE and a session does not always stay in the repository it started in: in hook mode
@@ -270,7 +273,8 @@ export function buildTurnContext(repo: string, prompt: string, sessionId = ""): 
 
     const w = new WikiIndex(repo);
     if (!existsSync(w.dbPath)) return ""; // no index yet — stay silent, never create state
-    const head = HEADS[isRepoKorean(w.root) ? "ko" : "en"](displayRoot(w.root)); // the same answer the writers use
+    const koRepo = isRepoKorean(w.root);
+    const head = HEADS[koRepo ? "ko" : "en"](displayRoot(w.root)); // the same answer the writers use
 
     // HQE-lite (P1): fold prior-turn terms into this turn's query. Persist the merged
     // weights immediately so even a silent turn feeds the next one.
@@ -318,7 +322,7 @@ export function buildTurnContext(repo: string, prompt: string, sessionId = ""): 
     const curSet = new Set([...terms, ...subFloor].map((t) => t.toLowerCase()));
     const byPage = new Map<
       string,
-      { title: string; terms: Set<string>; idTerms: Set<string>; cur: number; hits: number }
+      { title: string; terms: Set<string>; idTerms: Set<string>; shownIdTerms: Set<string>; cur: number; hits: number }
     >();
     for (const r of rows) {
       const rel = String(r.relative_path ?? "");
@@ -332,7 +336,14 @@ export function buildTurnContext(repo: string, prompt: string, sessionId = ""): 
       const fresh = !byPage.has(rel);
       const e =
         byPage.get(rel) ??
-        { title: String(r.title ?? base), terms: new Set<string>(), idTerms: new Set<string>(), cur: 0, hits: 0 };
+        {
+          title: String(r.title ?? base),
+          terms: new Set<string>(),
+          idTerms: new Set<string>(),
+          shownIdTerms: new Set<string>(),
+          cur: 0,
+          hits: 0,
+        };
       // A term in the page's IDENTITY (title/filename/description) is a stronger witness than one
       // in a body chunk — it is the hub-vs-mention distinction. Query helpers label provenance
       // explicitly: identity rows can contribute identity terms, but never inflate the body-hit
@@ -361,6 +372,13 @@ export function buildTurnContext(repo: string, prompt: string, sessionId = ""): 
         // Latin). A 2-char word in a title is everyday vocabulary, not a topic — promoting it let
         // "내일 회의 몇 시더라" clear the gate off one title's "회의" (measured filler FP).
         if (inIdentity && [...t].length >= (/^[\x00-\x7F]+$/.test(t) ? 4 : 3)) e.idTerms.add(lt);
+        // The length floor above protects the SCORE — a 2-char word in a title is everyday
+        // vocabulary and promoting it was a measured false positive. It is the wrong floor for the
+        // pointer's stated reason: 품질·루프·검수 are 2 chars each and are most of what a Korean
+        // technical prompt is made of, so gating the explanation on it left the reason blank on
+        // exactly those prompts. Saying "this word is in the title" is a fact about the title, not
+        // a claim about relevance, so it carries no floor — and it never touches the gate.
+        if (inIdentity) e.shownIdTerms.add(lt);
       }
       byPage.set(rel, e);
     }
@@ -394,8 +412,31 @@ export function buildTurnContext(repo: string, prompt: string, sessionId = ""): 
       writeState(sp, state);
     }
 
+    // Why this page, in the engine's own evidence — but only the part that DISCRIMINATES.
+    //
+    // Showing every matched term was tried first and is useless here: the score gate already
+    // requires each pointer to match the current prompt, so all three pointers print the same
+    // list (measured on the largest wiki here (236 pages): "품질·루프·검수" on all three, including the two pages
+    // that merely mention the words). A reason identical across the set is worse than none —
+    // it asserts equal relevance the engine never established.
+    //
+    // What differs between pointers is IDENTITY: a prompt term in the page's title/description
+    // is why that page is a hub for the question, not merely a page the word appears in. So only
+    // identity terms are shown, and a body-only match prints nothing — the absence is itself the
+    // signal. Current-prompt terms only; carried terms explain the session, not this question.
+    const why = (e: { shownIdTerms: Set<string> }): string => {
+      const shown: string[] = [];
+      for (const lt of [...e.shownIdTerms].filter((t) => curSet.has(t)).sort((a, b) => b.length - a.length)) {
+        // "L-GATE" and "GATE" are one reason wearing two spellings; keep the longer, drop the
+        // substring, so three slots hold three reasons instead of three surface forms of one.
+        if (shown.some((s) => s.toLowerCase().includes(lt))) continue;
+        shown.push(scoreTerms.find((t) => t.toLowerCase() === lt) ?? lt);
+        if (shown.length >= WHY_MAX_TERMS) break;
+      }
+      return shown.length ? `  (${koRepo ? "제목" : "titled"}: ${shown.join("·")})` : "";
+    };
     const L = [head];
-    for (const [rel, e] of pages) L.push(`  • ${e.title}  →  ${rel}`);
+    for (const [rel, e] of pages) L.push(`  • ${e.title}  →  ${rel}${why(e)}`);
     return L.join("\n");
   } catch {
     return ""; // fail-safe: a turn-context failure must never surface into the session
