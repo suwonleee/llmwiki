@@ -57,6 +57,7 @@ import {
   pickTranscripts,
   scanTranscript,
   summarizeDownstreamRead,
+  claudeTranscriptsForRepo,
 } from "./engine/downstream-read.ts";
 import {
   claudeLedgerReads,
@@ -1195,12 +1196,25 @@ function cmdDownstreamRead(p: Parsed) {
   const scope = p.positionals[0] ?? "";
   const transcript = typeof p.flags["--transcript"] === "string" ? (p.flags["--transcript"] as string) : "";
   const limitFlag = typeof p.flags["--limit"] === "string" ? Number(p.flags["--limit"]) : NaN;
+  const cap = Number.isFinite(limitFlag) ? limitFlag : 30;
+  // A scoped question gets a scoped sample. Picking the newest N machine-wide and only THEN
+  // filtering to this repo answered a different question than the one asked — see
+  // claudeTranscriptsForRepo. Only the unscoped ("all repos") call keeps the global pick.
+  const scoped = scope ? claudeTranscriptsForRepo(resolve(scope)) : [];
   const files = transcript
     ? [transcript]
-    : pickTranscripts(discoverClaudeTranscripts(), Number.isFinite(limitFlag) ? limitFlag : 30);
+    : pickTranscripts(scope ? scoped : discoverClaudeTranscripts(), cap);
   const r = summarizeDownstreamRead(files.map((f) => scanTranscript(f)), scope ? resolve(scope) : "");
   const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
-  console.log(`=== downstream read — ${files.length} transcript(s)${scope ? ` · ${resolve(scope)}` : " · all repos"} ===`);
+  const sample = scope && !transcript ? ` of ${scoped.length} for this repo` : "";
+  console.log(`=== downstream read — ${files.length} transcript(s)${sample}${scope ? ` · ${resolve(scope)}` : " · all repos"} ===`);
+  if (scope && !transcript && scoped.length > files.length) {
+    console.log(
+      ko
+        ? `  ※ 최신 ${files.length}개만 스캔 (--limit 로 확대) — 이 레포 전체는 ${scoped.length}개`
+        : `  note: newest ${files.length} scanned (raise with --limit) — this repo has ${scoped.length}`,
+    );
+  }
   // No early return: a fresh machine has no Claude history yet, and that is exactly when the
   // ledger section below carries the whole answer.
   if (!r.injected) {

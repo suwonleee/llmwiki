@@ -1,11 +1,12 @@
 // Did an injected pointer actually get opened? The parser's whole job is to answer that WITHOUT
 // counting itself: a transcript holds the injection, every tool result that ever grepped for it,
 // and the assistant's own prose about it. Most of these cases are that distinction.
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  claudeTranscriptsForRepo,
   discoverClaudeTranscripts,
   pickTranscripts,
   scanTranscript,
@@ -241,5 +242,54 @@ describe("downstream-read", () => {
     const scan = scanTranscript(join(mkdtempSync(join(tmpdir(), "llmwiki-gone-")), "missing.jsonl"));
     expect(scan.pointers.length).toBe(0);
     expect(scan.reads.length).toBe(0);
+  });
+});
+
+// Scoped sampling. Asking about ONE repo used to take the newest N transcripts machine-wide and
+// filter the pointers afterwards, so the sample was whatever repo had been busiest lately —
+// measured 2026-08-21 on the largest wiki here: 5 of its 54 sessions were inside the newest 30, and the
+// resulting "0.0%" described 6% of its history while reading as a verdict on all of it. Scoping
+// first turned the same repo's real number into 2.1%.
+describe("claudeTranscriptsForRepo", () => {
+  const savedHome = process.env.HOME;
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  // A Claude transcript states its own cwd; the engine reads the repo from there rather than
+  // from the harness's encoded directory name.
+  function fakeHome(sessions: Array<{ file: string; cwd: string }>): string {
+    const h = mkdtempSync(join(tmpdir(), "llmwiki-home-"));
+    dirs.push(h);
+    const proj = join(h, ".claude", "projects", "encoded-name");
+    mkdirSync(proj, { recursive: true });
+    for (const s of sessions) {
+      writeFileSync(
+        join(proj, s.file),
+        JSON.stringify({ type: "user", cwd: s.cwd, message: { content: [] } }) + "\n",
+      );
+    }
+    return h;
+  }
+
+  test("only the asked-about repo's sessions are returned", () => {
+    process.env.HOME = fakeHome([
+      { file: "a.jsonl", cwd: REPO },
+      { file: "b.jsonl", cwd: OTHER },
+      { file: "c.jsonl", cwd: REPO },
+    ]);
+    const mine = claudeTranscriptsForRepo(REPO);
+    expect(mine.length).toBe(2);
+    expect(mine.every((p) => p.endsWith("a.jsonl") || p.endsWith("c.jsonl"))).toBe(true);
+    expect(claudeTranscriptsForRepo(OTHER).length).toBe(1);
+  });
+
+  test("a repo with no sessions returns empty — the caller reports not-measured, never 0%", () => {
+    process.env.HOME = fakeHome([{ file: "a.jsonl", cwd: OTHER }]);
+    expect(claudeTranscriptsForRepo(REPO)).toEqual([]);
   });
 });

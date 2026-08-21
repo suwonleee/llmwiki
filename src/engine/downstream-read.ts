@@ -21,7 +21,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { claudeProjectDirs } from "./sources/claude.ts";
+import { claudeProjectDirs, discoverClaudeRoutes } from "./sources/claude.ts";
 
 export type Channel = "turn_context" | "cold_start";
 
@@ -299,6 +299,30 @@ function summarize(scans: readonly TranscriptScan[]): DownstreamReadReport {
       "a pointer's TITLE can answer a prompt without the page being opened",
     ],
   };
+}
+
+/**
+ * The transcripts belonging to ONE repository, newest first.
+ *
+ * Without this, asking "how is my repo's injection doing" scanned the newest N transcripts
+ * MACHINE-WIDE and only then filtered the pointers to that repo — so the sample was whatever
+ * repository happened to be busiest lately. Measured 2026-08-21 on the largest wiki here: 54 sessions
+ * and only 5 of them were inside the newest 30, making a "0.0% (0/18)" headline that described
+ * 6% of the repo's history while reading as a verdict on all of it.
+ *
+ * The repo of a transcript is read from the transcript itself (`discoverClaudeRoutes`, which is
+ * byte-capped), not guessed from Claude's encoded directory name — that encoding is the
+ * harness's, and a lossy guess here would silently drop sessions rather than fail loudly.
+ * Returns [] when the repo has no sessions, which the caller must report as not-measured.
+ */
+export function claudeTranscriptsForRepo(root: string): string[] {
+  const want = norm(resolve(root));
+  const out: string[] = [];
+  for (const r of discoverClaudeRoutes()) {
+    if (!r.repo) continue;
+    if (norm(resolve(r.repo)) === want) out.push(resolve(r.path));
+  }
+  return out;
 }
 
 // Claude session transcripts on this machine. Subagent files are excluded for the same reason
