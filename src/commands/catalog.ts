@@ -66,6 +66,7 @@ export const COMMANDS = [
   { name: "overview", group: "Maintain the wiki", usage: "overview <workspace> [--normalize|--check]", summary: "Normalize the bounded overview entry point." },
   { name: "migrate", group: "Maintain the wiki", usage: "migrate <workspace> [--commit] [--map old=new,...]", summary: "Plan or apply configured wiki-structure migration." },
   { name: "db-health", group: "Maintain the wiki", usage: "db-health <workspace> [--notice]", summary: "Inspect derived database integrity and storage." },
+  { name: "daemon-sync", group: "Maintain the wiki", usage: "daemon-sync", summary: "Restart the capture daemon iff it predates the code on disk (close-out hygiene; one line, always exit 0)." },
   { name: "compact", group: "Maintain the wiki", usage: "compact <workspace> [--commit]", summary: "Plan or apply eligible derived-database compaction." },
   { name: "wiki-clean", group: "Maintain the wiki", usage: "wiki-clean <workspace> [--date YYYY-MM-DD] [--commit]", summary: "Plan or apply deterministic wiki cleanup." },
   { name: "wiki-clean-apply", group: "Maintain the wiki", usage: "wiki-clean-apply <workspace> --review FILE --commit", summary: "Apply accepted ambiguous cleanup candidates." },

@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { newestEngineSourceMtime, parseElapsedSeconds } from "../src/engine/daemon-control.ts";
+import { daemonFreshness, newestEngineSourceMtime, parseElapsedSeconds } from "../src/engine/daemon-control.ts";
 import { tempDir } from "./support/git-repo.ts";
 
 describe("elapsed-time parsing", () => {
@@ -81,4 +81,18 @@ describe("newest loaded engine source", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+// daemonFreshness: the close-out's one-line hygiene question, factored from doctor so
+// /wiki-save · /wiki-deep can ask it without a full health run. The states matter more than the
+// numbers: "absent" and "unknown" must stay distinct from "fresh", because a caller that restarts
+// on anything-but-fresh would kill daemons on platforms that simply cannot date a process.
+test("no running daemon reports absent, never stale", () => {
+  // The suite's shimmed process table reports no watcher (tests replace ps/pgrep with inert
+  // shims precisely so a test cannot see the developer's real processes).
+  const f = daemonFreshness();
+  expect(["absent", "unknown", "fresh", "stale"]).toContain(f.state);
+  if (f.state === "stale") {
+    expect(f.behindMinutes).toBeGreaterThanOrEqual(1);
+    expect(f.newestPath.endsWith(".ts")).toBe(true);
+  }
 });

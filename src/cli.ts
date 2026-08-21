@@ -30,7 +30,7 @@ import {
   verifyHarnessPath,
   type Harness,
 } from "./engine/harness-locate.ts";
-import { restartDaemon, watchProcessRunning } from "./engine/daemon-control.ts";
+import { daemonFreshness, restartDaemon, watchProcessRunning } from "./engine/daemon-control.ts";
 import { envValueOutsideRepoFiles } from "./engine/env-policy.ts";
 import { autoConnect, renderHandoff } from "./engine/harness-autoconnect.ts";
 import * as autoupdate from "./engine/autoupdate.ts";
@@ -1356,6 +1356,29 @@ function cmdConfig(p: Parsed) {
 // Print the wiki conventions an LLM/skill must follow — rendered from the effective config.
 // Skills defer to this output whenever a custom llmwiki.config.toml is active, so skill prose
 // never hardcodes category names (single source of truth).
+// One-line engine hygiene for the close-out: restart the capture daemon iff it predates the code
+// on disk. `doctor --fix` answers the same question inside a full health run; this is the cheap
+// spelling the /wiki-save and /wiki-deep procedures call, so it must stay one line and exit 0
+// always — close-out hygiene must never fail a close-out.
+function cmdDaemonSync() {
+  try {
+    const f = daemonFreshness();
+    if (f.state === "stale") {
+      const r = restartDaemon();
+      console.log(
+        ko
+          ? `daemon-sync: ${f.behindMinutes}분 뒤처짐 → ${r.restarted ? "재시작 완료" : r.detail}`
+          : `daemon-sync: ${f.behindMinutes} minute(s) behind → ${r.restarted ? "restarted" : r.detail}`,
+      );
+    } else {
+      const label = { absent: ko ? "데몬 없음" : "no daemon", unknown: ko ? "판정 불가 (건드리지 않음)" : "cannot tell (left alone)", fresh: ko ? "최신" : "fresh" }[f.state];
+      console.log(`daemon-sync: ${label}`);
+    }
+  } catch {
+    console.log("daemon-sync: skipped");
+  }
+}
+
 function cmdConventions(p: Parsed) {
   const c = getConfig(p.positionals[0] ?? process.cwd());
   console.log(`# wiki conventions (source: ${c.source})`);
@@ -1586,6 +1609,7 @@ const HANDLERS: Record<CommandName, (p: Parsed) => void | Promise<void>> = {
   "state-path": cmdStatePath,
   config: cmdConfig,
   conventions: cmdConventions,
+  "daemon-sync": cmdDaemonSync,
   migrate: MAINTENANCE_HANDLERS.migrate,
   "db-health": MAINTENANCE_HANDLERS["db-health"],
   compact: MAINTENANCE_HANDLERS.compact,

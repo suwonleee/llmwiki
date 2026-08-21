@@ -358,6 +358,40 @@ export function watchPids(): number[] | null {
   return WINDOWS ? watchPidsWindows(normalizeConfigPath(watchScript())) : watchPidsFromProc(watchScript());
 }
 
+export type DaemonFreshness =
+  | { state: "absent" }
+  | { state: "unknown" } // running, but this platform cannot date the process or the sources
+  | { state: "fresh" }
+  | { state: "stale"; behindMinutes: number; newestPath: string };
+
+// Doctor's freshness tolerance, shared: a daemon started within a breath of the newest source
+// mtime is the code on disk, not a stale process that happened to lose a race with an editor.
+const FRESHNESS_TOLERANCE_MS = 5_000;
+
+/**
+ * Is the RUNNING daemon the code on disk? The same question doctor answers, factored out so the
+ * close-out path (/wiki-save · /wiki-deep) can ask it for one line instead of a full doctor run.
+ *
+ * Why the close-out is the right place to ask: the daemon loads its import graph once at start,
+ * so every engine update leaves a stale process behind until someone restarts it — and "someone"
+ * was a human remembering launchctl (observed 2026-08-21: the day's fixes ran 209 minutes behind
+ * a live daemon). The close-out commands are the one moment the human has already consented to
+ * spend time on upkeep — invoking them IS the latency budget (2026-08-05 direction: consumption
+ * at command time) — so hygiene rides there rather than in a new unattended loop.
+ */
+export function daemonFreshness(now: number = Date.now()): DaemonFreshness {
+  if (!watchProcessRunning()) return { state: "absent" };
+  const started = watchProcessStartedAt(now);
+  const newest = newestEngineSourceMtime();
+  if (started === null || newest === null) return { state: "unknown" };
+  if (newest.at <= started + FRESHNESS_TOLERANCE_MS) return { state: "fresh" };
+  return {
+    state: "stale",
+    behindMinutes: Math.max(1, Math.round((newest.at - started) / 60_000)),
+    newestPath: newest.path,
+  };
+}
+
 // Script entry point, mirroring tool-locate.ts: daemon/install.sh asks these questions on every
 // platform and must not answer them twice in two languages.
 //   --running  exit 0 when this clone's daemon is alive, 1 when it is not, 2 when unknown
