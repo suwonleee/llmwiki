@@ -294,6 +294,8 @@ git pull && ./setup.sh          # 仅执行pull是不够的 — 见下文
 如果忘记了，`llmwiki doctor` 会报告这种漂移：
 
 - `[update] ⚠️ v… → v… available` — 克隆本身落后于 `origin`
+- `[update] ⚠️ clone files changed after the last successful install` — `git pull` 已完成，但复制的
+  既有harness表面和守护进程尚未全部刷新；只有成功重新安装全部既有组件后提示才会消失
 - `[daemon] ⚠️ running code older than this clone` — 正在扫描的循环早于你的pull
   （`llmwiki daemon-sync` 只在确实落后时重启，`llmwiki doctor --fix` 也会在完整体检中做同样的事。
   你很少需要手动调用：`/wiki-save` 与 `/wiki-deep` 的收尾会把 `daemon-sync` 作为最后一个确定性步骤运行，

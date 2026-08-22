@@ -299,6 +299,9 @@ OpenCodeプラグインは設定ディレクトリ内のコピーです。それ
 忘れた場合は `llmwiki doctor` がドリフトを報告します。
 
 - `[update] ⚠️ v… → v… available` — クローン自体が `origin` より古い
+- `[update] ⚠️ clone files changed after the last successful install` — `git pull` は完了したが、
+  以前インストールしたハーネス面すべてとデーモンはまだ更新前。それらの構成要素をすべて
+  正常に再セットアップした後にだけ通知が消える
 - `[daemon] ⚠️ running code older than this clone` — 動作中のループがpull以前のコード
   （`llmwiki daemon-sync` は実際に遅れているときだけ再起動し、`llmwiki doctor --fix` も全体点検の中で同じことを行う。
   どちらも手で呼ぶ機会はまれで、`/wiki-save`・`/wiki-deep` の締めが最後の決定的ステップとして `daemon-sync` を走らせるため、

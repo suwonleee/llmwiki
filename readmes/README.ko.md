@@ -301,6 +301,9 @@ git pull && ./setup.sh          # pull 만으로는 부족합니다 — 아래 �
 잊었다면 `llmwiki doctor` 가 드리프트를 알려줍니다.
 
 - `[update] ⚠️ v… → v… available` — 클론 자체가 `origin` 보다 뒤처짐
+- `[update] ⚠️ clone files changed after the last successful install` — `git pull` 은 끝났지만
+  기존에 설치한 하네스 표면 전체와 데몬은 아직 갱신 전. 해당 구성요소를 모두 성공적으로
+  재설치해야 안내가 사라짐
 - `[daemon] ⚠️ running code older than this clone` — 돌고 있는 루프가 pull 이전 코드
   (`llmwiki daemon-sync` 가 실제로 뒤처졌을 때만 재시작하고, `llmwiki doctor --fix` 도 전체 점검 안에서 같은 일을 한다.
   둘 다 손으로 부를 일은 드물다 — `/wiki-save`·`/wiki-deep` 마감이 마지막 결정론 단계로 `daemon-sync` 를 돌리므로,

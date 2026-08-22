@@ -368,6 +368,20 @@ export type DaemonFreshness =
 // mtime is the code on disk, not a stale process that happened to lose a race with an editor.
 const FRESHNESS_TOLERANCE_MS = 5_000;
 
+/** Pure freshness decision, separated so tests can prove the time boundary without a real process. */
+export function classifyDaemonFreshness(
+  started: number | null,
+  newest: { at: number; path: string } | null,
+): Exclude<DaemonFreshness, { state: "absent" }> {
+  if (started === null || newest === null) return { state: "unknown" };
+  if (newest.at <= started + FRESHNESS_TOLERANCE_MS) return { state: "fresh" };
+  return {
+    state: "stale",
+    behindMinutes: Math.max(1, Math.round((newest.at - started) / 60_000)),
+    newestPath: newest.path,
+  };
+}
+
 /**
  * Is the RUNNING daemon the code on disk? The same question doctor answers, factored out so the
  * close-out path (/wiki-save · /wiki-deep) can ask it for one line instead of a full doctor run.
@@ -383,13 +397,7 @@ export function daemonFreshness(now: number = Date.now()): DaemonFreshness {
   if (!watchProcessRunning()) return { state: "absent" };
   const started = watchProcessStartedAt(now);
   const newest = newestEngineSourceMtime();
-  if (started === null || newest === null) return { state: "unknown" };
-  if (newest.at <= started + FRESHNESS_TOLERANCE_MS) return { state: "fresh" };
-  return {
-    state: "stale",
-    behindMinutes: Math.max(1, Math.round((newest.at - started) / 60_000)),
-    newestPath: newest.path,
-  };
+  return classifyDaemonFreshness(started, newest);
 }
 
 // Script entry point, mirroring tool-locate.ts: daemon/install.sh asks these questions on every

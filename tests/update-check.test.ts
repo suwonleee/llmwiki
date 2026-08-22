@@ -6,11 +6,19 @@
 // repository standing in for origin — no test touches the network, which is also why the daemon
 // runs this from its loop and never from `--once`.
 import { test, expect, afterEach } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { UPDATE_CHECK_FILE, checkEngineUpdate, liveEngineVersion, readUpdateCheck, updateAvailable } from "../src/engine/update-check.ts";
+import {
+  INSTALL_RECEIPT_FILE,
+  UPDATE_CHECK_FILE,
+  checkEngineUpdate,
+  liveEngineVersion,
+  readUpdateCheck,
+  recordInstallReceipt,
+  updateAvailable,
+} from "../src/engine/update-check.ts";
 import { setEffectiveStateRoot } from "../src/engine/state-dir.ts";
 import { buildContext } from "../src/engine/context.ts";
 import { ensureSkeleton } from "../src/engine/update.ts";
@@ -81,7 +89,7 @@ test("check records local, remote and behind-count after origin moves", () => {
   expect(readUpdateCheck(state)).toEqual(rec);
 });
 
-test("notice appears for a newer origin and goes silent the moment the human updates", () => {
+test("notice stays actionable after pull until setup records the installed HEAD", () => {
   const origin = mkOrigin("0.1.0");
   const clone = cloneOf(origin);
   bumpOrigin(origin, "0.2.0");
@@ -92,11 +100,58 @@ test("notice appears for a newer origin and goes silent the moment the human upd
     expect.objectContaining({ localVersion: "0.1.0", remoteVersion: "0.2.0" }),
   );
 
-  // The human runs the printed command; the LIVE package.json now matches the record. The line
-  // must vanish immediately — not after the next daily check.
+  // Pull updates only the clone. Copied skills/plugins and the long-running daemon still belong to
+  // the previous setup, so the cold-start reminder must remain until setup succeeds.
   sh(["git", "pull", "-q"], clone);
   expect(liveEngineVersion(clone)).toBe("0.2.0");
+  expect(updateAvailable(clone, state)).toEqual(
+    expect.objectContaining({ kind: "setup-required", localVersion: "0.2.0", remoteVersion: "0.2.0" }),
+  );
+
+  expect(recordInstallReceipt(clone, state)).toBe(true);
+  expect(existsSync(join(state, INSTALL_RECEIPT_FILE))).toBe(true);
   expect(updateAvailable(clone, state)).toBeNull();
+});
+
+test("a receipt from another clone never certifies this clone's installed surfaces", () => {
+  const origin = mkOrigin("0.1.0");
+  const installedClone = cloneOf(origin);
+  const otherClone = cloneOf(origin);
+  const state = tmp("llmwiki-upd-state-");
+  checkEngineUpdate(otherClone, state);
+  expect(recordInstallReceipt(installedClone, state)).toBe(true);
+
+  expect(updateAvailable(otherClone, state)).toEqual(
+    expect.objectContaining({ kind: "setup-required", localVersion: "0.1.0", remoteVersion: "0.1.0" }),
+  );
+});
+
+test("a partial setup updates only its selected harness and preserves stale component evidence", () => {
+  const origin = mkOrigin("0.1.0");
+  const clone = cloneOf(origin);
+  const state = tmp("llmwiki-upd-state-");
+  checkEngineUpdate(clone, state);
+  expect(recordInstallReceipt(clone, state)).toBe(true);
+
+  writeFileSync(join(clone, "receipt-change.txt"), "next\n");
+  sh(["git", "add", "receipt-change.txt"], clone);
+  sh(["git", "commit", "-qm", "advance clone"], clone);
+  expect(recordInstallReceipt(clone, state, ["common", "codex"])).toBe(true);
+
+  expect(updateAvailable(clone, state)).toEqual(
+    expect.objectContaining({ kind: "setup-required", localVersion: "0.1.0", remoteVersion: "0.1.0" }),
+  );
+  expect(recordInstallReceipt(clone, state, ["claude", "opencode"])).toBe(true);
+  expect(updateAvailable(clone, state)).toBeNull();
+});
+
+test("setup receipt refuses a non-file target instead of replacing unrelated state", () => {
+  const origin = mkOrigin("0.1.0");
+  const clone = cloneOf(origin);
+  const state = tmp("llmwiki-upd-state-");
+  mkdirSync(join(state, INSTALL_RECEIPT_FILE));
+
+  expect(recordInstallReceipt(clone, state)).toBe(false);
 });
 
 test("a hostile remote version never survives into the record", () => {
@@ -133,6 +188,7 @@ test("a local version ahead of origin is not 'an update' (author machines, forks
   const clone = cloneOf(origin);
   const state = tmp("llmwiki-upd-state-");
   checkEngineUpdate(clone, state);
+  expect(recordInstallReceipt(clone, state)).toBe(true);
   writeFileSync(join(clone, "package.json"), JSON.stringify({ name: "llmwiki", version: "9.0.0" }));
 
   expect(updateAvailable(clone, state)).toBeNull();
@@ -164,19 +220,37 @@ function fabricateAvailable(state: string): void {
   );
 }
 
-test("cold start carries the one-line notice in English, and none without a record", () => {
+test("cold start carries the one-line remote notice in English", () => {
   process.env.LLMWIKI_LANG = "en";
   const repo = mkEnrolledRepo();
   const state = tmp("llmwiki-upd-state-");
   setEffectiveStateRoot(state);
-
-  expect(buildContext(repo)).not.toContain("engine update available");
 
   fabricateAvailable(state);
   const cs = buildContext(repo);
   expect(cs).toContain("engine update available");
   expect(cs).toContain("→ v99.0.0");
   expect(cs).toContain("the engine never updates itself");
+});
+
+test("cold start requires setup without a network record when no matching receipt exists", () => {
+  process.env.LLMWIKI_LANG = "en";
+  const repo = mkEnrolledRepo();
+  const state = tmp("llmwiki-upd-state-");
+  setEffectiveStateRoot(state);
+
+  expect(buildContext(repo)).toContain("engine files changed since the last successful install");
+  expect(existsSync(join(state, UPDATE_CHECK_FILE))).toBe(false);
+});
+
+test("a malformed network record cannot hide local setup drift", () => {
+  process.env.LLMWIKI_LANG = "en";
+  const repo = mkEnrolledRepo();
+  const state = tmp("llmwiki-upd-state-");
+  setEffectiveStateRoot(state);
+  writeFileSync(join(state, UPDATE_CHECK_FILE), "not-json");
+
+  expect(buildContext(repo)).toContain("engine files changed since the last successful install");
 });
 
 test("cold start carries the notice in Korean", () => {
@@ -189,4 +263,21 @@ test("cold start carries the notice in Korean", () => {
   const cs = buildContext(repo);
   expect(cs).toContain("엔진 업데이트 있음");
   expect(cs).toContain("엔진이 스스로를 갱신하는 일은 없다");
+});
+
+test("cold start keeps a setup-only reminder after the clone catches up", () => {
+  process.env.LLMWIKI_LANG = "en";
+  const repo = mkEnrolledRepo();
+  const state = tmp("llmwiki-upd-state-");
+  setEffectiveStateRoot(state);
+  const local = liveEngineVersion();
+  expect(local).not.toBeNull();
+  writeFileSync(
+    join(state, UPDATE_CHECK_FILE),
+    JSON.stringify({ checkedAt: new Date().toISOString(), localVersion: local, remoteVersion: local, behind: 0 }),
+  );
+
+  const cs = buildContext(repo);
+  expect(cs).toContain("engine files changed since the last successful install");
+  expect(cs).toContain("./setup.sh");
 });

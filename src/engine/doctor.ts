@@ -62,6 +62,7 @@ const CORE = [
   "src/engine/claude.ts",
   "src/cli.ts",
   "src/daemon/watch.ts",
+  "src/daemon/install-receipt.ts",
   "src/daemon/wire.ts",
   "src/daemon/wire-codex.ts",
   "src/daemon/wire-opencode.ts",
@@ -511,14 +512,15 @@ function humanAge(days: number): string {
 export function reportEngineUpdate(): void {
   try {
     const rec = readUpdateCheck();
-    if (rec === null) {
-      console.log("  [update] • no check recorded yet — the daemon asks origin once a day");
-      return;
-    }
     const avail = updateAvailable();
-    if (avail) {
+    if (avail?.kind === "update") {
       console.log(`  [update] ⚠️ v${avail.localVersion} → v${avail.remoteVersion} available — cd ${CLONE_ROOT} && git pull && ./setup.sh`);
       console.log("  [update]    (the engine never updates itself — applying is your act)");
+    } else if (avail?.kind === "setup-required") {
+      console.log(`  [update] ⚠️ clone files changed after the last successful install — cd ${CLONE_ROOT} && ./setup.sh`);
+      console.log("  [update]    copied skills/plugins and the running daemon are current only after setup finishes");
+    } else if (rec === null) {
+      console.log("  [update] • no check recorded yet — the daemon asks origin once a day");
     } else {
       const live = liveEngineVersion() ?? rec.localVersion;
       console.log(`  [update] ✅ engine v${live} — no newer version recorded (checked ${rec.checkedAt.slice(0, 10) || "?"})`);

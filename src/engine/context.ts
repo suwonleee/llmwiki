@@ -68,6 +68,8 @@ const makeT = (lang: "ko" | "en", cfg: WikiConfig) =>
     quizDue: (n: number) => `[llmwiki quiz] ${n} review(s) due (day-granular forgetting curve) → reinforce YOUR memory with  /wiki-quiz`,
     updateAvail: (l: string, r: string) =>
       `[llmwiki] engine update available: v${l} → v${r} — apply when you choose:  cd ${CLONE_ROOT} && git pull && ./setup.sh  (the engine never updates itself)`,
+    setupRequired: () =>
+      `[llmwiki] engine files changed since the last successful install — finish applying them:  cd ${CLONE_ROOT} && ./setup.sh`,
     l0Over: (n: number) =>
       `----- [llmwiki] L0 is ${n} chars — over the ~${L0_BUDGET}-char standard; injected whole (nothing cut). Trim back at /wiki-save -----`,
     gapBacklog: (n: number) =>
@@ -94,6 +96,8 @@ const makeT = (lang: "ko" | "en", cfg: WikiConfig) =>
     quizDue: (n: number) => `[llmwiki quiz] 복습 due ${n}건 (망각곡선·일 단위) → /wiki-quiz 로 '사람 기억' 강화`,
     updateAvail: (l: string, r: string) =>
       `[llmwiki] 엔진 업데이트 있음: v${l} → v${r} — 원할 때 적용:  cd ${CLONE_ROOT} && git pull && ./setup.sh  (엔진이 스스로를 갱신하는 일은 없다)`,
+    setupRequired: () =>
+      `[llmwiki] 마지막 설치 뒤 엔진 파일이 변경됨 — 적용을 마치려면:  cd ${CLONE_ROOT} && ./setup.sh`,
     l0Over: (n: number) =>
       `----- [llmwiki] L0 가 ${n}자 — 기준(~${L0_BUDGET}자) 초과; 전량 주입(자르지 않음). /wiki-save 에서 기준 이하로 트리밍 권장 -----`,
     gapBacklog: (n: number) =>
@@ -395,12 +399,16 @@ export function buildContext(repo: string): string {
   // (C3) engine update notice — automatic CHECK (daemon, daily), manual APPLY. This line only
   // states the fact and the exact command; running it stays the human's act (update-check.ts
   // explains why the apply half must never be automated). Zero network here: it reads the
-  // daemon's recorded answer plus this clone's own package.json, and is silent when current.
-  try {
-    const upd = updateAvailable();
-    if (upd) L.push(T.updateAvail(upd.localVersion, upd.remoteVersion));
-  } catch {
-    /* freshness is an extra: never let it break cold-start */
+  // daemon's recorded answer plus this clone's own package.json and setup receipt. Pulling alone
+  // therefore narrows the reminder to setup-only; it goes silent only after setup succeeds.
+  if (hasWiki) {
+    try {
+      const upd = updateAvailable();
+      if (upd?.kind === "update") L.push(T.updateAvail(upd.localVersion, upd.remoteVersion));
+      else if (upd?.kind === "setup-required") L.push(T.setupRequired());
+    } catch {
+      /* freshness is an extra: never let it break cold-start */
+    }
   }
 
   // (D) one-line nudge if agent-config files (CLAUDE.md/AGENTS.md/MEMORY.md) carry discoverable bloat.

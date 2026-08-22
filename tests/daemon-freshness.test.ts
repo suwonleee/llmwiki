@@ -5,7 +5,12 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { daemonFreshness, newestEngineSourceMtime, parseElapsedSeconds } from "../src/engine/daemon-control.ts";
+import {
+  classifyDaemonFreshness,
+  daemonFreshness,
+  newestEngineSourceMtime,
+  parseElapsedSeconds,
+} from "../src/engine/daemon-control.ts";
 import { tempDir } from "./support/git-repo.ts";
 
 describe("elapsed-time parsing", () => {
@@ -80,6 +85,29 @@ describe("newest loaded engine source", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("daemon freshness decision", () => {
+  test("a source inside the startup tolerance is fresh", () => {
+    expect(classifyDaemonFreshness(10_000, { at: 15_000, path: "/clone/src/engine/capture.ts" })).toEqual({
+      state: "fresh",
+    });
+  });
+
+  test("a source newer than the running process is stale with actionable evidence", () => {
+    expect(classifyDaemonFreshness(10_000, { at: 130_000, path: "/clone/src/engine/capture.ts" })).toEqual({
+      state: "stale",
+      behindMinutes: 2,
+      newestPath: "/clone/src/engine/capture.ts",
+    });
+  });
+
+  test("missing timing evidence stays unknown rather than guessing fresh", () => {
+    expect(classifyDaemonFreshness(null, { at: 130_000, path: "/clone/src/engine/capture.ts" })).toEqual({
+      state: "unknown",
+    });
+    expect(classifyDaemonFreshness(10_000, null)).toEqual({ state: "unknown" });
   });
 });
 // daemonFreshness: the close-out's one-line hygiene question, factored from doctor so

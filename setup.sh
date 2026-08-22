@@ -354,6 +354,9 @@ if [ "$POST" -ne 0 ]; then
     exit "$POST"
 fi
 
+"$BUN" "$ROOT/src/daemon/install-receipt.ts" "$USE_CODEX" "$USE_CLAUDE" "$USE_OPENCODE"
+echo
+
 echo "=== setup installed. ==="
 # How to spell the engine command in the closing instructions.
 #

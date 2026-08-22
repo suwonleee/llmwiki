@@ -361,6 +361,9 @@ code when it started, and the OpenCode plugin is a copy under your config direct
 `llmwiki doctor` reports the drift if you forget:
 
 - `[update] ⚠️ v… → v… available` — the clone itself is behind `origin`
+- `[update] ⚠️ clone files changed after the last successful install` — `git pull` finished but
+  setup has not yet refreshed every previously installed harness surface and daemon; the reminder
+  clears after successful setup has refreshed all of those components
 - `[daemon] ⚠️ running code older than this clone` — the loop that is sweeping predates your pull
   (`llmwiki daemon-sync` restarts it when it is actually behind, and `llmwiki doctor --fix` does the
   same inside a full health run). You will rarely reach for either: the `/wiki-save` and

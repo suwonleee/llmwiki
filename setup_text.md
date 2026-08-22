@@ -72,6 +72,9 @@ is a `#!/bin/sh` script for Git Bash, while Codex and OpenCode execute commands 
     - `--harness auto` only on an explicit request for every detected harness
 - Preserve setup evidence
     - Keep the complete output
+    - A successful setup records the exact clone root and HEAD per selected harness component in
+      the owned state root; after a later `git pull`, guidance remains visible until every
+      previously installed component has been refreshed
     - Conflict or unsupported CLI → stop at the exact boundary without bypass
 - Verify the selected harness
     - Printed `PATH` action → apply that exact command first

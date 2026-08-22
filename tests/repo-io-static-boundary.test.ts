@@ -75,6 +75,8 @@ const ALLOWED_READERS: Record<string, string> = {
   "engine/context.ts": "stats machine-local transcript files for display metadata",
   "engine/lint.ts": "checks machine-local citation transcript paths; repository link probes use repo-write",
   "daemon/list-pending-repos.ts": "stats machine-local transcript files from the capture ledger",
+  "daemon/install-receipt.ts":
+    "detects machine-local managed harness copies before recording component freshness; never reads repository content",
   "daemon/watch.ts": "stats machine-local transcript files while routing capture work",
   "engine/session-lang.ts": "reads harness transcripts to detect the session language",
   "engine/distill.ts": "reads the two snapshots handed to distill-verify explicitly",

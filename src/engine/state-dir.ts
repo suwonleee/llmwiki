@@ -76,6 +76,7 @@ export const OWNED_FILES = [
   "daemon.log",
   "daemon.log.1",
   "update-check.json",
+  "install-receipt.json",
   "harness-paths.json", // verified harness data locations (engine/harness-locate.ts)
 ] as const;
 /**

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { readServiceDefinition, serviceEnvEntry, supervisorStubs } from "./support/service-definition.ts";
@@ -76,6 +76,7 @@ describe("fresh Codex setup", () => {
 
     expect(result.exitCode).toBe(0);
     expect(output).toContain("setup installed");
+    expect(existsSync(join(dir, "state", "install-receipt.json"))).toBe(true);
     expect(output).toContain("Verify the installation anytime: llmwiki doctor --harness codex");
     expect(output).toContain("One-time Codex activation: start Codex, open /hooks, trust both llmwiki hooks.");
     expect(output).toContain("ACTION REQUIRED");
