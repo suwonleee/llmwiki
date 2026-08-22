@@ -196,6 +196,7 @@ describe("setup lifecycle across every harness", () => {
 
     // Model an upgrade from the current public release, which installed these managed surfaces
     // before install receipts existed.
+    rmSync(join(stateRoot, "install-receipt.json"), { force: true });
     expect(existsSync(join(stateRoot, "install-receipt.json"))).toBe(false);
     overlayCurrentReceiptEngine(clone);
 
@@ -235,6 +236,7 @@ describe("setup lifecycle across every harness", () => {
     const cloneB = join(scratch, "receipt clone B");
     expect(Bun.spawnSync(["git", "clone", "--quiet", ROOT, cloneA], { cwd: scratch }).exitCode).toBe(0);
     overlayCurrentReceiptEngine(cloneA);
+    writeFileSync(join(cloneA, "receipt-feature-marker.txt"), "clone-switch\n");
     expect(Bun.spawnSync(["git", "add", "-A"], { cwd: cloneA }).exitCode).toBe(0);
     expect(
       Bun.spawnSync(
