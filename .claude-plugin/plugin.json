@@ -1,6 +1,6 @@
 {
   "name": "llmwiki",
-  "version": "0.11.2",
+  "version": "0.12.0",
   "description": "Local-first project wiki that compounds across coding sessions (Karpathy LLM-wiki pattern): cold-start context injection, per-turn wiki pointers, and /wiki-* close-out commands. Plain Markdown in your own git; opt-in per repository; no network, no telemetry. Requires Bun. Data/permission disclosure: PLUGIN.md",
   "author": {
     "name": "suwonleee",
