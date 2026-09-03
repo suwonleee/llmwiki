@@ -35,8 +35,19 @@ function tmp(prefix: string): string {
   return d;
 }
 
+// Every git call in these fixtures runs with an explicit identity. A CI runner has no global
+// user.name/user.email, so a bare `git commit` there fails with "empty ident name" — which is what
+// took main red on 2026-08-22 (one commit below had been written without the `-c user.*` flags its
+// siblings carry). Env beats per-call flags: it also covers the next call someone adds.
+const FIXTURE_IDENTITY = {
+  GIT_AUTHOR_NAME: "t",
+  GIT_AUTHOR_EMAIL: "t@t",
+  GIT_COMMITTER_NAME: "t",
+  GIT_COMMITTER_EMAIL: "t@t",
+};
+
 function sh(args: string[], cwd: string): void {
-  const r = spawnSync(args[0]!, args.slice(1), { cwd, encoding: "utf8" });
+  const r = spawnSync(args[0]!, args.slice(1), { cwd, encoding: "utf8", env: { ...process.env, ...FIXTURE_IDENTITY } });
   expect(`${args.join(" ")} → ${r.status}\n${r.stderr}`).toContain("→ 0");
 }
 
@@ -135,7 +146,7 @@ test("a partial setup updates only its selected harness and preserves stale comp
 
   writeFileSync(join(clone, "receipt-change.txt"), "next\n");
   sh(["git", "add", "receipt-change.txt"], clone);
-  sh(["git", "commit", "-qm", "advance clone"], clone);
+  sh(["git", "-c", "commit.gpgsign=false", "commit", "-qm", "advance clone"], clone);
   expect(recordInstallReceipt(clone, state, ["common", "codex"])).toBe(true);
 
   expect(updateAvailable(clone, state)).toEqual(

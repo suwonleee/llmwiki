@@ -111,8 +111,10 @@ describe("deterministic scale benchmark", () => {
         expect(resource.p95).toBeGreaterThanOrEqual(resource.median);
       }
     }
-    // Timings are observational rather than a release threshold. The suite's
-    // correctness work is bounded, but a shared CI runner can take slightly
-    // longer than 20 seconds to process the 1000-page tier twice.
-  }, 60_000);
+    // Timings are observational rather than a release threshold, so this per-test limit exists
+    // only to stop a hung run, never to grade speed. It has to absorb shared-runner variance:
+    // on 2026-09-03 two ubuntu jobs ran the same commit and generated the tiers in 0.6 s and 3.3 s
+    // respectively — the slow one then tripped a 60 s limit on the 1000-page tier while the fast
+    // one finished the whole test in 7 s. The workflow's 10-minute job limit stays the real cap.
+  }, 300_000);
 });
