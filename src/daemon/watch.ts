@@ -21,6 +21,10 @@ import {
   type DiscoveredSession,
   type MaterializationResult,
 } from "../engine/source.ts";
+import { writeDaemonResolved } from "../engine/daemon-resolved.ts";
+import { codexHomes } from "../engine/sources/codex.ts";
+import { claudeCaptureDirs } from "../engine/sources/claude.ts";
+import { opencodeDbPaths } from "../engine/sources/opencode.ts";
 
 const THRESHOLD_LINES = 50; // skip trivial Q&A sessions (work-volume signal)
 const POLL_SECONDS = 30;
@@ -194,6 +198,34 @@ function runOnce(): SweepCounts {
   return runCycle();
 }
 
+// Leave a breadcrumb saying where THIS process is actually looking. The daemon runs with the
+// environment frozen into its service definition at install time, an interactive command runs with
+// the shell's; when those disagree, capture silently reads a directory the harness has stopped
+// writing to. Doctor compares the two and names the cause instead of reporting the symptom.
+// Recomputed each sweep rather than at startup, so a home that appears later still shows up.
+let lastResolvedSignature = "";
+function recordResolvedLocations(): void {
+  try {
+    const resolved = {
+      codexHomes: codexHomes(),
+      claudeDirs: claudeCaptureDirs(),
+      opencodeDbs: opencodeDbPaths(),
+    };
+    // Log only on change: the value is stable across sweeps and this runs every 30 seconds.
+    const signature = JSON.stringify(resolved);
+    if (signature !== lastResolvedSignature) {
+      lastResolvedSignature = signature;
+      log(
+        `resolved locations: codex=[${resolved.codexHomes.join(", ")}] ` +
+          `claude=[${resolved.claudeDirs.join(", ")}] opencode=[${resolved.opencodeDbs.join(", ")}]`,
+      );
+    }
+    writeDaemonResolved(resolved);
+  } catch (e) {
+    log(`resolved-location record FAILED (capture unaffected): ${e}`);
+  }
+}
+
 async function pollLoop(): Promise<void> {
   let lastRevisions: Record<string, string | number> = {};
   try {
@@ -211,6 +243,7 @@ async function pollLoop(): Promise<void> {
     } catch (e) {
       log(`sweep FAILED (retrying next poll): ${e}`);
     }
+    recordResolvedLocations();
     reassertWiringIfDue();
     checkEngineUpdateIfDue();
     maintainProjectStateIfDue();

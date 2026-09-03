@@ -16,7 +16,7 @@ import {
 } from "./claude-commands.ts";
 import { RETIRED_CODEX_SKILLS } from "./install-history.ts";
 import { CLONE_ROOT, CLONE_ROOT_SHELL, normalizeConfigPath } from "./paths.ts";
-import { claudeConfigDirs, claudeRetentionDays } from "./sources/claude.ts";
+import { claudeCaptureDirs, claudeConfigDirs, claudeRetentionDays } from "./sources/claude.ts";
 import { EXPIRY_WARN_DAYS, healthReadOnly, pendingPastRetentionReadOnly } from "./capture.ts";
 import { effectiveStateRoot, probeStateRoot, planStateMigration } from "./state-dir.ts";
 import { inspectEnrollment } from "./enrollment.ts";
@@ -40,7 +40,9 @@ import {
 import { autoConnect, harnessInstalled, renderHandoff } from "./harness-autoconnect.ts";
 import { locateGit } from "./tool-locate.ts";
 import { gitMissingDetail } from "./enrollment.ts";
-import { zstdAvailability } from "./sources/codex.ts";
+import { codexHomes, zstdAvailability } from "./sources/codex.ts";
+import { opencodeDbPaths } from "./sources/opencode.ts";
+import { missedByDaemon, readDaemonResolved } from "./daemon-resolved.ts";
 import { listProjectStates } from "./project-state.ts";
 import { summarizeProjectStore } from "./project-maintenance.ts";
 import { envValueOutsideRepoFiles } from "./env-policy.ts";
@@ -519,6 +521,11 @@ export function reportEngineUpdate(): void {
     } else if (avail?.kind === "setup-required") {
       console.log(`  [update] ⚠️ clone files changed after the last successful install — cd ${CLONE_ROOT} && ./setup.sh`);
       console.log("  [update]    copied skills/plugins and the running daemon are current only after setup finishes");
+    } else if (avail?.kind === "commits-behind") {
+      console.log(
+        `  [update] ⚠️ ${avail.behind} commit(s) behind origin at the same version (v${avail.localVersion}) — cd ${CLONE_ROOT} && git pull && ./setup.sh`,
+      );
+      console.log("  [update]    a release that ships without a version bump is invisible to the version check alone");
     } else if (rec === null) {
       console.log("  [update] • no check recorded yet — the daemon asks origin once a day");
     } else {
@@ -684,10 +691,52 @@ export function reportCaptureHealth(harness: Harness | "all" = "all"): number {
   // decision keeps those as a silent ledger (device 2) — an un-filed session that expired is
   // usually one the human chose not to keep, so announcing it is a nag about a decision they
   // already made, and telling them to delete the row destroys the only record that it existed.
+  issues += reportResolvedLocationDrift();
   const newest = ageDays(health.lastSeen);
   if (newest !== null && newest > 7) {
     console.log(
       `  [capture] ⚠️ nothing captured in ${Math.floor(newest)} days — check \`llmwiki status <repo>\` and the daemon log`,
+    );
+    issues += 1;
+  }
+  return issues;
+}
+
+/**
+ * Does the running daemon look in the same places this process does?
+ *
+ * The daemon's service definition freezes CODEX_HOME / CLAUDE_CONFIG_DIR / OPENCODE_DB at install
+ * time; a shell inherits whatever launched it. They can drift apart without either side being
+ * misconfigured — Codex Desktop relocating CODEX_HOME per account is the case that motivated
+ * this — and the failure is silent: capture keeps succeeding against a directory the harness no
+ * longer writes to, so the only symptom is "nothing captured", several days later, with no cause.
+ *
+ * Only the direction that loses data is an issue: a location this process can see that the daemon
+ * never swept. The reverse is normal and merely reported.
+ */
+function reportResolvedLocationDrift(): number {
+  const recorded = readDaemonResolved();
+  if (recorded === null) {
+    // Older daemon, or one that has not completed a sweep since this version landed. Not a defect
+    // on its own — the staleness check below still speaks if capture has actually stopped.
+    return 0;
+  }
+  const groups: { label: string; mine: string[]; theirs: readonly string[]; fix: string }[] = [
+    { label: "Codex home", mine: codexHomes(), theirs: recorded.codexHomes, fix: "llmwiki connect codex <dir>" },
+    { label: "Claude dir", mine: claudeCaptureDirs(), theirs: recorded.claudeDirs, fix: "llmwiki connect claude <dir>" },
+    { label: "OpenCode DB", mine: opencodeDbPaths(), theirs: recorded.opencodeDbs, fix: "llmwiki connect opencode <db>" },
+  ];
+  let issues = 0;
+  for (const g of groups) {
+    const missed = missedByDaemon(g.mine, g.theirs);
+    if (missed.length === 0) continue;
+    console.log(
+      `  [capture] ⚠️ the running daemon is not sweeping ${missed.length} ${g.label}(s) this shell can see:`,
+    );
+    for (const dir of missed) console.log(`  [capture]    ${dir}`);
+    console.log(
+      `  [capture]    sessions written there are never captured. The daemon froze its environment at ` +
+        `install time — restart it with the current one (\`./setup.sh\`), or record the location with \`${g.fix}\`.`,
     );
     issues += 1;
   }

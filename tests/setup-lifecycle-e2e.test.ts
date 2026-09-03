@@ -96,6 +96,10 @@ describe("setup lifecycle across every harness", () => {
     });
   }
 
+  // Overlays the CURRENT receipt engine onto a clone of committed HEAD. The list must therefore
+  // cover everything the overlaid files import that the clone does not already have: a working-tree
+  // doctor.ts that reaches for a module added in the same change would otherwise fail to import
+  // inside the clone, and surface here as `setup.sh` merely exiting 1.
   function overlayCurrentReceiptEngine(clone: string): void {
     for (const relative of [
       "setup.sh",
@@ -103,6 +107,8 @@ describe("setup lifecycle across every harness", () => {
       "src/engine/context.ts",
       "src/engine/daemon-control.ts",
       "src/engine/doctor.ts",
+      "src/engine/daemon-resolved.ts", // doctor reads the daemon's resolved-location breadcrumb
+      "src/engine/sources/codex.ts", // doctor compares against codexHomes()
       "src/engine/state-dir.ts",
       "src/engine/update-check.ts",
     ]) {

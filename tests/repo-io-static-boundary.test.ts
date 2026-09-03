@@ -63,6 +63,8 @@ const ALLOWED_MUTATORS: Record<string, string> = {
     "installs/removes the shared llmwiki launcher in the user's machine-local bin directory",
   "daemon/wire-codex.ts": "installs/removes Codex hooks, skills and launcher in the harness config",
   "daemon/wire-opencode.ts": "installs/removes the OpenCode plugin, commands and launcher",
+  "engine/daemon-resolved.ts":
+    "writes and reads one breadcrumb under the machine-local state root recording which harness directories the running daemon resolved, so doctor can name a daemon/shell environment split instead of reporting 'nothing captured'; never repository content",
 };
 
 const ALLOWED_READERS: Record<string, string> = {
