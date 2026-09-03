@@ -209,9 +209,14 @@ describe("plugin distribution surface", () => {
     const cfg = readJson("hooks/hooks.json");
     const entries = [...cfg.hooks.SessionStart, ...cfg.hooks.UserPromptSubmit].flatMap((m: any) => m.hooks);
     for (const h of entries) expect(h.additionalContextLimit).toBe(0);
-    // Claude's SessionStart sources include `compact`, which Codex does not emit; the union is a
-    // matcher alternation, so the extra branch simply never fires there.
-    expect(cfg.hooks.SessionStart[0].matcher).toContain("compact");
+    // The matcher used to be an alternation of both harnesses' SessionStart sources, on the
+    // reasoning that a branch the other harness never emits simply never fires. That held for the
+    // sources that existed; it failed for the ones added later. Claude Code reads a matcher of
+    // that shape as an exact string list, so `fork` (v2.1.214) matched nothing and forked sessions
+    // lost cold-start context. The matcher is now open, and tests/hook-matcher-drift.test.ts owns
+    // that invariant across all three install surfaces; asserted here too so this file cannot
+    // reintroduce an enumeration while editing the spill fields beside it.
+    expect(cfg.hooks.SessionStart[0].matcher).toBe("");
   });
 
   test("the plugin hooks stand down when a clone install is already wired — for BOTH harnesses", () => {
