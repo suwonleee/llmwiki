@@ -328,4 +328,93 @@ describe("opencode v1 (message+part) capture", () => {
     const dialog = bodyLines(found[0]!.path).slice(1).map((l) => JSON.parse(l).text);
     expect(dialog).toEqual(["드리프트 내성 확인", "정상 캡처"]);
   });
+
+  // ---- id wrap ------------------------------------------------------------------------
+  //
+  // OpenCode ids stopped being monotonic. `packages/schema/src/identifier.ts` packs
+  // `timestamp * 4096` (~53 bits) into six hex bytes, so the printed prefix wraps every 2^36 ms
+  // (~795 days); the most recent boundary was 2026-08-14T11:19:55.136Z. Ids minted after it sort
+  // BELOW every id minted before it — on the author's own store the newest message (2026-08-17) is
+  // `00f3031d…` while the oldest (2026-01-31) is `c1312da8…`.
+  //
+  // The v1 cursor was a bare message id compared with `id > ?`, so a session whose watermark
+  // predates the wrap could never match again: every later message was skipped, silently and
+  // permanently. That is triggered by resuming ANY older session after a wrap, not only by a
+  // session that happens to straddle one.
+  const WRAP = 1786706395136; // 2026-08-14T11:19:55.136Z — measured boundary, k=26
+
+  test("captures messages minted after an id wrap (ids sort BELOW the watermark)", () => {
+    const db = new Database(dbPath);
+    createSchema(db);
+    db.run("INSERT INTO session VALUES ('ses_wrap', ?, 'id 순환을 걸치는 세션', 1000, NULL)", [repo]);
+    // before the wrap: high ids, earlier timestamps
+    insertMessage(db, "msg_fa86a001", "ses_wrap", userData(WRAP - 60_000), WRAP - 60_000);
+    insertPart(db, "prt_fa86a001", "msg_fa86a001", "ses_wrap", textPart("순환 이전 질문"));
+    insertMessage(db, "msg_fa86a002", "ses_wrap", assistantData({ completed: WRAP - 50_000 }), WRAP - 50_000);
+    insertPart(db, "prt_fa86a002", "msg_fa86a002", "ses_wrap", textPart("순환 이전 답변"));
+    db.close();
+
+    const dbReal = realpathSync(dbPath);
+    const first = opencodeSource.discover()[0]!;
+    expect(bodyLines(first.path).slice(1).map((l) => JSON.parse(l).text)).toEqual([
+      "순환 이전 질문",
+      "순환 이전 답변",
+    ]);
+    // the watermark is a high id; everything that follows will be numerically SMALLER
+    expect(capture.getOpenCodeV1Progress(dbReal, "ses_wrap")).toBe("msg_fa86a002");
+
+    // after the wrap: LOWER ids, later timestamps — `id > watermark` is false for both
+    const db2 = new Database(dbPath);
+    insertMessage(db2, "msg_00f2b001", "ses_wrap", userData(WRAP + 10_000), WRAP + 10_000);
+    insertPart(db2, "prt_00f2b001", "msg_00f2b001", "ses_wrap", textPart("순환 이후 질문"));
+    insertMessage(db2, "msg_00f2b002", "ses_wrap", assistantData({ completed: WRAP + 20_000 }), WRAP + 20_000);
+    insertPart(db2, "prt_00f2b002", "msg_00f2b002", "ses_wrap", textPart("순환 이후 답변"));
+    db2.run("UPDATE session SET time_updated = 2000 WHERE id = 'ses_wrap'");
+    db2.close();
+
+    const second = opencodeSource.discover()[0]!;
+    expect(bodyLines(second.path).slice(1).map((l) => JSON.parse(l).text)).toEqual([
+      "순환 이전 질문",
+      "순환 이전 답변",
+      "순환 이후 질문",
+      "순환 이후 답변",
+    ]);
+    // the cursor moved to the post-wrap row even though it is the lexicographically smaller id
+    expect(capture.getOpenCodeV1Progress(dbReal, "ses_wrap")).toBe("msg_00f2b002");
+
+    // and a third sweep still adds nothing: the pair bound is idempotent, not merely permissive
+    const lines = bodyLines(second.path).length;
+    opencodeSource.discover();
+    expect(bodyLines(second.path)).toHaveLength(lines);
+  });
+
+  test("summaryFor picks the newest compaction summary across an id wrap", () => {
+    const db = new Database(dbPath);
+    createSchema(db);
+    db.run("INSERT INTO session VALUES ('ses_sum', ?, '요약이 순환을 걸치는 세션', 1000, NULL)", [repo]);
+    insertMessage(db, "msg_fa86c001", "ses_sum", userData(WRAP - 60_000), WRAP - 60_000);
+    insertPart(db, "prt_fa86c001", "msg_fa86c001", "ses_sum", textPart("질문"));
+    // older summary, HIGHER id — `ORDER BY id DESC` would return this one first
+    insertMessage(
+      db,
+      "msg_fa86c002",
+      "ses_sum",
+      assistantData({ completed: WRAP - 50_000, summary: true }),
+      WRAP - 50_000,
+    );
+    insertPart(db, "prt_fa86c002", "msg_fa86c002", "ses_sum", textPart("낡은 압축 요약"));
+    // newer summary, LOWER id — this is the one that must win
+    insertMessage(
+      db,
+      "msg_00f2c003",
+      "ses_sum",
+      assistantData({ completed: WRAP + 20_000, summary: true }),
+      WRAP + 20_000,
+    );
+    insertPart(db, "prt_00f2c003", "msg_00f2c003", "ses_sum", textPart("최신 압축 요약"));
+    db.close();
+
+    const s = opencodeSource.discover()[0]!;
+    expect(opencodeSource.summaryFor?.(s.path)).toBe("최신 압축 요약");
+  });
 });

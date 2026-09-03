@@ -394,26 +394,80 @@ function v1RowSettled(row: any, data: any, partCount: number, hasLater: boolean)
   return created > 0 && Date.now() - created > STREAM_SETTLE_GRACE_MS;
 }
 
+/**
+ * Chronological position of a v1 message: the (time_created, id) pair.
+ *
+ * OpenCode ids are NO LONGER monotonic. `packages/schema/src/identifier.ts` encodes
+ * `timestamp * 4096` into six hex bytes, but that product needs ~53 bits, so the high bits are
+ * dropped and the printed prefix wraps every 2^36 ms (~795 days). The most recent wrap was
+ * 2026-08-14T11:19:55.136Z; the next is 2028-10-17. Ids minted after a wrap sort BELOW every id
+ * minted before it — measured on a real store, whose newest message (2026-08-17) is `00f3031d…`
+ * while its oldest (2026-01-31) is `c1312da8…`.
+ *
+ * So `id > watermark` is not "newer than": once a session's watermark predates a wrap, every
+ * later message fails that test and is skipped FOREVER — silently, which is the failure mode this
+ * adapter exists to avoid. It bites a session that spans a wrap and, more commonly, any older
+ * session resumed after one.
+ *
+ * The durable watermark stays a message id — no sidecar format change, no queue migration. It is
+ * resolved to its own `time_created` here, and every bound and comparison uses the pair, which is
+ * exactly what `message_session_time_created_id_idx (session_id, time_created, id)` indexes.
+ * Do NOT reach for OpenCode's `Identifier.timestamp(id)` as a shortcut: it decodes the same
+ * truncated field and returns `ms mod 2^36`, i.e. it is wrong in precisely these cases.
+ */
+type OrderKey = { readonly time: number; readonly id: string };
+
+/** Before every real row: the position of a session that has never been exported. */
+const ORDER_ORIGIN: OrderKey = { time: -1, id: "" };
+
+function orderKeyFor(db: Database, sessionID: string, messageId: string): OrderKey | null {
+  if (messageId === "") return ORDER_ORIGIN;
+  try {
+    const row = db
+      .query("SELECT time_created FROM message WHERE session_id = ? AND id = ?")
+      .get(sessionID, messageId) as { time_created?: unknown } | null;
+    const time = Number(row?.time_created);
+    return row && Number.isFinite(time) ? { time, id: messageId } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Strictly-after in (time, id) order — the order ids alone stopped providing. */
+function orderAfter(a: OrderKey, b: OrderKey): boolean {
+  return a.time !== b.time ? a.time > b.time : a.id > b.id;
+}
+
+/** SQL fragment + args for one half-open bound, or the id-only bound when time is unknown. */
+function boundSql(key: OrderKey | null, fallbackId: string, cmp: ">" | "<="): { sql: string; args: (string | number)[] } {
+  // A watermark whose message has left the DB cannot be placed in time. Falling back to the
+  // id-only bound reproduces today's behavior exactly — degraded, never worse than before.
+  if (key === null) return { sql: `id ${cmp} ?`, args: [fallbackId] };
+  const strict = cmp === ">" ? "time_created > ?" : "time_created < ?";
+  return { sql: `(${strict} OR (time_created = ? AND id ${cmp} ?))`, args: [key.time, key.time, key.id] };
+}
+
 function renderedRangeV1(
   db: Database,
   sessionID: string,
   afterId: string,
   throughId?: string,
-): { appended: string; maxId: string } {
-  const upper = throughId === undefined ? "" : " AND id <= ?";
-  const args = throughId === undefined ? [sessionID, afterId] : [sessionID, afterId, throughId];
+): { appended: string; maxId: string; maxTime: number } {
+  const after = orderKeyFor(db, sessionID, afterId);
+  const lower = boundSql(after, afterId, ">");
+  const through = throughId === undefined ? undefined : orderKeyFor(db, sessionID, throughId);
+  const upperBound = throughId === undefined ? null : boundSql(through ?? null, throughId, "<=");
+  const window = `session_id = ? AND ${lower.sql}${upperBound ? ` AND ${upperBound.sql}` : ""}`;
+  const args = [sessionID, ...lower.args, ...(upperBound?.args ?? [])];
   const rows = db
-    .query(
-      "SELECT id, time_created, data FROM message " +
-        `WHERE session_id = ? AND id > ?${upper} ORDER BY id ASC`,
-    )
+    .query(`SELECT id, time_created, data FROM message WHERE ${window} ORDER BY time_created ASC, id ASC`)
     .all(...args) as any[];
-  // Message ids ascend, so the same id bounds select exactly the fetched messages' parts.
-  const partUpper = throughId === undefined ? "" : " AND message_id <= ?";
+  // Parts are selected by the SAME message window rather than by an id range of their own: with
+  // ids no longer ordered, `message_id > ?` would drop exactly the rows the message query keeps.
   const partRows = db
     .query(
       "SELECT id, message_id, data FROM part " +
-        `WHERE session_id = ? AND message_id > ?${partUpper} ORDER BY message_id ASC, id ASC`,
+        `WHERE message_id IN (SELECT id FROM message WHERE ${window}) ORDER BY time_created ASC, id ASC`,
     )
     .all(...args) as any[];
   const partsByMessage = new Map<string, any[]>();
@@ -441,16 +495,19 @@ function renderedRangeV1(
       }
     }
   }
-  let maxId = afterId;
+  // Advance by (time, id) for the same reason the bounds use it: a post-wrap id is numerically
+  // smaller than the pre-wrap watermark it must supersede, so `id > maxId` would never move.
+  let maxKey: OrderKey = after ?? { time: -1, id: afterId };
   let appended = "";
   for (let i = 0; i < boundary; i++) {
     const row = rows[i];
     const id = String(row.id ?? "");
     const line = renderV1Row(row, datas[i], partsByMessage.get(id) ?? []);
     if (line) appended += line + "\n";
-    if (id > maxId) maxId = id;
+    const key: OrderKey = { time: Number(row.time_created ?? 0), id };
+    if (orderAfter(key, maxKey)) maxKey = key;
   }
-  return { appended, maxId };
+  return { appended, maxId: maxKey.id, maxTime: maxKey.time };
 }
 
 /**
@@ -548,7 +605,8 @@ function recoverPendingV1Append(
     throw new Error(`refusing to reconcile an unexpected OpenCode export tail: ${ep}`);
   }
   if (written.length < bytes.length) appendFileSync(ep, bytes.subarray(written.length));
-  capture.finishOpenCodeV1Append(sourcePath, sessionID, pending.throughMessageId);
+  // reconstructed.maxId was just asserted equal to throughMessageId, so its time is that row's.
+  capture.finishOpenCodeV1Append(sourcePath, sessionID, pending.throughMessageId, reconstructed.maxTime);
   return pending.throughMessageId;
 }
 
@@ -753,20 +811,30 @@ function exportSessionV1(
   if (progressExists && !v1ProgressMatches(progress, key, sessionID, sourcePath)) {
     throw new Error(`refusing to replace an unrecognized OpenCode progress file: ${mp}`);
   }
-  let durable = capture.getOpenCodeV1Progress(sourcePath, sessionID);
-  if (progress && (durable === null || progress.lastMessageId > durable)) {
-    capture.advanceOpenCodeV1Progress(sourcePath, sessionID, progress.lastMessageId);
-    durable = progress.lastMessageId;
+  // Every watermark comparison below is a (time, id) comparison: ids alone stopped ordering when
+  // OpenCode's 48-bit id encoding wrapped (see OrderKey). Comparing them as strings here would
+  // reject exactly the advances that follow a wrap — the failure this whole path exists to avoid.
+  const stored = capture.getOpenCodeV1Position(sourcePath, sessionID);
+  let durableKey: OrderKey | null = stored ? { time: stored.time, id: stored.id } : null;
+  if (progress) {
+    const sidecar = orderKeyFor(db, sessionID, progress.lastMessageId);
+    if (sidecar && (durableKey === null || orderAfter(sidecar, durableKey))) {
+      capture.advanceOpenCodeV1Progress(sourcePath, sessionID, sidecar.id, sidecar.time);
+      durableKey = sidecar;
+    }
   }
+  let durable = durableKey?.id ?? null;
   durable = recoverPendingV1Append(db, sourcePath, sessionID, ep, durable);
   const since = durable ?? "";
-  let rendered: { appended: string; maxId: string };
+  let rendered: { appended: string; maxId: string; maxTime: number };
   try {
     rendered = renderedRangeV1(db, sessionID, since);
   } catch {
     return { path: ep, lines: 0 }; // schema drift — degrade silently
   }
-  const { appended, maxId } = rendered;
+  const { appended, maxId, maxTime } = rendered;
+  const maxKey: OrderKey = { time: maxTime, id: maxId };
+  const sinceKey: OrderKey = durableKey ?? { time: -1, id: since };
   if (appended) {
     if (!existsSync(ep)) {
       const meta: ExportMeta = { kind: "opencode-meta", sessionID, directory, title, sourcePath, exportKey: key };
@@ -782,13 +850,17 @@ function exportSessionV1(
       expectedSha256: createHash("sha256").update(bytes).digest("hex"),
     });
     appendFileSync(ep, appended);
-    capture.finishOpenCodeV1Append(sourcePath, sessionID, maxId);
+    capture.finishOpenCodeV1Append(sourcePath, sessionID, maxId, maxTime);
     durable = maxId;
-  } else if (maxId > since) {
-    capture.advanceOpenCodeV1Progress(sourcePath, sessionID, maxId);
+    durableKey = maxKey;
+  } else if (orderAfter(maxKey, sinceKey)) {
+    capture.advanceOpenCodeV1Progress(sourcePath, sessionID, maxId, maxTime);
     durable = maxId;
+    durableKey = maxKey;
   }
-  if (existsSync(ep) && (!progressExists || (durable ?? since) > (progress?.lastMessageId ?? ""))) {
+  const writtenKey = durableKey ?? sinceKey;
+  const sidecarKey = progress ? orderKeyFor(db, sessionID, progress.lastMessageId) : null;
+  if (existsSync(ep) && (!progressExists || sidecarKey === null || orderAfter(writtenKey, sidecarKey))) {
     writeFileSync(
       mp,
       JSON.stringify({
@@ -1112,8 +1184,12 @@ export const opencodeSource: TranscriptSource = {
         }
         // v1: the compaction summary is the newest assistant row with data.summary === true; its
         // body is that row's text parts (the same shape MessageV2.filterCompacted keys on).
+        // Newest-first by (time, id), not by id: after an id wrap (see OrderKey) `id DESC` returns
+        // the OLDEST rows, so this would scan away from the compaction summary it is looking for.
         const rows = db
-          .query("SELECT id, data FROM message WHERE session_id = ? ORDER BY id DESC LIMIT 50")
+          .query(
+            "SELECT id, data FROM message WHERE session_id = ? ORDER BY time_created DESC, id DESC LIMIT 50",
+          )
           .all(meta.sessionID) as any[];
         for (const row of rows) {
           let data: any;

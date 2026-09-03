@@ -99,6 +99,12 @@ CREATE TABLE IF NOT EXISTS opencode_v1_progress (
     source_path TEXT NOT NULL,
     session_id TEXT NOT NULL,
     last_message_id TEXT NOT NULL,
+    -- The watermark's own message.time_created. It is stored because the never-rewind guard below
+    -- is a comparison, and OpenCode message ids stopped being comparable: their 48-bit encoding
+    -- wraps every ~795 days (last 2026-08-14), so a newer id can be lexicographically SMALLER.
+    -- -1 is the pre-migration default; any real advance beats it, and an advance is only ever
+    -- computed from rows strictly after the stored watermark, so it cannot rewind.
+    last_message_time INTEGER NOT NULL DEFAULT -1,
     updated_at TEXT DEFAULT (datetime('now')),
     PRIMARY KEY (source_path, session_id)
 );
@@ -175,6 +181,12 @@ function connect(): Database {
   }
   if (!cols.some((c) => c.name === "file_id")) {
     db.exec("ALTER TABLE capture_queue ADD COLUMN file_id TEXT");
+  }
+  // opencode_v1_progress.last_message_time — see the DDL comment. Existing rows backfill to -1,
+  // which is correct: their id is still the watermark, and the next advance carries a real time.
+  const v1Cols = db.query("PRAGMA table_info(opencode_v1_progress)").all() as { name: string }[];
+  if (v1Cols.length > 0 && !v1Cols.some((c) => c.name === "last_message_time")) {
+    db.exec("ALTER TABLE opencode_v1_progress ADD COLUMN last_message_time INTEGER NOT NULL DEFAULT -1");
   }
   // A CHECK constraint cannot be altered in place, so widening it to accept the `lost` tombstone
   // means rebuilding the table. Idempotent and transactional: detect the old constraint by reading
@@ -493,25 +505,55 @@ export function finishOpenCodeAppend(sourcePath: string, sessionId: string, last
 // above is INTEGER.
 
 /** Durable, non-body v1 watermark: the last fully-exported message id (lexicographic max). */
-export function getOpenCodeV1Progress(sourcePath: string, sessionId: string): string | null {
-  const db = connect();
-  const row = db
-    .query("SELECT last_message_id FROM opencode_v1_progress WHERE source_path = ? AND session_id = ?")
-    .get(sourcePath, sessionId) as { last_message_id: string } | null;
-  release(db);
-  return row && typeof row.last_message_id === "string" && row.last_message_id ? row.last_message_id : null;
+/** The v1 watermark as the ordering pair it has to be compared as. -1 = pre-migration row. */
+export interface OpenCodeV1Position {
+  readonly id: string;
+  readonly time: number;
 }
 
-export function advanceOpenCodeV1Progress(sourcePath: string, sessionId: string, lastMessageId: string): void {
+export function getOpenCodeV1Position(sourcePath: string, sessionId: string): OpenCodeV1Position | null {
+  const db = connect();
+  const row = db
+    .query(
+      "SELECT last_message_id, last_message_time FROM opencode_v1_progress " +
+        "WHERE source_path = ? AND session_id = ?",
+    )
+    .get(sourcePath, sessionId) as { last_message_id: unknown; last_message_time: unknown } | null;
+  release(db);
+  if (!row || typeof row.last_message_id !== "string" || !row.last_message_id) return null;
+  const time = Number(row.last_message_time);
+  return { id: row.last_message_id, time: Number.isFinite(time) ? time : -1 };
+}
+
+export function getOpenCodeV1Progress(sourcePath: string, sessionId: string): string | null {
+  return getOpenCodeV1Position(sourcePath, sessionId)?.id ?? null;
+}
+
+/**
+ * Never-rewind upsert over the (time, id) pair. The guard used to be `MAX()` on the id alone,
+ * which silently refused every advance whose id fell below the stored one — the exact shape a
+ * post-wrap id has (see the DDL comment). The WHERE clause keeps the guard while making it
+ * compare what actually orders these rows.
+ */
+const V1_PROGRESS_UPSERT =
+  "INSERT INTO opencode_v1_progress (source_path, session_id, last_message_id, last_message_time) " +
+  "VALUES (?, ?, ?, ?) ON CONFLICT(source_path, session_id) DO UPDATE SET " +
+  "last_message_id = excluded.last_message_id, " +
+  "last_message_time = excluded.last_message_time, " +
+  "updated_at = datetime('now') " +
+  "WHERE excluded.last_message_time > opencode_v1_progress.last_message_time " +
+  "   OR (excluded.last_message_time = opencode_v1_progress.last_message_time " +
+  "       AND excluded.last_message_id > opencode_v1_progress.last_message_id)";
+
+export function advanceOpenCodeV1Progress(
+  sourcePath: string,
+  sessionId: string,
+  lastMessageId: string,
+  lastMessageTime: number,
+): void {
   if (!lastMessageId) return;
   const db = connect();
-  db.run(
-    "INSERT INTO opencode_v1_progress (source_path, session_id, last_message_id) VALUES (?, ?, ?) " +
-      "ON CONFLICT(source_path, session_id) DO UPDATE SET " +
-      "last_message_id = MAX(opencode_v1_progress.last_message_id, excluded.last_message_id), " +
-      "updated_at = datetime('now')",
-    [sourcePath, sessionId, lastMessageId],
-  );
+  db.run(V1_PROGRESS_UPSERT, [sourcePath, sessionId, lastMessageId, lastMessageTime]);
   release(db);
 }
 
@@ -603,16 +645,15 @@ export function claimOpenCodeV1Append(
 }
 
 /** Commit the v1 watermark and remove the v1 append journal in one SQLite transaction. */
-export function finishOpenCodeV1Append(sourcePath: string, sessionId: string, lastMessageId: string): void {
+export function finishOpenCodeV1Append(
+  sourcePath: string,
+  sessionId: string,
+  lastMessageId: string,
+  lastMessageTime: number,
+): void {
   const db = connect();
   const finish = db.transaction(() => {
-    db.run(
-      "INSERT INTO opencode_v1_progress (source_path, session_id, last_message_id) VALUES (?, ?, ?) " +
-        "ON CONFLICT(source_path, session_id) DO UPDATE SET " +
-        "last_message_id = MAX(opencode_v1_progress.last_message_id, excluded.last_message_id), " +
-        "updated_at = datetime('now')",
-      [sourcePath, sessionId, lastMessageId],
-    );
+    db.run(V1_PROGRESS_UPSERT, [sourcePath, sessionId, lastMessageId, lastMessageTime]);
     db.run("DELETE FROM opencode_v1_append WHERE source_path = ? AND session_id = ?", [sourcePath, sessionId]);
   });
   finish();
