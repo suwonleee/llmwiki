@@ -46,7 +46,10 @@ These commands install the current public version. If you need a reproducible de
 a tagged version on the [Releases page](https://github.com/suwonleee/llmwiki/releases) before
 setup. Updates are always manual — but you never have to track releases: the daemon checks origin
 once a day, and when a newer version exists your next session starts with a one-line notice and the
-exact command. Running it stays your act; the engine never updates itself. Uninstall before moving
+exact command. That line is shown to **you**, not only to the agent: Claude Code and Codex display it
+as a hook system message at session start, OpenCode raises a toast, and every `llmwiki` command
+prints it once on stderr — including the case where origin has newer code under the same version
+number. Running it stays your act; the engine never updates itself. Uninstall before moving
 or deleting this directory (see below): the installed hooks point at it.
 
 Start **one** agent from this folder:
@@ -363,6 +366,8 @@ code when it started, and the OpenCode plugin is a copy under your config direct
 `llmwiki doctor` reports the drift if you forget:
 
 - `[update] ⚠️ v… → v… available` — the clone itself is behind `origin`
+- `[update] ⚠️ N commit(s) behind origin at the same version` — origin has newer code that did
+  not bump the version number; the version check alone would never have said so
 - `[update] ⚠️ clone files changed after the last successful install` — `git pull` finished but
   setup has not yet refreshed every previously installed harness surface and daemon; the reminder
   clears after successful setup has refreshed all of those components

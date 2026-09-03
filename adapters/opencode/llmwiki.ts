@@ -20,7 +20,7 @@ import type { Plugin } from "@opencode-ai/plugin";
 
 const ROOT = process.env.LLMWIKI_ROOT ?? ""; // absolute path of the llmwiki clone
 
-export const LlmwikiPlugin: Plugin = async ({ $, directory }) => {
+export const LlmwikiPlugin: Plugin = async ({ $, directory, client }) => {
   // ENROLLMENT GATE — before any callback exists.
   //
   // The plugin is installed globally, so it loads in every OpenCode project on the machine. A
@@ -71,20 +71,37 @@ export const LlmwikiPlugin: Plugin = async ({ $, directory }) => {
     prompt: string,
     session: string,
     includeCold: boolean,
-  ): Promise<{ cold: string; turn: string } | null> => {
+  ): Promise<{ cold: string; turn: string; notice: string } | null> => {
     if (!ROOT) return null;
     const args = ["opencode-context", directory, "--prompt", prompt, "--session", session];
     if (includeCold) args.push("--include-cold");
     try {
       const r = await $`bun ${ROOT}/src/hook-cli.ts ${args}`.quiet().nothrow();
       if (r.exitCode !== 0) return null;
-      const parsed = JSON.parse(r.text()) as { cold?: unknown; turn?: unknown };
+      const parsed = JSON.parse(r.text()) as { cold?: unknown; turn?: unknown; notice?: unknown };
       return {
         cold: typeof parsed.cold === "string" ? parsed.cold : "",
         turn: typeof parsed.turn === "string" ? parsed.turn : "",
+        notice: typeof parsed.notice === "string" ? parsed.notice : "",
       };
     } catch {
       return null;
+    }
+  };
+
+  // The person-facing update line, shown ONCE per session as a TUI toast. OpenCode has no
+  // systemMessage channel, but its SDK client can raise a toast; `opencode run` has no TUI and the
+  // call simply fails, which is the same as not showing it. Never lets a toast break a request.
+  const noticed = new Set<string>();
+  const toast = async (session: string, message: string): Promise<void> => {
+    if (!message || noticed.has(session)) return;
+    noticed.add(session);
+    try {
+      await (client as any)?.tui?.showToast?.({
+        body: { title: "llmwiki", message, variant: "info", duration: 10_000 },
+      });
+    } catch {
+      /* headless, or an SDK without a TUI — silence is correct */
     }
   };
 
@@ -148,6 +165,7 @@ export const LlmwikiPlugin: Plugin = async ({ $, directory }) => {
       if (!coldCache.has(cacheKey)) {
         coldCache.set(cacheKey, result.cold);
         if (coldCache.size > MAX_COLD_SESSIONS) coldCache.delete(coldCache.keys().next().value!);
+        void toast(cacheKey, result.notice);
       }
       const cold = coldCache.get(cacheKey) ?? "";
       if (cold && !output.system.some((s) => s.includes("[llmwiki]"))) {

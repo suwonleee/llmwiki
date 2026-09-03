@@ -281,3 +281,46 @@ test("cold start keeps a setup-only reminder after the clone catches up", () => 
   expect(cs).toContain("engine files changed since the last successful install");
   expect(cs).toContain("./setup.sh");
 });
+
+// ---- the one line a PERSON sees -----------------------------------------------------------
+//
+// The cold-start payload has always carried the notice as additionalContext, which reaches the
+// model; a person heard about an update only if the model mentioned it or they ran doctor. This
+// line is the same fact for the surfaces that show text to a human (hook systemMessage, OpenCode
+// toast, CLI stderr). One sentence, one command, gated where the command would be wrong.
+import { humanUpdateLine, inPluginContext } from "../src/engine/update-check.ts";
+
+test("humanUpdateLine renders one actionable sentence per notice kind, in both languages", () => {
+  const base = { checkedAt: "2026-09-03T00:00:00.000Z", localVersion: "0.12.0", remoteVersion: "0.13.0" };
+  const clone = "/x/llmwiki";
+  const en = (n: any) => humanUpdateLine(n, { ko: false, pluginContext: false, clone });
+  const ko = (n: any) => humanUpdateLine(n, { ko: true, pluginContext: false, clone });
+
+  expect(en({ kind: "update", ...base })).toBe(
+    "[llmwiki] engine update available: v0.12.0 → v0.13.0 — apply: cd /x/llmwiki && git pull && ./setup.sh",
+  );
+  expect(ko({ kind: "update", ...base })).toContain("v0.12.0 → v0.13.0");
+  expect(en({ kind: "commits-behind", ...base, remoteVersion: "0.12.0", behind: 3 })).toContain("3 commit(s) behind");
+  expect(en({ kind: "setup-required", ...base, remoteVersion: "0.12.0" })).toBe(
+    "[llmwiki] engine files changed since the last install — finish applying them: cd /x/llmwiki && ./setup.sh",
+  );
+  expect(en(null)).toBe("");
+  for (const n of [{ kind: "update", ...base }, { kind: "setup-required", ...base }]) {
+    expect(en(n)).not.toContain("\n"); // a banner, never a paragraph
+  }
+});
+
+test("a plugin install is told nothing: every line ends in a clone command it does not have", () => {
+  // A plugin updates through the harness's plugin manager and never runs setup.sh, so both
+  // "git pull && ./setup.sh" and "./setup.sh" would be wrong instructions there — not merely noisy.
+  const base = { checkedAt: "", localVersion: "0.12.0" };
+  expect(humanUpdateLine({ kind: "setup-required", ...base, remoteVersion: "0.12.0" }, { ko: false, pluginContext: true })).toBe("");
+  expect(humanUpdateLine({ kind: "update", ...base, remoteVersion: "0.13.0" }, { ko: false, pluginContext: true })).toBe("");
+  expect(humanUpdateLine({ kind: "commits-behind", ...base, remoteVersion: "0.12.0", behind: 2 }, { ko: false, pluginContext: true })).toBe("");
+});
+
+test("plugin context is exactly the variable both harnesses export to plugin hooks", () => {
+  expect(inPluginContext({})).toBe(false);
+  expect(inPluginContext({ CLAUDE_PLUGIN_ROOT: "" })).toBe(false);
+  expect(inPluginContext({ CLAUDE_PLUGIN_ROOT: "/cache/llmwiki/0.12.0" })).toBe(true);
+});

@@ -70,6 +70,8 @@ const makeT = (lang: "ko" | "en", cfg: WikiConfig) =>
       `[llmwiki] engine update available: v${l} → v${r} — apply when you choose:  cd ${CLONE_ROOT} && git pull && ./setup.sh  (the engine never updates itself)`,
     setupRequired: () =>
       `[llmwiki] engine files changed since the last successful install — finish applying them:  cd ${CLONE_ROOT} && ./setup.sh`,
+    commitsBehind: (n: number) =>
+      `[llmwiki] engine is ${n} commit(s) behind origin (same version number, newer code) — apply when you choose:  cd ${CLONE_ROOT} && git pull && ./setup.sh`,
     l0Over: (n: number) =>
       `----- [llmwiki] L0 is ${n} chars — over the ~${L0_BUDGET}-char standard; injected whole (nothing cut). Trim back at /wiki-save -----`,
     gapBacklog: (n: number) =>
@@ -98,6 +100,8 @@ const makeT = (lang: "ko" | "en", cfg: WikiConfig) =>
       `[llmwiki] 엔진 업데이트 있음: v${l} → v${r} — 원할 때 적용:  cd ${CLONE_ROOT} && git pull && ./setup.sh  (엔진이 스스로를 갱신하는 일은 없다)`,
     setupRequired: () =>
       `[llmwiki] 마지막 설치 뒤 엔진 파일이 변경됨 — 적용을 마치려면:  cd ${CLONE_ROOT} && ./setup.sh`,
+    commitsBehind: (n: number) =>
+      `[llmwiki] 엔진이 origin보다 ${n}커밋 뒤 (버전 번호는 같고 코드가 더 새로움) — 원할 때 적용:  cd ${CLONE_ROOT} && git pull && ./setup.sh`,
     l0Over: (n: number) =>
       `----- [llmwiki] L0 가 ${n}자 — 기준(~${L0_BUDGET}자) 초과; 전량 주입(자르지 않음). /wiki-save 에서 기준 이하로 트리밍 권장 -----`,
     gapBacklog: (n: number) =>
@@ -405,6 +409,7 @@ export function buildContext(repo: string): string {
     try {
       const upd = updateAvailable();
       if (upd?.kind === "update") L.push(T.updateAvail(upd.localVersion, upd.remoteVersion));
+      else if (upd?.kind === "commits-behind") L.push(T.commitsBehind(upd.behind));
       else if (upd?.kind === "setup-required") L.push(T.setupRequired());
     } catch {
       /* freshness is an extra: never let it break cold-start */

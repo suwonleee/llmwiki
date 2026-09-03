@@ -39,13 +39,31 @@ async function readPayload(): Promise<Payload | null> {
   }
 }
 
-function writeEnvelope(event: "SessionStart" | "UserPromptSubmit", text: string): void {
+async function writeEnvelope(
+  event: "SessionStart" | "UserPromptSubmit",
+  text: string,
+  systemMessage = "",
+): Promise<void> {
   if (!text) return;
-  process.stdout.write(
-    JSON.stringify({
-      hookSpecificOutput: { hookEventName: event, additionalContext: text },
-    }) + "\n",
-  );
+  const { hookEnvelope } = await import("./engine/hook-envelope.ts");
+  process.stdout.write(hookEnvelope(event, text, systemMessage));
+}
+
+/**
+ * The person-facing update line for this repository, or "". Rendered in the wiki's language and
+ * gated for plugin installs (see humanUpdateLine). Fail-safe: a freshness check must never cost
+ * the cold start.
+ */
+async function humanNotice(root: string): Promise<string> {
+  try {
+    const [{ humanUpdateLine, inPluginContext, updateAvailable }, { isRepoKorean }] = await Promise.all([
+      import("./engine/update-check.ts"),
+      import("./engine/config.ts"),
+    ]);
+    return humanUpdateLine(updateAvailable(), { ko: isRepoKorean(root), pluginContext: inPluginContext() });
+  } catch {
+    return "";
+  }
 }
 
 async function enabled(repo: string): Promise<void> {
@@ -81,7 +99,9 @@ async function contextHook(repo: string): Promise<void> {
   const root = wikiRootFor(target, status.worktree);
   const out = buildContext(root);
   if (out && sessionId) recordEmission(root, sessionId, "cold_start", out);
-  writeEnvelope("SessionStart", out);
+  // The update notice already rides inside `out` for the model; this is the same fact for the
+  // PERSON, on the channel both harnesses display. Only ever alongside real context.
+  await writeEnvelope("SessionStart", out, out ? await humanNotice(root) : "");
 }
 
 async function turnContextHook(repo: string): Promise<void> {
@@ -104,7 +124,7 @@ async function turnContextHook(repo: string): Promise<void> {
   const root = wikiRootFor(target, inspectEnrollment(target).worktree);
   const out = buildTurnContext(root, prompt, sessionId);
   if (out) recordEmission(root, sessionId, "turn_context", out);
-  writeEnvelope("UserPromptSubmit", out);
+  await writeEnvelope("UserPromptSubmit", out);
 }
 
 async function openCodeContext(repo: string): Promise<void> {
@@ -126,7 +146,10 @@ async function openCodeContext(repo: string): Promise<void> {
   const turn = prompt ? buildTurnContext(root, prompt, sessionId) : "";
   if (cold) recordEmission(root, sessionId, "cold_start", cold);
   if (turn) recordEmission(root, sessionId, "turn_context", turn);
-  process.stdout.write(JSON.stringify({ cold, turn }) + "\n");
+  // `notice` is the person-facing update line for the plugin to show as a toast; it travels only
+  // with the cold start, so a session hears it once.
+  const notice = cold ? await humanNotice(root) : "";
+  process.stdout.write(JSON.stringify({ cold, turn, notice }) + "\n");
 }
 
 const command = Bun.argv[2] ?? "";

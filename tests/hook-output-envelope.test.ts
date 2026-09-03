@@ -12,8 +12,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { enrollRepo, makeGitRepo, tempDir } from "./support/git-repo.ts";
+import { recordInstallReceipt } from "../src/engine/update-check.ts";
 
 const CLI = join(import.meta.dir, "..", "src", "cli.ts");
+const CLONE_ROOT = join(import.meta.dir, "..");
 const dirs: string[] = [];
 
 function scratch(): string {
@@ -22,11 +24,24 @@ function scratch(): string {
   return d;
 }
 
-function run(args: string[]): { out: string; code: number | null } {
-  const r = Bun.spawnSync(["bun", CLI, ...args], {
-    env: { ...process.env, LLMWIKI_STATE_DIR: join(scratch(), "state") },
-  });
+function run(
+  args: string[],
+  opts: { stateRoot?: string; env?: Record<string, string> } = {},
+): { out: string; code: number | null } {
+  const stateRoot = opts.stateRoot ?? join(scratch(), "state");
+  const env: Record<string, string | undefined> = { ...process.env, LLMWIKI_STATE_DIR: stateRoot, ...opts.env };
+  // The plugin-context gate keys on this variable; a developer's own shell may carry it.
+  if (!opts.env || !("CLAUDE_PLUGIN_ROOT" in opts.env)) delete env.CLAUDE_PLUGIN_ROOT;
+  const r = Bun.spawnSync(["bun", CLI, ...args], { env: env as Record<string, string> });
   return { out: r.stdout?.toString() ?? "", code: r.exitCode };
+}
+
+/** A state root that certifies THIS clone as installed: no update pending, nothing to say. */
+function installedStateRoot(): string {
+  const stateRoot = join(scratch(), "state");
+  mkdirSync(stateRoot, { recursive: true });
+  expect(recordInstallReceipt(CLONE_ROOT, stateRoot)).toBe(true);
+  return stateRoot;
 }
 
 /** A repository with enough wiki for cold start to have something to say. */
@@ -46,17 +61,46 @@ afterEach(() => {
 });
 
 describe("hook output envelope", () => {
-  test("SessionStart wraps the cold start in exactly the two declared keys", () => {
+  test("SessionStart wraps the cold start in exactly the declared keys when there is nothing to announce", () => {
     const repo = enrolledRepoWithWiki();
 
-    const { out } = run(["context", repo, "--hook-event", "SessionStart"]);
+    const { out } = run(["context", repo, "--hook-event", "SessionStart"], { stateRoot: installedStateRoot() });
 
     const parsed = JSON.parse(out);
+    // No pending update, install receipt matches this clone: ONE top-level key, nothing else.
     expect(Object.keys(parsed)).toEqual(["hookSpecificOutput"]);
     // additionalProperties:false on the Codex side — an extra key fails the whole payload there.
     expect(Object.keys(parsed.hookSpecificOutput).sort()).toEqual(["additionalContext", "hookEventName"]);
     expect(parsed.hookSpecificOutput.hookEventName).toBe("SessionStart");
     expect(parsed.hookSpecificOutput.additionalContext).toContain("DIRECTION: ship the thing.");
+  });
+
+  test("SessionStart adds the person-facing systemMessage when setup has not been run", () => {
+    // A clone install whose state root has no install receipt: the person needs to run setup.sh,
+    // and `systemMessage` is the field both harnesses SHOW to them (the additionalContext line
+    // only reaches the model). It is a declared top-level field on both, never an inner key.
+    const repo = enrolledRepoWithWiki();
+
+    const { out } = run(["context", repo, "--hook-event", "SessionStart"]);
+
+    const parsed = JSON.parse(out);
+    expect(Object.keys(parsed).sort()).toEqual(["hookSpecificOutput", "systemMessage"]);
+    expect(Object.keys(parsed.hookSpecificOutput).sort()).toEqual(["additionalContext", "hookEventName"]);
+    expect(parsed.systemMessage).toContain("[llmwiki]");
+    expect(parsed.systemMessage).toContain("./setup.sh");
+    // one line — this is a banner, not a report
+    expect(parsed.systemMessage).not.toContain("\n");
+  });
+
+  test("a PLUGIN install never gets the setup.sh line — it has no setup step to run", () => {
+    const repo = enrolledRepoWithWiki();
+
+    const { out } = run(["context", repo, "--hook-event", "SessionStart"], {
+      env: { CLAUDE_PLUGIN_ROOT: join(scratch(), "plugin-root") },
+    });
+
+    const parsed = JSON.parse(out);
+    expect(Object.keys(parsed)).toEqual(["hookSpecificOutput"]);
   });
 
   test("UserPromptSubmit names its own event", () => {

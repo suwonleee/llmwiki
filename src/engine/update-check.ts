@@ -50,7 +50,8 @@ interface InstallReceipt {
 
 export type EngineUpdateNotice =
   | { kind: "update"; localVersion: string; remoteVersion: string; checkedAt: string }
-  | { kind: "setup-required"; localVersion: string; remoteVersion: string; checkedAt: string };
+  | { kind: "setup-required"; localVersion: string; remoteVersion: string; checkedAt: string }
+  | { kind: "commits-behind"; localVersion: string; remoteVersion: string; behind: number; checkedAt: string };
 
 function git(args: string[], cwd: string, timeout = 15_000): string | null {
   try {
@@ -255,5 +256,88 @@ export function updateAvailable(
       checkedAt: rec?.checkedAt ?? "",
     };
   }
+  // Version equality is not "up to date". The notice above compares package.json versions, so a
+  // release that ships fixes without bumping the version is invisible: this repository sat 49
+  // commits ahead of its own v0.11.2 tag with `remoteVersion === localVersion`, and the daemon
+  // dutifully logged "0 behind" for a clone that WAS current while every clone made at the tag
+  // was told nothing. `behind` was already measured and logged here; it just never reached anyone.
+  //
+  // Lowest priority on purpose — it speaks only when the version says nothing and the install is
+  // otherwise healthy, so it can never mask the two more actionable notices above.
+  const behind = behindOriginNow(clone);
+  if (rec !== null && behind > 0) {
+    return {
+      kind: "commits-behind",
+      localVersion: live,
+      remoteVersion: rec.remoteVersion,
+      behind,
+      checkedAt: rec.checkedAt,
+    };
+  }
   return null;
+}
+
+/**
+ * The ONE line a person sees about an engine update — in the terminal, not in the model's context.
+ *
+ * The cold-start payload has always carried the update notice, but as `additionalContext` it
+ * reaches the MODEL; the person only hears about it if the model chooses to mention it, or if
+ * they run `doctor`. This is the same fact rendered for the surfaces that show text to a human:
+ * a hook's `systemMessage` (Claude Code and Codex both display it), an OpenCode toast, and the
+ * CLI's stderr. One sentence, one command to run, nothing else.
+ *
+ * Nothing is said under a PLUGIN install. Every line here ends in a clone command (`git pull`,
+ * `./setup.sh`), and a plugin has neither: it updates through the harness's own plugin manager,
+ * and the receipt `setup-required` keys on is written only by setup.sh — so a plugin-only machine
+ * has no receipt by design and would otherwise be nagged forever about a step that does not
+ * exist there. (The daemon that records origin's version is clone-only too, so `update` and
+ * `commits-behind` cannot even arise on such a machine.) The model-facing context payload keeps
+ * its existing behavior; only the human-facing line is gated.
+ */
+export function humanUpdateLine(
+  notice: EngineUpdateNotice | null,
+  opts: { ko: boolean; pluginContext: boolean; clone?: string },
+): string {
+  if (notice === null || opts.pluginContext) return "";
+  const clone = opts.clone ?? CLONE_ROOT;
+  const pull = `cd ${clone} && git pull && ./setup.sh`;
+  const setup = `cd ${clone} && ./setup.sh`;
+  switch (notice.kind) {
+    case "update":
+      return opts.ko
+        ? `[llmwiki] 엔진 업데이트 있음: v${notice.localVersion} → v${notice.remoteVersion} — 적용: ${pull}`
+        : `[llmwiki] engine update available: v${notice.localVersion} → v${notice.remoteVersion} — apply: ${pull}`;
+    case "commits-behind":
+      return opts.ko
+        ? `[llmwiki] 엔진이 origin보다 ${notice.behind}커밋 뒤 (버전 번호는 같음) — 적용: ${pull}`
+        : `[llmwiki] engine is ${notice.behind} commit(s) behind origin (same version number) — apply: ${pull}`;
+    case "setup-required":
+      return opts.ko
+        ? `[llmwiki] 마지막 설치 뒤 엔진 파일이 변경됨 — 적용을 마치려면: ${setup}`
+        : `[llmwiki] engine files changed since the last install — finish applying them: ${setup}`;
+  }
+}
+
+/** Are we running as a harness PLUGIN rather than a clone install? Both harnesses export this. */
+export function inPluginContext(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (env.CLAUDE_PLUGIN_ROOT ?? "").trim() !== "";
+}
+
+/**
+ * Commits in HEAD..origin/main RIGHT NOW, from local refs only — no network.
+ *
+ * Deliberately not `rec.behind`: that number was measured by the daemon's last daily check, so it
+ * survives the pull that resolves it. Reading it here would keep telling someone who just pulled
+ * and re-ran setup that they are behind, for up to a day — a false alarm about the exact action we
+ * asked them to take, which is worse than the silence this notice exists to fix. The fetch is
+ * still the daemon's job; this only re-reads what that fetch already stored.
+ *
+ * 0 on any failure (no origin, no main, detached, git missing): the notice stays quiet rather than
+ * guessing. Same local-refs-only rule as context.ts's team `behindUpstream`.
+ */
+function behindOriginNow(clone: string): number {
+  const raw = git(["rev-list", "--count", "HEAD..origin/main"], clone, 5_000);
+  if (raw === null) return 0;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : 0;
 }

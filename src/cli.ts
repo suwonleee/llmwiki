@@ -5,6 +5,8 @@
 // allow: SIZE_OK — legacy handlers remain co-located while typed parsing, declarative command/help
 // metadata, and maintenance commands have dedicated boundaries; further extraction stays incremental.
 import { WikiIndex, dedupeByPage } from "./engine/db.ts";
+import { humanUpdateLine, inPluginContext, updateAvailable } from "./engine/update-check.ts";
+import { hookEnvelope, type HookEvent } from "./engine/hook-envelope.ts";
 import { today } from "./engine/today.ts";
 import packageJson from "../package.json" with { type: "json" };
 import { commandSpec, renderCommandHelp, renderRootHelp, suggestCommands, type CommandName } from "./commands/catalog.ts";
@@ -651,9 +653,17 @@ function writeHookOutput(text: string, p: Parsed): void {
   if (typeof event !== "string" || !HOOK_OUTPUT_EVENTS.has(event)) {
     die(`--hook-event must be one of: ${[...HOOK_OUTPUT_EVENTS].join(", ")}`);
   }
-  process.stdout.write(
-    JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: text } }) + "\n",
-  );
+  // Same envelope the shell adapters emit (src/engine/hook-envelope.ts), including the
+  // person-facing update line on SessionStart — this path IS the Codex hook on Windows.
+  let systemMessage = "";
+  if (event === "SessionStart") {
+    try {
+      systemMessage = humanUpdateLine(updateAvailable(), { ko, pluginContext: inPluginContext() });
+    } catch {
+      /* a freshness check never costs the cold start */
+    }
+  }
+  process.stdout.write(hookEnvelope(event as HookEvent, text, systemMessage));
 }
 
 /**
@@ -1688,6 +1698,21 @@ if (!AUTOMATIC_COMMANDS.has(parsed.cmd)) {
   LANG = isRepoKorean(wsGuess) ? "ko" : "en";
   ko = LANG === "ko";
 }
+/**
+ * One stderr line after a HUMAN command when an engine update is pending. stderr, so a command
+ * whose stdout is parsed (skills, scripts) is untouched. Not on hook paths (their channel is the
+ * envelope's systemMessage), and not on the two commands that already own an [update] section.
+ * Best-effort: a person's command never fails over a freshness check.
+ */
+function printUpdateBanner(cmd: string, asHook: boolean): void {
+  if (asHook || cmd === "doctor" || cmd === "verify") return;
+  try {
+    const line = humanUpdateLine(updateAvailable(), { ko, pluginContext: inPluginContext() });
+    if (line) process.stderr.write(line + "\n");
+  } catch {
+    /* informational only */
+  }
+}
 const handler = HANDLERS[parsed.cmd as CommandName];
 if (!handler) {
   // Bare `llmwiki` is a person asking what exists — give them the catalog. A WRONG command is
@@ -1712,6 +1737,9 @@ if (!handler) {
 const asHook = typeof parsed.flags["--hook-event"] === "string";
 // (1) An engine subprocess must not self-inject into its own WRITE/VERIFY prompt.
 if (asHook && (process.env.LLMWIKI_ENGINE_SUBPROCESS ?? "") !== "") process.exit(0);
+// Before the handler, not after: many handlers end in process.exit(), and a banner placed after
+// them would show only for the ones that happen to return. stderr, one line, then the command.
+printUpdateBanner(parsed.cmd, asHook);
 try {
   await handler(parsed);
 } catch (e) {

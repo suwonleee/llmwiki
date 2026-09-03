@@ -44,6 +44,8 @@ cd ~/llmwiki
 以上命令会安装当前公开版本。如果需要可复现的部署，请在setup之前到
 [Releases页面](https://github.com/suwonleee/llmwiki/releases)选择一个发布标签。更新始终由你手动执行 —
 但你不必盯着发布页：守护进程每天检查一次origin，有新版本时，下次会话开始会显示一行提示和更新命令。
+这行提示不只给智能体看，**你本人也会看到**：Claude Code和Codex在会话开始时以钩子系统消息显示，
+OpenCode以toast显示，每个`llmwiki`命令也会在stderr上打印一次；版本号相同但origin代码更新时同样会提示。
 是否执行始终由你决定，引擎绝不会自我更新。移动或删除此目录前，请先卸载（见下文），因为已安装的
 钩子会指向这个路径。
 
