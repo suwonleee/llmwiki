@@ -1,5 +1,5 @@
 {
-  "contract_version": 3,
+  "contract_version": 4,
   "runtime": {
     "bun_minimum": "1.1.0",
     "git_required_for_capture": true
@@ -13,13 +13,14 @@
     "codex": {
       "policy": "capability-gated",
       "install_probes": ["hook-trust-cli", "stable-hooks-feature"],
-      "installed_surface_canary": "fresh-public-harness-loop"
+      "installed_surface_canary": "fresh-public-harness-loop",
+      "session_stores": "all-discovered-homes"
     },
     "opencode": {
       "policy": "capability-and-schema-gated",
       "install_probes": ["custom-command-cli"],
       "installed_surface_canary": "fresh-public-harness-loop",
-      "verified_projection": "1.18.4-message-part",
+      "verified_projection": "1.18.27-message-part",
       "poll_revision_fallbacks": ["session-time-updated", "message-part-metadata", "conservative-materialization"]
     }
   },

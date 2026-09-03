@@ -125,7 +125,7 @@ function surfaceIds(section: string): string[] {
 describe("public machine-readable support contract", () => {
   test("has a complete OS by harness command/action/surface matrix", () => {
     const value = contract();
-    expect(value.contract_version).toBe(3);
+    expect(value.contract_version).toBe(4);
     expect(Object.keys(value.platforms).sort()).toEqual(PLATFORM_IDS.slice().sort());
     expect(Object.keys(value.support_matrix).sort()).toEqual(PLATFORM_IDS.slice().sort());
     for (const platform of PLATFORM_IDS) {
@@ -152,12 +152,15 @@ describe("public machine-readable support contract", () => {
     expect(value.harness_compatibility.codex).toMatchObject({
       install_probes: ["hook-trust-cli", "stable-hooks-feature"],
       installed_surface_canary: "fresh-public-harness-loop",
+      // Codex stopped being a single-home harness: the desktop app relocates CODEX_HOME per
+      // signed-in account, so capture sweeps every home it can verify rather than one.
+      session_stores: "all-discovered-homes",
     });
     expect(value.harness_compatibility.opencode).toMatchObject({
       policy: "capability-and-schema-gated",
       install_probes: ["custom-command-cli"],
       installed_surface_canary: "fresh-public-harness-loop",
-      verified_projection: "1.18.4-message-part",
+      verified_projection: "1.18.27-message-part",
       poll_revision_fallbacks: ["session-time-updated", "message-part-metadata", "conservative-materialization"],
     });
 
