@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { inspectCodexInstall } from "../src/engine/doctor.ts";
+import { codexStructuredAsk, inspectCodexInstall } from "../src/engine/doctor.ts";
 
 const ROOT = join(import.meta.dir, "..");
 
@@ -168,5 +168,68 @@ describe("Codex doctor status", () => {
     writeFileSync(join(legacy, "SKILL.md"), "---\nname: llmwiki-fast\ndescription: legacy\n---\n");
 
     expect(inspectCodexInstall(codexHome, home).legacySkills).toEqual(["llmwiki-fast"]);
+  });
+});
+
+describe("Codex structured-ask flag", () => {
+  // `$wiki-quiz` prefers Codex's own prompt (`request_user_input`), but Codex allows the CALL only
+  // in Plan mode unless `default_mode_request_user_input` is set — measured on 0.153.4. Doctor
+  // reads that per home because Codex Desktop gives each signed-in account its own config.toml,
+  // so a flag enabled in one home says nothing about another. Reading it wrong only ever prints
+  // the wrong optional hint, which is why this is a narrow reader and not a TOML dependency.
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "llmwiki-codex-ask-"));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const write = (toml: string): string => {
+    const home = join(dir, `home-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "config.toml"), toml);
+    return home;
+  };
+
+  test("no config.toml is the stock state, and the stock state is off", () => {
+    const home = join(dir, "bare");
+    mkdirSync(home, { recursive: true });
+    expect(codexStructuredAsk(home)).toBe("off");
+  });
+
+  test("the [features] table entry `codex features enable` writes is read as on", () => {
+    expect(codexStructuredAsk(write("[features]\ndefault_mode_request_user_input = true\n"))).toBe("on");
+  });
+
+  test("a dotted top-level key is read as on too", () => {
+    expect(codexStructuredAsk(write('model = "gpt-5.6-sol"\nfeatures.default_mode_request_user_input = true\n'))).toBe("on");
+  });
+
+  test("explicitly false is off", () => {
+    expect(codexStructuredAsk(write("[features]\nhooks = true\ndefault_mode_request_user_input = false\n"))).toBe("off");
+  });
+
+  test("the key set true under a DIFFERENT table is not this flag", () => {
+    // A real config.toml carries [hooks.state."<path>:session_start:0:0"] tables whose bodies are
+    // `enabled = true` lines. Scoping by table is what keeps a stray key from reading as the flag.
+    const toml = [
+      "[features]",
+      "hooks = true",
+      "",
+      '[hooks.state."/Users/x/.codex/hooks.json:session_start:0:0"]',
+      "enabled = true",
+      "default_mode_request_user_input = true",
+      "",
+    ].join("\n");
+    expect(codexStructuredAsk(write(toml))).toBe("off");
+  });
+
+  test("a comment does not enable the flag", () => {
+    expect(codexStructuredAsk(write("[features]\n# default_mode_request_user_input = true\n"))).toBe("off");
+  });
+
+  test("the inspected install carries the state of ITS home", () => {
+    const home = write("[features]\ndefault_mode_request_user_input = true\n");
+    expect(inspectCodexInstall(home, join(dir, "no-such-home")).structuredAsk).toBe("on");
   });
 });

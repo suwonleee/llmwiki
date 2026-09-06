@@ -161,6 +161,8 @@ export interface CodexInstallStatus {
    *  start above ~2,500 approx tokens (10,000 bytes) to a spilled-file preview. */
   sessionSpillGuard: boolean;
   reviewRecords: boolean;
+  /** Whether THIS home may show the quiz its structured prompt. See codexStructuredAsk. */
+  structuredAsk: StructuredAskState;
   missingSkills: string[];
   staleSkills: string[];
   /** Installed, current, and unloadable: the file does not open with YAML frontmatter, so the
@@ -230,6 +232,57 @@ function commandLocation(
   return null;
 }
 
+/**
+ * Whether a Codex home may show `/wiki-quiz` its structured prompt, from that home's config.toml.
+ *
+ * Codex registers `request_user_input` in every session, but only Plan mode is allowed to CALL it:
+ * elsewhere the tool answers `request_user_input is unavailable in Default mode`, and the quiz
+ * falls back to a numbered chat block. `default_mode_request_user_input` lifts that restriction
+ * (under development, ships off — measured on Codex 0.153.4). The state is per home, and Codex
+ * Desktop gives each signed-in account its own, so this is read for every home doctor reports.
+ */
+export type StructuredAskState = "on" | "off" | "unreadable";
+
+export const CODEX_STRUCTURED_ASK_FLAG = "default_mode_request_user_input";
+
+export function codexStructuredAsk(codexHome: string): StructuredAskState {
+  const path = join(codexHome, "config.toml");
+  // No config.toml is not unknown — it is the stock state, and the flag ships disabled.
+  if (!existsSync(path)) return "off";
+  try {
+    return tomlFlagEnabled(readFileSync(path, "utf8"), "features", CODEX_STRUCTURED_ASK_FLAG)
+      ? "on"
+      : "off";
+  } catch {
+    return "unreadable";
+  }
+}
+
+/**
+ * Is `<key> = true` set, in the `[<table>]` table or as a dotted top-level key?
+ *
+ * Deliberately narrow: those are the two spellings `codex features enable` and a hand edit
+ * produce. A whole TOML parser is not worth carrying to read one boolean, and the only thing a
+ * wrong answer here can change is whether an optional hint line prints.
+ */
+function tomlFlagEnabled(text: string, table: string, key: string): boolean {
+  let inTable = false;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/#.*$/, "").trim();
+    if (!line) continue;
+    if (line.startsWith("[")) {
+      inTable = line === `[${table}]`;
+      continue;
+    }
+    const eq = line.indexOf("=");
+    if (eq < 0) continue;
+    const name = line.slice(0, eq).trim().replaceAll('"', "");
+    if (line.slice(eq + 1).trim() !== "true") continue;
+    if (inTable ? name === key : name === `${table}.${key}`) return true;
+  }
+  return false;
+}
+
 // Structural inspection only. Codex owns the current-hash verdict, so a matching config
 // record is reported as "review record present", never as an authoritative trust claim.
 // `/hooks` remains the source of truth for new/changed handlers.
@@ -247,6 +300,7 @@ export function inspectCodexInstall(
     turnHook: false,
     sessionSpillGuard: false,
     reviewRecords: false,
+    structuredAsk: codexStructuredAsk(codexHome),
     missingSkills: [],
     staleSkills: [],
     ungatedSkills: [],
@@ -1075,6 +1129,26 @@ export function runDoctor(
               `re-run \`${WIRE_CODEX_CMD}\`, then re-review in \`/hooks\``,
           );
           actions += 1;
+        }
+
+        // Optional, never an action item and never an issue: `$wiki-quiz` prefers Codex's
+        // structured prompt (`request_user_input`), but Codex only lets Plan mode CALL that tool
+        // unless this under-development flag is on — everywhere else the quiz asks in a numbered
+        // chat block, which works fine. Reported per home because Codex Desktop gives each
+        // signed-in account its own config.toml, so enabling it in one says nothing about another.
+        for (const home of codexHomes()) {
+          const state = codexStructuredAsk(home);
+          if (state === "unreadable") {
+            console.log(`  [codex] • ${join(home, "config.toml")} unreadable — quiz prompt style unknown`);
+          } else if (state === "on") {
+            console.log(`  [codex] • structured quiz prompts on (${CODEX_STRUCTURED_ASK_FLAG}) in ${home}`);
+          } else {
+            // The prefix names the home only when it is not the one this shell would use; a
+            // symlinked home would print a harmless extra prefix, never a wrong command.
+            const prefix = home === codexHomeDir ? "" : `CODEX_HOME=${shellQuote(home)} `;
+            console.log(`  [codex] • structured quiz prompts off in ${home} — \`$wiki-quiz\` asks in a numbered block`);
+            console.log(`  [codex]    optional: ${prefix}codex features enable ${CODEX_STRUCTURED_ASK_FLAG}`);
+          }
         }
 
       if (status.missingSkills.length) {

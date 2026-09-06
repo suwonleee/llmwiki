@@ -384,6 +384,15 @@ if [ "$USE_CODEX" -eq 1 ]; then
     echo "  • One-time Codex activation: start Codex, open /hooks, trust both llmwiki hooks."
     echo "  • Then work in a project and close the session with: \$wiki-save"
     echo "  • Diagnose and repair that project's wiki with: \$wiki-doctor"
+    # Optional, never a failure: Codex registers `request_user_input` in every session but lets
+    # only Plan mode call it, so outside Plan mode \$wiki-quiz asks in a numbered chat block. This
+    # under-development flag lifts that; `features list` reports the effective state for the home
+    # this shell resolves, which is the one the reader's own `codex` will use.
+    CODEX_ASK_LINE="$(codex features list 2>/dev/null | grep -E '^default_mode_request_user_input[[:space:]]' || true)"
+    if [ -n "$CODEX_ASK_LINE" ] && ! printf '%s\n' "$CODEX_ASK_LINE" | grep -Eq '[[:space:]]true$'; then
+        echo "  • Optional, for \$wiki-quiz's structured prompt outside Plan mode:"
+        echo "      codex features enable default_mode_request_user_input"
+    fi
 fi
 if [ "$USE_CLAUDE" -eq 1 ]; then
     echo "  • Claude Code close-out: /wiki-save"
