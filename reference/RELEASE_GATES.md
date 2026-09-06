@@ -12,6 +12,7 @@ row; it does not substitute for observed-user evidence.
 | `retrieval-scale` | `automated-pass-required` | Generated 10/100/1000-page fixtures retain complete search/context correctness. Timing/resource distributions are observational, not release thresholds. |
 | `privacy-boundary` | `automated-pass-required` | Static write boundaries, provider opt-in, public-artifact poison scans, and usability-event privacy validation pass. |
 | `docs-semantics` | `automated-pass-required` | All public onboarding languages preserve enrollment, commands, native-Windows/WSL distinctions, activation actions, and privacy semantics. |
+| `harness-ask-surface` | `manual-live-when-harness-moves` | The quiz's structured-prompt clauses match the harness that ships them: Codex refuses `request_user_input` outside Plan mode with the exact string the skill falls back on, allows it non-blocking under `default_mode_request_user_input`, and blocking in Plan mode. Costs three real model turns, so it runs when a harness version moves, not on every release. |
 | `external-usability` | `external-evidence-required` | Deferred: no participant results exist. No onboarding-arm winner or information-architecture change may be claimed. |
 
 ## Reproducible release checklist
@@ -62,7 +63,17 @@ to make an unexplained regression green.
 
    `git diff --check`
 
-7. External observed-user gate
+7. Harness ask-surface, when a harness version moved since the last release
+
+   Not part of `bun test` — three real Codex model turns, and a signed-in Codex is required. Skip
+   it, and say so in the release note, when no harness moved.
+
+   `LLMWIKI_LIVE=1 bun src/dev/codex-rui-smoke.ts`
+
+   A red claim means `skill/wiki-quiz.md` now tells the model something Codex no longer does;
+   reconcile the skill (and `tests/quiz-ask-surface.test.ts` with it) before releasing.
+
+8. External observed-user gate
 
    Status for this release artifact: `deferred-no-results`. Do not collect or upload data as part of
    the release command loop. If a separately approved local study is later run, freeze the protocol

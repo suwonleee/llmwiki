@@ -27,6 +27,9 @@ describe("public evaluation and release gates", () => {
       "retrieval-scale": "automated-pass-required",
       "privacy-boundary": "automated-pass-required",
       "docs-semantics": "automated-pass-required",
+      // Live, manual, and priced in real model turns: the only gate whose subject (a harness's
+      // own tool behavior) cannot be frozen into a fixture, so it runs when that harness moves.
+      "harness-ask-surface": "manual-live-when-harness-moves",
       "external-usability": "external-evidence-required",
     });
   });

@@ -49,6 +49,8 @@ const ALLOWED_MUTATORS: Record<string, string> = {
   "engine/sqlite-open.ts":
     "copies a foreign harness database into a private OS temp dir when its own directory is not writable, and removes that copy on close — never repository content",
   "engine/bench.ts": "engine-development benchmark writing its own report next to the corpus",
+  "dev/codex-rui-smoke.ts":
+    "manual live gate against Codex's own app-server, creating and removing a disposable OS temp cwd (a thread's cwd gets marked trusted, so it must not be a real directory) — never repository content",
   "plugin/build-assets.ts":
     "renders the plugin skill surfaces into the engine clone itself from skill/ sources — build tooling, never repository content",
   "engine/observe.ts":
