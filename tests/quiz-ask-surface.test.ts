@@ -53,6 +53,16 @@ describe("wiki-quiz structured-ask contract", () => {
       expect(body).not.toContain("but only **Plan mode** may call it");
     });
 
+    test(`${relative} makes the structured tool the default at the point of asking`, () => {
+      const body = text();
+      // Execution-rule prose was not enough. Driving the real Codex TUI — flag on, the tool's own
+      // description reading "Default or Plan mode", so the call was permitted — the model still
+      // typed its questions into chat. The imperative therefore lives in procedure 3, where the
+      // asking happens, and names chat-instead-of-tool as a defect rather than an alternative.
+      expect(body).toContain("is the default, not one of two equal options");
+      expect(body).toContain("a defect, not a style choice");
+    });
+
     test(`${relative} keeps the options when it falls back to a chat block`, () => {
       const body = text();
       // Same live session: with no explicit rule, the fallback became three open-ended prose
@@ -60,6 +70,17 @@ describe("wiki-quiz structured-ask contract", () => {
       // calibrated for multiple choice.
       expect(body).toContain("keeping its FULL option set");
       expect(body).toContain("an open-ended prose question is not the fallback");
+    });
+
+    test(`${relative} rules out the async ask tool`, () => {
+      const body = text();
+      // Codex registers `request_user_input_async` alongside the synchronous tool for any model
+      // whose catalog advertises send_user_message_async. That is the difference between two live
+      // TUI runs: the model carrying both left the sync tool unused and typed into chat, while the
+      // model carrying only the sync one always asked through the overlay. The async tool returns
+      // without waiting, so a quiz turn that used it would have nothing left to grade.
+      expect(body).toContain("request_user_input_async");
+      expect(body).toContain("never the quiz's");
     });
 
     test(`${relative} names the flag that unlocks Default mode, as optional`, () => {
