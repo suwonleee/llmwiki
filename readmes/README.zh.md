@@ -194,6 +194,7 @@ cp llmwiki.config.example.toml llmwiki.config.toml   # 英文，注释齐全
     - 引擎选出到期条目后，会话把相关页面一起读完、把所有题一次写好 — 答完一题下一题即刻出现，无需等待
     - 按页面内容做要点（gist）评分 · 答错的题第二天最先回来
     - 题量: `llmwiki.config.toml` 的 `[quiz] questions` — 默认 **3**，可像 `/wiki-quiz 5` 一样用参数加大，引擎上限 **7**（会被人跳过的测验什么也强化不了）
+    - 问题送达的位置: Claude Code `AskUserQuestion`（每次 4 题） · OpenCode `question` · Codex `request_user_input`（每次 3 题，Plan 模式之外需先运行 `codex features enable default_mode_request_user_input`） — 其他情况下整套题目作为一个编号块送达
 - **记录位置**
     - `docs/wiki/6_quiz/` — 台账 + 按日会话笔记
     - 从索引/搜索/冷启动中排除的纯人类层 — LLM 永远不会吃回自己的测验输出: wiki → 人，严格单向

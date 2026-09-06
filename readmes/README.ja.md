@@ -199,6 +199,7 @@ MCPサーバー、Docker、外部データベース、ベクトルDB、クラウ
     - エンジンがdue項目を選ぶと、セッションが該当ページをまとめて読んで全問を先に作成 — 1問答えると次問が待ちなしで表示
     - 採点はページに基づく要旨（gist）採点 · 間違えた問題は翌日最初に再出題
     - 問題数: `llmwiki.config.toml` の `[quiz] questions` — 既定 **3**、`/wiki-quiz 5` のように引数で増加、エンジン上限 **7**（人がスキップするクイズは何も強化しない）
+    - 質問が届く場所: Claude Code `AskUserQuestion`（1回4問） · OpenCode `question` · Codex `request_user_input`（1回3問、Plan モード外では `codex features enable default_mode_request_user_input` を実行した場合のみ） — それ以外では全問が1つの番号付きブロックで届く
 - **記録の場所**
     - `docs/wiki/6_quiz/` — 台帳 + 日別セッションノート
     - インデックス/検索/コールドスタートから除外される人間専用レイヤー — LLMが自らのクイズ出力を餌にしない: wiki → 人間の厳密な一方向

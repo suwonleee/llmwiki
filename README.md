@@ -263,6 +263,7 @@ Every other stage keeps the **model** grounded; this one keeps the **human** sha
     - the engine picks the due items; the session reads those pages together and writes every question up front — answering one shows the next with no wait
     - answers are gist-graded warm, grounded in the pages; wrong answers come back first the next day
     - size: `[quiz] questions` in `llmwiki.config.toml` — default **3**, raise per run like `/wiki-quiz 5`, engine-capped at **7** (a quiz people skip reinforces nothing)
+    - where the questions reach you: Claude Code `AskUserQuestion` (4 per call) · OpenCode `question` · Codex `request_user_input` (3 per call, and outside Plan mode only once you run `codex features enable default_mode_request_user_input`) — anywhere else the whole set arrives as one numbered block
 - **Where records live**
     - `docs/wiki/6_quiz/` — ledger + per-day session notes
     - a human-only layer excluded from indexing/search/cold-start — the LLM never feeds on its own quiz output: strictly wiki → human

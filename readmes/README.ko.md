@@ -201,6 +201,7 @@ MCP 서버·Docker·외부 데이터베이스·벡터 DB·클라우드 서비스
     - 엔진이 due 항목을 뽑으면 세션이 해당 페이지들을 함께 읽고 문제를 전부 미리 작성 — 하나 답하면 다음 문제가 대기 없이 표시
     - 채점은 페이지에 근거한 요지(gist) 채점 · 틀린 것은 다음 날 가장 먼저 재출제
     - 문항 수: `llmwiki.config.toml`의 `[quiz] questions` — 기본 **3**, `/wiki-quiz 5`처럼 인자로 증가, 엔진 상한 **7** (사람이 건너뛰는 퀴즈는 아무것도 강화하지 않음)
+    - 질문이 도달하는 곳: Claude Code `AskUserQuestion`(호출당 4문) · OpenCode `question` · Codex `request_user_input`(호출당 3문, Plan 모드 밖에서는 `codex features enable default_mode_request_user_input` 실행 후에만) — 그 외에는 전체 문항이 번호 블록 하나로 도착
 - **기록 위치**
     - `docs/wiki/6_quiz/` — 장부 + 날짜별 세션 노트
     - 인덱스·검색·cold-start에서 제외되는 사람 전용 레이어 — LLM이 자기 퀴즈 산출물을 되먹지 않음: 위키 → 사람, 엄격한 단방향
