@@ -7,13 +7,13 @@
   },
   "metadata": {
     "description": "Marketplace for the llmwiki plugin — this repository is the marketplace: /plugin marketplace add suwonleee/llmwiki",
-    "version": "0.12.0"
+    "version": "0.13.0"
   },
   "plugins": [
     {
       "name": "llmwiki",
       "description": "Local-first project wiki that compounds across coding sessions: cold-start context injection, per-turn wiki pointers, /wiki-* close-out commands. Requires Bun.",
-      "version": "0.12.0",
+      "version": "0.13.0",
       "author": {
         "name": "suwonleee",
         "url": "https://github.com/suwonleee"

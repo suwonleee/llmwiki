@@ -1,6 +1,6 @@
 {
   "name": "llmwiki",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "description": "local-first compounding wiki engine (Bun/TypeScript)",
   "type": "module",
   "private": true,

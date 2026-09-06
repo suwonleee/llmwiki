@@ -1,6 +1,6 @@
 {
   "name": "llmwiki",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "description": "Local-first project wiki that compounds across coding sessions (Karpathy LLM-wiki pattern). Requires Bun.",
   "author": {
     "name": "suwonleee",
