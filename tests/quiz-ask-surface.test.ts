@@ -34,10 +34,32 @@ describe("wiki-quiz structured-ask contract", () => {
       const body = text();
       // The exact string Codex returns to the model outside Plan mode without the flag.
       expect(body).toContain("request_user_input is unavailable in Default mode");
-      expect(body).toContain("ALWAYS in your tool list");
-      expect(body).toContain("do **not** retry");
+      expect(body).toContain("`request_user_input is unavailable in Default mode`: same fallback, no retry");
       // The retired trigger. Its return means someone reinstated a fallback that never fires.
       expect(body).not.toContain("if the tool is not in your tool list");
+    });
+
+    test(`${relative} points the model at the tool's own description, not at the mode`, () => {
+      const body = text();
+      // Two live Codex sessions on 2026-09-06 settled this. A first draft said "only Plan mode may
+      // call it"; with the flag ON — the call permitted — the model still refused to try and asked
+      // in prose. With the flag OFF, no call is attempted either, and the app-server tool router
+      // logs nothing: Codex renders the allowed modes INTO the tool description
+      // (`request_user_input_tool_description`), so the model is already being told. The skill
+      // therefore points at that description as the authority and forbids only the failure the
+      // first draft produced — declining a call the description permits.
+      expect(body).toContain("its own description names the modes allowed to call it");
+      expect(body).toContain("never talk yourself out of a call it permits");
+      expect(body).not.toContain("but only **Plan mode** may call it");
+    });
+
+    test(`${relative} keeps the options when it falls back to a chat block`, () => {
+      const body = text();
+      // Same live session: with no explicit rule, the fallback became three open-ended prose
+      // questions and no options at all — recognition replaced by free recall, on a schedule
+      // calibrated for multiple choice.
+      expect(body).toContain("keeping its FULL option set");
+      expect(body).toContain("an open-ended prose question is not the fallback");
     });
 
     test(`${relative} names the flag that unlocks Default mode, as optional`, () => {
