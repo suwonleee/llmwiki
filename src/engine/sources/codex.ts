@@ -675,6 +675,9 @@ export const codexSource: TranscriptSource = {
       const ts = String(o.timestamp ?? o.payload?.timestamp ?? "").slice(0, 16);
       if (f.role === "user") {
         if (t.startsWith("<") || t.slice(0, 40).includes("system-reminder")) continue;
+        // Codex persists repository instructions as a user-role context message. They are
+        // harness input, not a human decision to file or quote in the project wiki.
+        if (t.startsWith("# AGENTS.md instructions") && t.includes("<INSTRUCTIONS>")) continue;
         users.push({ ts, role: "user", text: t.slice(0, cap) });
       } else if (f.role === "assistant") {
         if (t.length >= minChars) assistants.push({ ts, role: "assistant", text: t.slice(0, cap) });

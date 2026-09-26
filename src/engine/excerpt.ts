@@ -22,7 +22,7 @@
 // Everything here passes screenSecrets before it is returned. That is a hard gate, not a policy:
 // the raw material is a session transcript, which routinely contains credentials.
 import { collectGroundedFacts, type GroundedFact } from "./grounding.ts";
-import { extractIncrement } from "./extract.ts";
+import { sourceForKind, sourceForPath, type TranscriptSource } from "./source.ts";
 import { screenSecrets, REDACTED } from "./screen.ts";
 
 // Per-excerpt character cap. Evidence is a pointer to grounding, not a second copy of the source;
@@ -70,6 +70,14 @@ function turnLocator(ts: string, role: string): string {
   return `${ts.replace("T", " ")} ${role}`.trim();
 }
 
+function excerptSource(path: string, kind?: string): TranscriptSource {
+  if (kind) return sourceForKind(kind);
+  const source = sourceForPath(path);
+  // Historical callers also pass copied Claude JSONL outside its configured home. Preserve
+  // that fallback without sending an owned Codex rollout or OpenCode export to the Claude parser.
+  return source.kind === "plain" ? sourceForKind("claude-jsonl") : source;
+}
+
 /**
  * Candidate excerpts for a transcript window. Returns BOTH classes; the warm session picks which
  * one grounds the claim it is writing (the engine does not guess which claim a page will make).
@@ -78,7 +86,7 @@ function turnLocator(ts: string, role: string): string {
 export function mintExcerpts(
   transcriptPath: string,
   startOffset = 0,
-  opts: { kind?: "claude-jsonl"; limit?: number } = {},
+  opts: { kind?: string; limit?: number } = {},
 ): Excerpt[] {
   // The limit is PER CLASS, not across both. A working session produces facts by the hundred and
   // judgments by the dozen (measured: 226 vs 23 in one real session), so a shared quota filled in
@@ -87,11 +95,12 @@ export function mintExcerpts(
   const limit = Math.max(1, opts.limit ?? 20);
   const facts: Excerpt[] = [];
   const judgments: Excerpt[] = [];
+  const source = excerptSource(transcriptPath, opts.kind);
 
   // facts — machine records, rendered straight from grounding.ts (no new extractor needed)
   let raw: GroundedFact[] = [];
   try {
-    raw = collectGroundedFacts(transcriptPath, startOffset, opts.kind ?? "claude-jsonl").facts;
+    raw = collectGroundedFacts(transcriptPath, startOffset, source.kind).facts;
   } catch {
     raw = [];
   }
@@ -103,7 +112,7 @@ export function mintExcerpts(
 
   // judgments — human utterances, verbatim
   try {
-    for (const t of extractIncrement(transcriptPath, startOffset).users) {
+    for (const t of source.parse(transcriptPath, startOffset).users) {
       if (judgments.length >= limit) break;
       const e = accept("judgment", turnLocator(t.ts, t.role), t.text);
       if (e) judgments.push(e);
@@ -223,8 +232,11 @@ function normalize(s: string): string {
 export function verifyExcerpt(text: string, transcriptPath: string, startOffset = 0): boolean | null {
   let corpus: string;
   try {
-    const inc = extractIncrement(transcriptPath, startOffset);
-    const ev = collectGroundedFacts(transcriptPath, startOffset);
+    const source = excerptSource(transcriptPath);
+    // Extraction caps keep summaries small; verification must also see a quote near the end
+    // of a long utterance. A missing source stays undecidable through the catch below.
+    const inc = source.parse(transcriptPath, startOffset, { cap: Number.MAX_SAFE_INTEGER, minChars: 0 });
+    const ev = collectGroundedFacts(transcriptPath, startOffset, source.kind);
     corpus = normalize(
       [...inc.users, ...inc.assistants].map((t) => t.text).join("\n") +
         "\n" +
