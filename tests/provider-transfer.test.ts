@@ -91,6 +91,20 @@ describe("generative transfer is off by default", () => {
     expect((await llm("p", "m")).startsWith(UNAVAILABLE)).toBe(true);
   });
 
+  test("the setup command survives every consumer's display cap", async () => {
+    // Consumers cap this reason when surfacing it (review printer: 200 chars for
+    // non-engine-authored reasons; consolidate's stored verdict: 240). The message once led
+    // with the explanation, and a live run showed the operator exactly
+    // "For Claude Code: export L" — the one part the hint exists to deliver was the part
+    // the cap removed. Pin the property, not the wording: the full export command fits in
+    // the smallest cap.
+    withEnv(undefined);
+    const reason = (await llm("p", "m")).slice(UNAVAILABLE.length + 1);
+    const command = reason.match(/export \S+='[^']*'/)?.[0];
+    expect(command).toBeDefined();
+    expect(reason.slice(0, 200)).toContain(command!);
+  });
+
   test("a committed review with no provider does not leave a false incomplete-launch marker", async () => {
     const repo = scratch();
     const wiki = join(repo, "docs", "wiki", "2_lesson");

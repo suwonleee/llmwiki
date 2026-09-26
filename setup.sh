@@ -32,6 +32,8 @@ installed hooks point at this directory, so removal needs it to still be here.
 
 Codex installs:
   - native SessionStart + UserPromptSubmit hooks in \$CODEX_HOME/hooks.json
+  - one tagged sandbox entry in \$CODEX_HOME/config.toml so the default sandbox
+    may write the llmwiki state root ([sandbox_workspace_write].writable_roots)
   - \$wiki-save, \$wiki-deep, \$wiki-ask, \$wiki-quiz, \$wiki-doctor skills
   - a user-level llmwiki command in ~/.local/bin
 

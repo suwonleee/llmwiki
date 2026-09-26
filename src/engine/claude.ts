@@ -134,12 +134,19 @@ export async function llm(prompt: string, model: string | null): Promise<string>
   if (tmpl === null) {
     // No command configured → no subprocess, no network, no error. The deterministic half of the
     // engine (capture, index, search, lint, manual close-out) is fully usable in this state.
+    //
+    // The copy-pasteable command leads and the explanation follows, not the other way round:
+    // several consumers cap this reason when they surface it (the review printer at 200 chars,
+    // consolidate's stored verdict at 240), and with the explanation first the cap landed exactly
+    // on the command — a live run showed the operator "For Claude Code: export L". A setup hint
+    // whose actionable part is the piece that gets truncated has delivered only its apology.
     return (
-      `${UNAVAILABLE} no generative command configured. Deterministic capture/index/search/lint ` +
-      `are unaffected; to enable optional generative passes, set ${LLM_CMD_ENV} in your shell ` +
-      `environment. For Claude Code: export ${LLM_CMD_ENV}='claude -p {prompt} --model {model} ` +
-      `--disallowedTools Write Edit NotebookEdit Bash' — keep the tool restrictions; ` +
-      `the prompt is built from transcript text.`
+      `${UNAVAILABLE} no generative command configured — for Claude Code: ` +
+      `export ${LLM_CMD_ENV}='claude -p {prompt} --model {model} ` +
+      `--disallowedTools Write Edit NotebookEdit Bash' ` +
+      `(keep the tool restrictions; the prompt is built from transcript text). ` +
+      `Deterministic capture/index/search/lint are unaffected; generative passes stay opt-in ` +
+      `because they are the one thing that sends session content to another program.`
     );
   }
   const bin = tmpl[0];

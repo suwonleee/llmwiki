@@ -74,6 +74,8 @@ function bumpOrigin(origin: string, version: string): void {
 function cloneOf(origin: string): string {
   const d = tmp("llmwiki-upd-clone-");
   sh(["git", "-c", "protocol.file.allow=always", "clone", "-q", origin, join(d, "c")], d);
+  // A clone does not copy the origin's local config — isolate it from global hooks again.
+  sh(["git", "config", "core.hooksPath", "/dev/null"], join(d, "c"));
   return join(d, "c");
 }
 
@@ -334,4 +336,28 @@ test("plugin context is exactly the variable both harnesses export to plugin hoo
   expect(inPluginContext({})).toBe(false);
   expect(inPluginContext({ CLAUDE_PLUGIN_ROOT: "" })).toBe(false);
   expect(inPluginContext({ CLAUDE_PLUGIN_ROOT: "/cache/llmwiki/0.12.0" })).toBe(true);
+});
+
+test("a commit confined to in-place files (hooks, engine src, root prose) needs no setup; a skill change does", () => {
+  const origin = mkOrigin("0.1.0");
+  const clone = cloneOf(origin);
+  const state = tmp("llmwiki-upd-state-");
+  checkEngineUpdate(clone, state);
+  expect(recordInstallReceipt(clone, state)).toBe(true);
+
+  const commit = (rel: string, message: string): void => {
+    mkdirSync(join(clone, rel, ".."), { recursive: true });
+    writeFileSync(join(clone, rel), `${message}\n`);
+    sh(["git", "add", "-A"], clone);
+    sh(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", message], clone);
+  };
+  commit("hooks/branch-guard.sh", "hook");
+  commit("githooks/commit-msg", "githook");
+  commit("src/engine/capture.ts", "engine");
+  commit("README.md", "prose");
+  expect(updateAvailable(clone, state)).toBeNull();
+
+  // skill/ is copied into every harness at setup — now the installed copies really are stale.
+  commit("skill/wiki-deep.md", "skill");
+  expect(updateAvailable(clone, state)).toEqual(expect.objectContaining({ kind: "setup-required" }));
 });

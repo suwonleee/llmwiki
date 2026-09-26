@@ -43,6 +43,7 @@ const QUEUE_CLOSE_RULE: LangCatalog<(n: number) => string> = {
   ja: (n) => `${n} 回連続の review で現れなければ自動クローズ。`,
   zh: (n) => `连续 ${n} 次 review 都未出现 → 自动关闭。`,
 };
+import { LLM_CMD_ENV, llmAvailable } from "./claude.ts";
 import { gapStatePath, loadResolvedGapState, writeResolvedGapState } from "./gap-state.ts";
 import { ensureRepoDir, readRepoDir, readRepoFile, repoRelative, writeRepoFile } from "./repo-write.ts";
 
@@ -213,6 +214,18 @@ export function refreshGapQueue(ws: string, date: string, opts: { check?: boolea
   const reviewPath = _latestReview(root);
   if (!reviewPath) {
     const ko = resolveWikiLang(root) === "ko";
+    // "Run review first" is only honest advice when review CAN run. With no generative
+    // provider configured, review skips, no report ever appears, and this queue's
+    // auto-close is inert — a live deep pass found 5 gaps already filled in the wiki that
+    // could never close. Name the real blocker so the operator fixes the right thing.
+    if (!llmAvailable()) {
+      return {
+        verdict: "skip",
+        reason: ko
+          ? `review 리포트 없음 — 생성형 provider 미설정(${LLM_CMD_ENV})이라 review가 돌 수 없고, 이 큐의 자동 close도 그때까지 멈춰 있음`
+          : `no review report — no generative provider configured (${LLM_CMD_ENV}), so review cannot run and this queue's auto-close is inert until it is set`,
+      };
+    }
     return { verdict: "skip", reason: ko ? "review 리포트 없음(먼저 review 실행)" : "no review report yet (run review first)" };
   }
   const review = readRepoFile(root, repoRelative(root, reviewPath));

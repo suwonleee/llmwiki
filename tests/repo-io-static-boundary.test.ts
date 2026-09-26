@@ -96,6 +96,8 @@ const ALLOWED_READERS: Record<string, string> = {
   "engine/session-model.ts":
     "bounded tail reads of machine-local transcripts to learn which model the session ran on — a model id, never message content",
   "engine/tool-locate.ts": "stats machine-local bin directories looking for the git executable",
+  "engine/project-maintenance.ts":
+    "lstats a recorded worktree path and its ancestors to decide whether machine-local project state is orphaned — existence only, never repository content",
   "engine/daemon-control.ts": "reads /proc to tell whether this clone's own capture daemon is running",
   "engine/usability-study-validate.ts":
     "reads the explicit facilitator-selected local JSONL event log for offline validation — never repository content",

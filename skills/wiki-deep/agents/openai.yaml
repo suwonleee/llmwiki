@@ -3,7 +3,7 @@
 # below lets Codex run a close-out or a deep pass on its own, mid-task.
 interface:
   display_name: "$wiki-deep"
-  short_description: "Periodic deep pass (day end · weekly · when a close-out report recommends it) — drain the trans…"
+  short_description: "Periodic deep pass (day end · weekly · when a close-out report recommends it) — file what is im…"
 
 policy:
   allow_implicit_invocation: false

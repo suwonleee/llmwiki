@@ -3,6 +3,7 @@
 // "do this" — the pass runs unattended from the daemon, so declining is the default.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,6 +12,8 @@ import {
   DEFAULT_EVICT_AFTER_DAYS,
   DEFAULT_ORPHAN_GRACE_DAYS,
   INDEX_STORE_POLICY,
+  mayBeOnDetachedVolume,
+  orphanGraceDays,
   runProjectMaintenance,
   summarizeProjectStore,
 } from "../src/engine/project-maintenance.ts";
@@ -37,6 +40,22 @@ function newIndexedRepo(): string {
   new WikiIndex(repo).indexAll();
   return repo;
 }
+
+/** A project directory as the engine leaves it, recording a worktree that may or may not exist. */
+function fakeProjectState(worktree: string | null, lastUsed = new Date(Date.now() - 30 * DAY)): string {
+  const dir = join(stateRoot, "projects", randomUUID().replace(/-/g, ""));
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "index.db"), "x".repeat(4096));
+  if (worktree !== null) {
+    writeFileSync(
+      join(dir, "meta.json"),
+      JSON.stringify({ version: 1, worktree, lastUsed: lastUsed.toISOString() }) + "\n",
+    );
+  }
+  return dir;
+}
+
+const CLI = join(import.meta.dir, "..", "src", "cli.ts");
 
 beforeEach(() => {
   stateRoot = mkdtempSync(join(tmpdir(), "llmwiki-pm-state-"));
@@ -131,5 +150,71 @@ describe("project store maintenance", () => {
     expect(summary.projects).toBe(1);
     expect(summary.bytes).toBeGreaterThan(0);
     expect(summary.orphans).toBe(0);
+  });
+
+  test("a worktree on a volume that is not mounted is never collected", () => {
+    const dir = fakeProjectState(`/Volumes/llmwiki-absent-volume-${randomUUID()}/repo`);
+
+    const outcome = runProjectMaintenance({ now: Date.now() + 365 * DAY });
+
+    expect(outcome.collected).toBe(0);
+    expect(existsSync(dir)).toBe(true);
+  });
+
+  test("a directory without a recorded worktree is never collected", () => {
+    const dir = fakeProjectState(null);
+
+    expect(runProjectMaintenance({ now: Date.now() + 365 * DAY }).collected).toBe(0);
+    expect(existsSync(dir)).toBe(true);
+  });
+
+  test("a gone worktree is collected only after the configured window", () => {
+    const parent = mkdtempSync(join(tmpdir(), "llmwiki-pm-gone-"));
+    made.push(parent);
+    const dir = fakeProjectState(join(parent, "deleted-worktree"), new Date(Date.now() - 3 * DAY));
+
+    expect(runProjectMaintenance({ orphanGraceDays: 7 }).collected).toBe(0);
+    expect(existsSync(dir)).toBe(true);
+    expect(runProjectMaintenance({ orphanGraceDays: 2 }).collected).toBe(1);
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  test("the detached-volume guard reads the nearest existing ancestor", () => {
+    expect(mayBeOnDetachedVolume(`/Volumes/llmwiki-absent-${randomUUID()}/a/b`)).toBe(true);
+    expect(mayBeOnDetachedVolume(`/llmwiki-absent-top-${randomUUID()}/repo`)).toBe(true);
+    expect(mayBeOnDetachedVolume(join(tmpdir(), `llmwiki-absent-${randomUUID()}`, "repo"))).toBe(false);
+  });
+
+  test("the grace window is configurable and falls back on nonsense", () => {
+    expect(orphanGraceDays({})).toBe(DEFAULT_ORPHAN_GRACE_DAYS);
+    expect(orphanGraceDays({ LLMWIKI_ORPHAN_GRACE_DAYS: "3" })).toBe(3);
+    expect(orphanGraceDays({ LLMWIKI_ORPHAN_GRACE_DAYS: "-1" })).toBe(DEFAULT_ORPHAN_GRACE_DAYS);
+    expect(orphanGraceDays({ LLMWIKI_ORPHAN_GRACE_DAYS: "soon" })).toBe(DEFAULT_ORPHAN_GRACE_DAYS);
+  });
+
+  test("purge-state --orphans reports by default and deletes only with --confirm", () => {
+    const live = projectStatePath(newIndexedRepo()); // first: it claims the fresh state root
+    const parent = mkdtempSync(join(tmpdir(), "llmwiki-pm-cli-"));
+    made.push(parent);
+    const gone = fakeProjectState(join(parent, "deleted-worktree"));
+    const fresh = fakeProjectState(join(parent, "deleted-today"), new Date());
+    const run = (...args: string[]) =>
+      Bun.spawnSync([process.execPath, CLI, "purge-state", "--orphans", ...args], {
+        env: { ...process.env, LLMWIKI_STATE_DIR: stateRoot },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+    const report = run();
+    expect(report.exitCode).toBe(0);
+    expect(report.stdout.toString()).toContain("would remove");
+    expect(report.stdout.toString()).toContain("1 orphaned project state dir(s)");
+    expect(existsSync(gone)).toBe(true);
+
+    const confirmed = run("--confirm");
+    expect(confirmed.exitCode).toBe(0);
+    expect(existsSync(gone)).toBe(false);
+    expect(existsSync(fresh)).toBe(true); // inside the window
+    expect(existsSync(live)).toBe(true); // its worktree exists
   });
 });

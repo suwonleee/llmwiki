@@ -6,6 +6,7 @@
 import type { Database } from "bun:sqlite";
 import { resolve as pathResolve, dirname as pathDirname } from "node:path";
 import { existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { repoFileExists, repoRelative } from "./repo-write.ts";
 import {
   buildLinkIndex,
@@ -517,26 +518,60 @@ export class Linter {
   }
 
   _citations(path: string, content: string, sourceLookup: Record<string, WikiDoc>): LintIssue[] {
-    const out: LintIssue[] = [];
+    const unresolved: [string, string][] = [];
     for (const m of content.matchAll(FOOTNOTE_DEF)) {
       const fid = m[1]!;
       const raw = m[2]!;
       const [filename] = parseCitationFilename(raw);
-      if (!this._resolveSource(filename, sourceLookup)) {
-        // NOTE (team wikis): a teammate's clean transcript citation (`<id>.jsonl`) never reaches
-        // here — autoRegisterCitedTranscripts (refs.ts) self-heals it into a virtual source on
-        // every index/refs rebuild, deliberately (transcripts rotate; a .jsonl citation is
-        // unambiguously a transcript). What DOES land here: malformed citations (parenthetical
-        // suffixes etc.) and missing non-transcript sources — both genuine author-side errors.
-        out.push({
-          severity: "error",
-          code: "unresolved-citation",
-          path,
-          message: `footnote \`^${fid}\` cites \`${filename}\`, but no matching source exists`,
-        });
-      }
+      if (!this._resolveSource(filename, sourceLookup)) unresolved.push([fid, filename]);
     }
-    return out;
+    const ignored = this._gitIgnored(unresolved.map(([, filename]) => filename));
+    return unresolved.map(([fid, filename]): LintIssue =>
+      ignored.has(filename)
+        ? {
+            // The cited path is gitignored here (local evidence dumps and the like): it can never
+            // resolve for anyone, and hundreds of these once buried the real errors on one wiki.
+            // Advisory, so it stays visible without drowning a genuinely missing source.
+            severity: "warn",
+            code: "ignored-source-citation",
+            path,
+            message: `footnote \`^${fid}\` cites \`${filename}\`, which is gitignored in this repository`,
+          }
+        : {
+            // NOTE (team wikis): a teammate's clean transcript citation (`<id>.jsonl`) never reaches
+            // here — autoRegisterCitedTranscripts (refs.ts) self-heals it into a virtual source on
+            // every index/refs rebuild, deliberately (transcripts rotate; a .jsonl citation is
+            // unambiguously a transcript). What DOES land here: malformed citations (parenthetical
+            // suffixes etc.) and missing non-transcript sources — both genuine author-side errors.
+            severity: "error",
+            code: "unresolved-citation",
+            path,
+            message: `footnote \`^${fid}\` cites \`${filename}\`, but no matching source exists`,
+          },
+    );
+  }
+
+  // Repo-relative cited paths that `git check-ignore` reports, cached per run and batched per page.
+  // Only path-shaped citations inside the repo are asked: a bare filename is not a location, and a
+  // repository-wide `*.jsonl` rule must not turn a missing transcript citation into an advisory.
+  // No git, no repository, any failure → nothing is ignored (the error stays an error).
+  private ignoredCache = new Map<string, boolean>();
+  _gitIgnored(filenames: readonly string[]): Set<string> {
+    const root = this.index?.root;
+    const ask = [
+      ...new Set(
+        filenames.filter(
+          (f) => f.includes("/") && !f.startsWith("/") && !f.split("/").includes("..") && !this.ignoredCache.has(f),
+        ),
+      ),
+    ];
+    if (root && ask.length) {
+      for (const f of ask) this.ignoredCache.set(f, false);
+      // -z: NUL-separated both ways, so non-ASCII paths come back verbatim instead of core.quotePath-escaped.
+      const r = spawnSync("git", ["-C", root, "check-ignore", "--stdin", "-z"], { input: ask.join("\0") + "\0", encoding: "utf8" });
+      if (r.status === 0) for (const p of r.stdout.split("\0")) if (p) this.ignoredCache.set(p, true);
+    }
+    return new Set(filenames.filter((f) => this.ignoredCache.get(f) === true));
   }
 
   // ---- page-wide secret screen ---------------------------------------------------------------

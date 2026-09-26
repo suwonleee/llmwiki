@@ -83,7 +83,7 @@ llmwiki init /absolute/path/to/my-project
 - 在 CLI 中查找：`llmwiki --help` 显示首次使用流程和命令分组，
   `llmwiki <command> --help` 在不执行命令的情况下显示其用法，`llmwiki --version` 显示
   引擎版本。
-- 自动集成仅用于Git，且按worktree隔离；移动仓库后需重新运行 `init`
+- 自动集成仅用于Git，且按worktree登记；链接worktree（`git worktree add`）继承主worktree的登记（可用 `llmwiki disable <worktree>` 单独关闭）；移动仓库后需重新运行 `init`
 - 所有harness安装都会提供同一个用户级 `llmwiki` 启动器；如有需要，只需执行一次setup输出的
   `PATH` 命令
 - **仅OpenCode — 安装后重启一次**（重新指向克隆后同样如此）：OpenCode在进程启动时加载读取注入

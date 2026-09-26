@@ -20,8 +20,8 @@
 // Everything here is skip-on-doubt: a busy database is left alone, an unreadable directory is left
 // alone, and a project whose worktree merely cannot be reached right now is not an orphan.
 import { Database } from "bun:sqlite";
-import { join } from "node:path";
-
+import { lstatSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import {
   compactDatabase,
   inspectDatabaseHealth,
@@ -48,8 +48,63 @@ export const INDEX_STORE_POLICY: DatabaseCompactionPolicy = {
 
 /** Default idleness before an index is dropped. Regenerable, so this is a cost knob, not a risk one. */
 export const DEFAULT_EVICT_AFTER_DAYS = 60;
-/** An orphan is only collected after this long, so an unmounted volume is never mistaken for one. */
-export const DEFAULT_ORPHAN_GRACE_DAYS = 14;
+/**
+ * A vanished worktree's state is collected only after this long without use. Git worktrees are
+ * created and deleted within a day, so the
+ * window only has to outlast a moved or briefly detached checkout. `LLMWIKI_ORPHAN_GRACE_DAYS`.
+ */
+export const DEFAULT_ORPHAN_GRACE_DAYS = 7;
+
+export function orphanGraceDays(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.LLMWIKI_ORPHAN_GRACE_DAYS?.trim();
+  const days = raw ? Number(raw) : Number.NaN;
+  return Number.isFinite(days) && days >= 0 ? days : DEFAULT_ORPHAN_GRACE_DAYS;
+}
+
+function pathExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Directories other volumes are mounted under. When the nearest ancestor of a missing worktree
+// that still exists is one of these (or the filesystem root), the likelier story is "the volume
+// is not mounted right now" than "the project was deleted" — and that is not evidence to delete on.
+// `/media` and `/run/media` hold one directory per user, and the volumes sit one level below it.
+const MOUNT_PARENTS = new Set(["/", "/Volumes", "/media", "/mnt", "/run/media"]);
+const PER_USER_MOUNT_PARENTS = new Set(["/media", "/run/media"]);
+
+/** Could the worktree be missing only because its volume is detached? Skip-on-doubt. */
+export function mayBeOnDetachedVolume(worktree: string): boolean {
+  let dir = dirname(resolve(worktree));
+  while (!pathExists(dir)) {
+    const up = dirname(dir);
+    if (up === dir) return true; // not even a root exists (an absent Windows drive)
+    dir = up;
+  }
+  return MOUNT_PARENTS.has(dir) || PER_USER_MOUNT_PARENTS.has(dirname(dir));
+}
+
+export type OrphanVerdict =
+  | { readonly collect: true; readonly reason: "gone" }
+  | { readonly collect: false; readonly reason: "live" | "unknown-worktree" | "worktree-present" | "detached-volume" | "grace" };
+
+/**
+ * May this project directory be deleted? Only on positive evidence that its worktree is gone:
+ * recorded in meta.json, absent from disk, on a volume that is present, and unused for the grace
+ * window. Distilled history lives in capture.db, never here, so collecting touches none of it.
+ */
+export function orphanVerdict(entry: ProjectStateEntry, now: number, graceDays: number): OrphanVerdict {
+  if (!entry.orphaned) return { collect: false, reason: "live" };
+  if (entry.worktree === null) return { collect: false, reason: "unknown-worktree" };
+  if (pathExists(entry.worktree)) return { collect: false, reason: "worktree-present" };
+  if (mayBeOnDetachedVolume(entry.worktree)) return { collect: false, reason: "detached-volume" };
+  if (ageDays(entry.lastUsed, now) < graceDays) return { collect: false, reason: "grace" };
+  return { collect: true, reason: "gone" };
+}
 
 export type ProjectStoreSummary = {
   readonly projects: number;
@@ -134,7 +189,7 @@ export function runProjectMaintenance(
 ): MaintenanceOutcome {
   const now = opts.now ?? Date.now();
   const evictAfterDays = opts.evictAfterDays ?? DEFAULT_EVICT_AFTER_DAYS;
-  const orphanGraceDays = opts.orphanGraceDays ?? DEFAULT_ORPHAN_GRACE_DAYS;
+  const graceDays = opts.orphanGraceDays ?? orphanGraceDays();
   const commit = opts.commit !== false;
   let compacted = 0;
   let reclaimedBytes = 0;
@@ -146,7 +201,7 @@ export function runProjectMaintenance(
   for (const entry of listProjectStates()) {
     const age = ageDays(entry.lastUsed, now);
     if (entry.orphaned) {
-      if (age < orphanGraceDays) continue; // recently used and merely unreachable → not an orphan
+      if (!orphanVerdict(entry, now, graceDays).collect) continue; // doubt → keep
       if (commit && removeProjectState(entry.dir)) {
         collected += 1;
         collectedBytes += entry.bytes;

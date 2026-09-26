@@ -30,7 +30,7 @@ export const COMMANDS = [
   { name: "conventions", group: "Project setup", usage: "conventions [workspace]", summary: "Render the effective authoring rules for an agent." },
   { name: "state-path", group: "Project setup", usage: "state-path <workspace> [subpath] [--ensure]", summary: "Print or create this worktree's engine-held state path." },
   { name: "migrate-state", group: "Project setup", usage: "migrate-state [--commit]", summary: "Plan or apply migration from the legacy state root." },
-  { name: "purge-state", group: "Project setup", usage: "purge-state [--report|--confirm]", summary: "Describe or remove only llmwiki-owned machine state." },
+  { name: "purge-state", group: "Project setup", usage: "purge-state [--report|--confirm] [--orphans [--older-than DAYS]]", summary: "Describe or remove only llmwiki-owned machine state." },
 
   { name: "index", group: "Index and retrieve", usage: "index <workspace>", summary: "Incrementally index wiki pages and rebuild references." },
   { name: "reindex", group: "Index and retrieve", usage: "reindex <workspace>", summary: "Rebuild the project index from disk." },

@@ -34,10 +34,11 @@ is a `#!/bin/sh` script for Git Bash, while Codex and OpenCode execute commands 
 - Do not commit or push.
 - Do not add an MCP server, Docker service, external database, vector database, cloud service, or new project dependency.
 - Do not overwrite unrelated user configuration. The setup scripts already merge or reject conflicts at their owned boundaries.
-- On Codex, llmwiki owns only its entries in `$CODEX_HOME/hooks.json`, its five installed wiki
-  skills, the user launcher, and the capture service. It never edits `$CODEX_HOME/config.toml`,
-  `developer_instructions`, `AGENTS.md`, or another orchestrator's state; diagnose errors from
-  those surfaces with their owner.
+- On Codex, llmwiki owns only its entries in `$CODEX_HOME/hooks.json`, its one tagged state-root
+  entry in `$CODEX_HOME/config.toml` `[sandbox_workspace_write].writable_roots`, its five installed
+  wiki skills, the user launcher, and the capture service. It edits nothing else in
+  `$CODEX_HOME/config.toml`, and never `developer_instructions`, `AGENTS.md`, or
+  another orchestrator's state; diagnose errors from those surfaces with their owner.
 - Do not copy private project files, transcripts, credentials, or wiki content into this public engine clone.
 - Do not create `llmwiki.config.toml` unless the human asks for custom conventions.
 - Do not migrate an existing wiki unless the human explicitly approves the migration after seeing the dry-run.
@@ -114,7 +115,8 @@ is a `#!/bin/sh` script for Git Bash, while Codex and OpenCode execute commands 
     - Run `llmwiki init <absolute-project-path>` once per repository
     - Run `llmwiki verify <absolute-project-path> --harness <harness>` for one combined machine,
       enrollment, index, and cold-start-memory receipt
-    - The target must be a git worktree; automatic integration is git-only and per-worktree
+    - The target must be a git worktree; linked worktrees inherit main-worktree enrollment
+      and can opt out individually with `llmwiki disable <worktree>`
     - Confirm with `llmwiki status <absolute-project-path>` — it prints enabled/disabled and why
     - Never enroll a repository the human did not name, and never enroll one just because it
       already contains `docs/wiki/` (that arrives with any clone)

@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { codexStructuredAsk, inspectCodexInstall } from "../src/engine/doctor.ts";
 
+import { effectiveStateRoot } from "../src/engine/state-dir.ts";
+
 const ROOT = join(import.meta.dir, "..");
 
 describe("Codex doctor status", () => {
@@ -112,6 +114,15 @@ describe("Codex doctor status", () => {
     );
 
     expect(inspectCodexInstall(codexHome, home).reviewRecords).toBe(true);
+  });
+
+  test("reports whether the sandbox may write the engine state root", () => {
+    expect(inspectCodexInstall(codexHome, home).sandboxStateRoot).toBe(false);
+    writeFileSync(
+      join(codexHome, "config.toml"),
+      `[sandbox_workspace_write]\nwritable_roots = [${JSON.stringify(effectiveStateRoot())}]\n`,
+    );
+    expect(inspectCodexInstall(codexHome, home).sandboxStateRoot).toBe(true);
   });
 
   test("inspects an explicitly configured launcher directory", () => {

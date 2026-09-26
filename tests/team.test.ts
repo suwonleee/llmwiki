@@ -21,7 +21,8 @@ import { buildContext } from "../src/engine/context.ts";
 import { enrollRepo, makeGitRepo } from "./support/git-repo.ts";
 
 function git(cwd: string, ...args: string[]): void {
-  const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf-8" });
+  // Every fixture repo and clone here ignores the developer's global hooks (commit-msg / pre-push policies).
+  const r = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-C", cwd, ...args], { encoding: "utf-8" });
   if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
 }
 

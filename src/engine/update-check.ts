@@ -216,6 +216,30 @@ function readInstallReceipt(stateRoot: string): InstallReceipt | null {
   }
 }
 
+// What a commit must touch before the installed copies are actually stale. Hooks and githooks are
+// invoked by path, engine code under src/ is loaded fresh by every CLI/hook call, and the daemon
+// restarts itself onto new code (`daemon-sync`) — so a change confined to those runs in place and
+// needs no ./setup.sh. Everything else counts: setup.sh, skill/ (copied into every harness),
+// adapters/, daemon/, package.json, and the src/ files that RENDER the installed copies. The notice
+// used to fire on any HEAD difference, including a hook-only commit, which taught people to ignore it.
+const IN_PLACE_DIRS = /^(hooks|githooks|tests|docs)\//;
+const SETUP_RENDERERS = /^src\/(daemon\/wire[^/]*\.ts|engine\/(claude-commands|skill-policy|tool-locate)\.ts|plugin\/)/;
+
+export function needsSetup(path: string): boolean {
+  if (IN_PLACE_DIRS.test(path)) return false;
+  if (!path.includes("/") && path.endsWith(".md")) return false; // root prose (README, ARCHITECTURE…)
+  if (path.startsWith("src/")) return SETUP_RENDERERS.test(path);
+  return true;
+}
+
+function componentCurrent(installedHead: string, liveHead: string, root: string): boolean {
+  if (installedHead === liveHead) return true;
+  if (!GIT_OID_RE.test(installedHead)) return false; // "unknown" pre-receipt evidence
+  // Unreadable history (a rewritten or pruned install commit) proves nothing → stays stale.
+  const changed = git(["diff", "--name-only", "--no-renames", "-z", installedHead, liveHead], root);
+  return changed !== null && !changed.split("\0").some((path) => path !== "" && needsSetup(path));
+}
+
 function installReceiptMatches(clone: string, stateRoot: string): boolean {
   try {
     const receipt = readInstallReceipt(stateRoot);
@@ -226,7 +250,7 @@ function installReceiptMatches(clone: string, stateRoot: string): boolean {
       liveHead !== null &&
       GIT_OID_RE.test(liveHead) &&
       receipt.cloneRoot === liveRoot &&
-      Object.values(receipt.components).every((head) => head === liveHead)
+      [...new Set(Object.values(receipt.components))].every((head) => componentCurrent(head, liveHead, liveRoot))
     );
   } catch {
     return false;

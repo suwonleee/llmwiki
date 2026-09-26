@@ -16,8 +16,17 @@
 //   1. `git clone` never populates it — .git contents are rebuilt locally, not transferred.
 //   2. No tracked file, config value, or Markdown page can create it — `llmwiki init` does.
 //   3. `--absolute-git-dir` is worktree-SPECIFIC (a linked worktree resolves to
-//      <common>/worktrees/<name>), so trusting one worktree never trusts its siblings. Using
-//      --git-common-dir here would silently enroll every worktree of the repository at once.
+//      <common>/worktrees/<name>), so enrolling a LINKED worktree never trusts its siblings or
+//      the main worktree.
+//
+// One deliberate widening: a linked worktree whose MAIN worktree is enrolled inherits that
+// enrollment. The human who ran `llmwiki init` on the main tree consented to this repository, and
+// `git worktree add` is that same human splitting the same .git into another checkout — no clone,
+// no stranger's content, nothing a commit can deliver. Without it, "one task = one worktree"
+// meant every task session ran with no wiki and was never captured. The inheritance is one-way
+// (main → linked only) and revocable per worktree: `llmwiki disable <linked>` writes an opt-out
+// entry next to where that worktree's own marker would live, and an opt-out always wins over
+// inheritance. A worktree's own marker, when present, is still the whole answer for it.
 //
 // The marker records the canonical worktree path it was written for, so a moved or copied
 // repository fails closed: the recorded path no longer equals the resolved one, and enrollment
@@ -41,7 +50,7 @@ import {
   unlinkSync,
   writeSync,
 } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { gitCommand, locateGit } from "./tool-locate.ts";
 
 export const MARKER_DIR = "llmwiki";
@@ -49,6 +58,12 @@ export const MARKER_BASENAME = "enrollment-v1.json";
 export const MARKER_VERSION = 1;
 /** A marker is a single short JSON line. Anything larger is not ours — read no further. */
 export const MARKER_MAX_BYTES = 4096;
+/**
+ * Per-worktree refusal of inherited enrollment, in the linked worktree's own git dir. Its mere
+ * presence (any file type) reads as opted out — an entry that makes things MORE disabled needs no
+ * validation, and failing closed on a planted symlink is the safe direction.
+ */
+export const OPT_OUT_BASENAME = "opt-out-v1";
 
 const POSIX = process.platform !== "win32";
 const GIT_TIMEOUT_MS = 2000;
@@ -63,7 +78,8 @@ export type EnrollmentReason =
   | "marker-malformed"
   | "marker-wrong-version"
   | "marker-foreign-worktree"
-  | "marker-permissive-mode";
+  | "marker-permissive-mode"
+  | "opted-out";
 
 export interface EnrollmentStatus {
   readonly enabled: boolean;
@@ -72,6 +88,13 @@ export interface EnrollmentStatus {
   readonly worktree: string | null;
   /** Where the marker for this worktree would live, or null without a git dir. */
   readonly markerPath: string | null;
+  /** Set when `enabled` comes from the enrolled MAIN worktree rather than this worktree's own marker. */
+  readonly inheritedFrom?: string | null;
+  /**
+   * For a linked worktree: its main worktree, when that main worktree is enrolled — the one
+   * repository both checkouts belong to (capture buckets by it). null otherwise.
+   */
+  readonly mainWorktree?: string | null;
 }
 
 // ---- git resolution ---------------------------------------------------------------------
@@ -133,8 +156,8 @@ export function canonicalWorktree(candidate: string): string | null {
 
 /**
  * The WORKTREE-SPECIFIC metadata dir (`--absolute-git-dir`), never the common dir. For a linked
- * worktree this is <common>/worktrees/<name>, which is exactly why two worktrees of one
- * repository enroll independently.
+ * worktree this is <common>/worktrees/<name>, which is exactly why a linked worktree's own marker
+ * (or opt-out) never affects its siblings or the main worktree.
  */
 export function worktreeGitDir(worktree: string): string | null {
   const dir = git(worktree, ["rev-parse", "--absolute-git-dir"]);
@@ -232,24 +255,74 @@ export function inspectEnrollment(repo: string | null | undefined): EnrollmentSt
  * what one does for exactly the same answer — `--show-toplevel --absolute-git-dir` prints both, and
  * the git dir stays worktree-specific.
  */
-function resolveWorktree(candidate: string): { worktree: string | null; gitDir: string | null } {
+function resolveWorktree(candidate: string): { worktree: string | null; gitDir: string | null; commonDir: string | null } {
+  const none = { worktree: null, gitDir: null, commonDir: null };
   const start = realDir(candidate);
-  if (!start) return { worktree: null, gitDir: null };
-  const out = git(start, ["rev-parse", "--show-toplevel", "--absolute-git-dir"]);
-  if (!out) return { worktree: null, gitDir: null };
-  const [top, dir] = out.split("\n");
+  if (!start) return none;
+  // --git-common-dir rides the same spawn; git prints it relative to the -C directory.
+  const out = git(start, ["rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir"]);
+  if (!out) return none;
+  const [top, dir, common] = out.split("\n");
   const worktree = top ? realDir(top) : null;
-  if (!worktree) return { worktree: null, gitDir: null };
-  return { worktree, gitDir: dir ? realDir(dir) : null };
+  if (!worktree) return none;
+  return {
+    worktree,
+    gitDir: dir ? realDir(dir) : null,
+    commonDir: common ? realDir(resolve(start, common)) : null,
+  };
+}
+
+/**
+ * Do two worktree paths belong to ONE repository (the same git common dir)? Linked worktrees of
+ * one repository answer yes; unrelated repositories, and anything git cannot resolve, answer no.
+ */
+export function sameRepository(a: string, b: string): boolean {
+  const ca = resolveWorktree(a).commonDir;
+  return ca !== null && ca === resolveWorktree(b).commonDir;
+}
+
+/**
+ * The enrolled main worktree of a LINKED worktree, or null. Only the standard layout qualifies:
+ * `<main>/.git` as the common dir with this worktree's git dir under `<main>/.git/worktrees/`.
+ * A bare repository, a separate git dir or anything else unusual has no main worktree to inherit
+ * from, and fails closed. The main marker is validated exactly as the main tree's own status would.
+ */
+function enrolledMainOf(gitDir: string, commonDir: string | null): string | null {
+  if (!commonDir || commonDir === gitDir) return null;
+  if (basename(commonDir) !== ".git") return null;
+  if (!gitDir.startsWith(join(commonDir, "worktrees") + sep)) return null;
+  const main = realDir(dirname(commonDir));
+  if (!main) return null;
+  return inspectMarker(markerPathFor(commonDir), main) === "enabled" ? main : null;
+}
+
+function optOutPathFor(gitDir: string): string {
+  return join(gitDir, MARKER_DIR, OPT_OUT_BASENAME);
+}
+
+function hasOptOut(gitDir: string): boolean {
+  try {
+    lstatSync(optOutPathFor(gitDir));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function computeEnrollment(repo: string): EnrollmentStatus {
-  const { worktree, gitDir } = resolveWorktree(repo);
+  const { worktree, gitDir, commonDir } = resolveWorktree(repo);
   if (!worktree) return { enabled: false, reason: "not-a-git-worktree", worktree: null, markerPath: null };
   if (!gitDir) return { enabled: false, reason: "not-a-git-worktree", worktree, markerPath: null };
   const markerPath = markerPathFor(gitDir);
   const reason = inspectMarker(markerPath, worktree);
-  return { enabled: reason === "enabled", reason, worktree, markerPath };
+  const mainWorktree = enrolledMainOf(gitDir, commonDir);
+  // Inheritance fills only the ABSENCE of a marker. A marker that exists but fails validation
+  // (moved, tampered, too permissive) stays the fail-closed answer it always was.
+  if (reason === "no-marker" && mainWorktree) {
+    if (hasOptOut(gitDir)) return { enabled: false, reason: "opted-out", worktree, markerPath, mainWorktree };
+    return { enabled: true, reason: "enabled", worktree, markerPath, inheritedFrom: mainWorktree, mainWorktree };
+  }
+  return { enabled: reason === "enabled", reason, worktree, markerPath, mainWorktree };
 }
 
 /**
@@ -330,6 +403,11 @@ export function enroll(repo: string): EnrollmentChange {
     }
     return { ok: false, worktree, markerPath, error: `could not write the marker: ${msg(e)}` };
   }
+  try {
+    unlinkSync(optOutPathFor(gitDir)); // `init` is the explicit re-enable of an opted-out worktree
+  } catch {
+    /* no opt-out — the common case */
+  }
   resetEnrollmentCache();
   return { ok: true, worktree, markerPath };
 }
@@ -351,12 +429,13 @@ function ensureMarkerDir(dir: string): void {
 /**
  * Remove enrollment for `repo`'s worktree. Unlinks the exact marker entry (never following it)
  * and removes the marker directory only when it is empty — the git common directory and any
- * sibling worktree's marker are never touched.
+ * sibling worktree's marker are never touched. A LINKED worktree additionally records an opt-out,
+ * so inheriting the main worktree's enrollment (now or after a later `init` on the main tree)
+ * cannot switch it back on behind the human's explicit "off".
  */
 export function disable(repo: string): EnrollmentChange {
-  const worktree = canonicalWorktree(repo);
+  const { worktree, gitDir, commonDir } = resolveWorktree(repo);
   if (!worktree) return { ok: false, worktree: null, markerPath: null, error: "not a git worktree" };
-  const gitDir = worktreeGitDir(worktree);
   if (!gitDir) return { ok: false, worktree, markerPath: null, error: "cannot resolve the worktree's git directory" };
   const dir = join(gitDir, MARKER_DIR);
   const markerPath = join(dir, MARKER_BASENAME);
@@ -364,6 +443,16 @@ export function disable(repo: string): EnrollmentChange {
     unlinkSync(markerPath); // unlink acts on the entry itself — a symlink here is removed, not followed
   } catch {
     /* already absent — disable is idempotent */
+  }
+  if (commonDir && commonDir !== gitDir && !hasOptOut(gitDir)) {
+    try {
+      ensureMarkerDir(dir);
+      const fd = openSync(optOutPathFor(gitDir), fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o600);
+      closeSync(fd);
+    } catch (e) {
+      resetEnrollmentCache();
+      return { ok: false, worktree, markerPath, error: `could not record the opt-out: ${msg(e)}` };
+    }
   }
   try {
     rmdirSync(dir); // only succeeds while empty; a shared/leftover dir survives untouched
@@ -382,7 +471,16 @@ function msg(e: unknown): string {
 export function explain(status: EnrollmentStatus, ko = false): string {
   switch (status.reason) {
     case "enabled":
+      if (status.inheritedFrom) {
+        return ko
+          ? `활성 (상속) — 메인 워크트리 ${status.inheritedFrom} 의 등록을 상속 (같은 .git; 이 워크트리만 끄려면 \`llmwiki disable\`)`
+          : `enabled (inherited) — from the main worktree ${status.inheritedFrom} (same .git; \`llmwiki disable\` opts this worktree out)`;
+      }
       return ko ? "활성 — 이 워크트리는 등록되어 있다" : "enabled — this worktree is enrolled";
+    case "opted-out":
+      return ko
+        ? "비활성 — 메인 워크트리 등록 상속을 이 워크트리에서 해제함 (`llmwiki init` 으로 다시 켬)"
+        : "disabled — this worktree opted out of the main worktree's enrollment (re-enable with `llmwiki init`)";
     case "not-a-git-worktree":
       // Same reason code, two very different situations. "Not a worktree" is a fact about the
       // directory the user can act on; a missing git is a fact about the machine, and reporting the

@@ -18,6 +18,7 @@
 // at install time, so a machine that had nothing set exports the DEFAULT as though it were a
 // choice. That frozen default must not count as an override — it is what pinned the daemon.
 import { afterEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { linkSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -139,4 +140,28 @@ describe("Codex reads every home this machine owns", () => {
     expect(codexHomes()).toEqual([]);
     expect(codexSource.discoverRoutes()).toEqual([]);
   });
+});
+
+
+test("compressed sub-agent detection reads an account home's thread index", () => {
+  if (process.platform !== "darwin") return;
+  const home = scratch();
+  setEnv("HOME", home);
+  const cliHome = join(home, ".codex");
+  mkdirSync(join(cliHome, "sessions"), { recursive: true });
+  setEnv("CODEX_HOME", cliHome);
+  const appHome = orcaAccountHome(home, UUID_A);
+  const db = new Database(join(appHome, "state_5.sqlite"));
+  db.exec("CREATE TABLE threads (id TEXT PRIMARY KEY, thread_source TEXT)");
+  db.run("INSERT INTO threads VALUES (?, 'subagent')", [UUID_B]);
+  db.close();
+  const path = join(appHome, "sessions", `rollout-2026-09-23T10-00-00-${UUID_B}.jsonl.zst`);
+  writeFileSync(path, "not compressed data: detection must use the index");
+  expect(codexSource.isSubagent!(path)).toBe(true);
+
+  // A non-default explicit home must not read the other account's index.
+  const isolated = join(home, "isolated");
+  mkdirSync(isolated);
+  setEnv("CODEX_HOME", isolated);
+  expect(codexSource.isSubagent!(path)).toBe(false);
 });

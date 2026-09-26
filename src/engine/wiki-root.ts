@@ -13,7 +13,7 @@
 //      therefore enrollment) resolved to the parent. Not hypothetical: a home directory that is
 //      itself a git repository absorbs every non-git project under it into one worktree.
 import { realpathSync } from "node:fs";
-import { dirname, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { inspectEnrollment } from "./enrollment.ts";
 import { repoDirExists } from "./repo-write.ts";
 
@@ -39,6 +39,7 @@ function isWithin(root: string, candidate: string): boolean {
  * Same answer as the read side (`wikiRootFor`), same fail-closed edges: no wiki anywhere within
  * the enrolled worktree → the worktree itself (where `llmwiki init` will put one); not enrolled
  * at all → the cwd unchanged (never invent a parent for a repository the human did not consent to).
+ * One exception, same repository: a linked worktree files under its ENROLLED main worktree.
  */
 export function captureBucket(cwd: string): string {
   // One spelling per location, or the key stops being a key: macOS hands sessions `/var/...`
@@ -53,8 +54,19 @@ export function captureBucket(cwd: string): string {
   }
   const st = inspectEnrollment(canonical);
   const root = wikiRootFor(canonical, st.worktree);
-  if (repoDirExists(root, WIKI_REL)) return root;
-  return st.worktree ?? root;
+  const bucket = repoDirExists(root, WIKI_REL) ? root : (st.worktree ?? root);
+  // A LINKED worktree of an enrolled main files into the MAIN worktree's bucket: one repository,
+  // one backlog. A worktree is a task-sized checkout that is usually deleted once its branch
+  // merges, so a backlog keyed by it would be drained by no one — /wiki-deep runs in the main
+  // tree. Its reads still bind to its own checkout (the branch copy of the wiki); only the
+  // bucket key moves. A nested project keeps its relative place when the main tree has it too.
+  if (st.enabled && st.mainWorktree && st.worktree && isWithin(st.worktree, bucket)) {
+    const rel = relative(st.worktree, bucket);
+    if (!rel) return st.mainWorktree;
+    const mapped = join(st.mainWorktree, rel);
+    return repoDirExists(mapped, WIKI_REL) ? mapped : st.mainWorktree;
+  }
+  return bucket;
 }
 
 /**

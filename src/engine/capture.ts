@@ -74,6 +74,11 @@ CREATE TABLE IF NOT EXISTS route_revision (
     updated_at TEXT DEFAULT (datetime('now')),
     PRIMARY KEY (source_kind, route_path)
 );
+CREATE TABLE IF NOT EXISTS issued_offset (
+    transcript_path TEXT PRIMARY KEY,
+    new_offset INTEGER NOT NULL,
+    issued_at TEXT DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS opencode_progress (
     source_path TEXT NOT NULL,
     session_id TEXT NOT NULL,
@@ -685,7 +690,7 @@ function hasUnreadTail(row: { transcript_path: string; byte_offset: number }): b
  * them: measured on this machine, seven idle OpenCode sessions were re-announced every minute with
  * an unchanged line count, which is ~10k log lines a day describing no work.
  */
-export type EnqueueOutcome = "new" | "grew" | "regenerated" | "identity" | "unchanged";
+export type EnqueueOutcome = "new" | "grew" | "regenerated" | "identity" | "unchanged" | "subagent";
 
 /**
  * Is this row already exactly what the offer would write?
@@ -723,6 +728,7 @@ export function enqueue(
   repo: string | null,
   lines = 0,
   sourceKind = "claude-jsonl",
+  isSubagent?: () => boolean,
 ): EnqueueOutcome {
   // File the row under the wiki root the session's READS bind to — one answer for both halves
   // (the hook-binding rule, applied to the write side it was missing from). A raw cwd keys the
@@ -774,6 +780,8 @@ export function enqueue(
         "WHERE transcript_path=?",
       [repo, sessionId, lines, currentFileId, transcriptPath],
     );
+    // An offset issued against the previous generation says nothing about this one.
+    db.run("DELETE FROM issued_offset WHERE transcript_path = ?", [transcriptPath]);
     recorded = "regenerated";
   } else if (size > row.byte_offset && !alreadyRecorded(row, lines, repo, sessionId, currentFileId)) {
     db.run(
@@ -787,6 +795,17 @@ export function enqueue(
     // its watermark: there is no earlier identity to compare against.
     db.run("UPDATE capture_queue SET file_id=? WHERE transcript_path=?", [currentFileId, transcriptPath]);
     recorded = "identity";
+  }
+  // A sub-agent/fork thread carries no human turn of its own — it replays the parent's context.
+  // Keep the row (the ledger stays honest) but as `skipped`, with the watermark at
+  // the current size so the next sweep does not re-pend it. Asked lazily, only when a write
+  // happened, so an idle re-offer costs nothing.
+  if ((recorded === "new" || recorded === "grew" || recorded === "regenerated") && isSubagent?.()) {
+    db.run(
+      "UPDATE capture_queue SET status='skipped', byte_offset=?, distilled_at=datetime('now') WHERE transcript_path=?",
+      [size, transcriptPath],
+    );
+    recorded = "subagent";
   }
   db.close();
   return recorded;
@@ -870,6 +889,44 @@ export function getSourceKind(transcriptPath: string): string {
     .get(transcriptPath) as { source_kind: string | null } | null;
   db.close();
   return row?.source_kind || "claude-jsonl";
+}
+
+/**
+ * The watermark `update-next` last handed out for a transcript — the evidence `update-done` checks
+ * that an extract was actually produced (and so could have been read) before a row is marked
+ * filed. Without it any offset was accepted: a deep pass once bulk-marked 557 rows in ten minutes,
+ * 13 of them at offset 0, and those silently re-pended as "grew" on the next sweep.
+ */
+export function recordIssuedOffset(transcriptPath: string, newOffset: number): void {
+  const db = connect();
+  db.run(
+    "INSERT INTO issued_offset (transcript_path, new_offset) VALUES (?, ?) " +
+      "ON CONFLICT(transcript_path) DO UPDATE SET new_offset=excluded.new_offset, issued_at=datetime('now')",
+    [transcriptPath, newOffset],
+  );
+  release(db);
+}
+
+/** On-disk extent of a queued transcript; `compressed` = only the `.zst` sibling exists (Codex rotation). */
+export function transcriptExtent(transcriptPath: string): { size: number; compressed: boolean; missing: boolean } {
+  const plain = existsSync(transcriptPath);
+  const compressed = !plain && existsSync(`${transcriptPath}.zst`);
+  return { size: sizeOf(transcriptPath), compressed, missing: !plain && !compressed };
+}
+
+export function clearIssuedOffset(transcriptPath: string): void {
+  const db = connect();
+  db.run("DELETE FROM issued_offset WHERE transcript_path = ?", [transcriptPath]);
+  release(db);
+}
+
+export function issuedOffset(transcriptPath: string): number | null {
+  const db = connect();
+  const row = db
+    .query("SELECT new_offset FROM issued_offset WHERE transcript_path = ?")
+    .get(transcriptPath) as { new_offset: number } | null;
+  release(db);
+  return row ? row.new_offset : null;
 }
 
 export function mark(transcriptPath: string, byteOffset: number, status = "distilled"): void {
@@ -1143,11 +1200,14 @@ export function pendingPastRetentionReadOnly(days: number, kind = "claude-jsonl"
   }
 }
 
-export function stats(): Record<string, number> {
+export function stats(repo: string | null = null): Record<string, number> {
+  if (repo) repo = captureBucket(repo); // same normalizer as the writers — see pending()
   const db = connect();
-  const rows = db
-    .query("SELECT status, COUNT(*) n FROM capture_queue GROUP BY status")
-    .all() as { status: string; n: number }[];
+  const rows = (
+    repo
+      ? db.query("SELECT status, COUNT(*) n FROM capture_queue WHERE repo=? GROUP BY status").all(repo)
+      : db.query("SELECT status, COUNT(*) n FROM capture_queue GROUP BY status").all()
+  ) as { status: string; n: number }[];
   db.close();
   const out: Record<string, number> = {};
   for (const r of rows) out[r.status] = r.n;
@@ -1223,6 +1283,33 @@ export function pruneExports(ttlDays = EXPORT_TTL_DAYS, now = Date.now()): { pai
   }
   db.close();
   return { pairs: expired.length, rows };
+}
+
+/**
+ * Skip still-pending rows that the adapter positively identifies as sub-agent/fork threads — the
+ * backfill for rows queued before `enqueue` learned the rule. Runs on the daemon's daily retention
+ * clock and in `capture-prune`, so nobody has to clear them by hand. The predicate comes from the
+ * caller because the adapters live above this module; anything it cannot prove stays pending.
+ */
+export function skipPendingSubagents(
+  isSubagent: (row: { transcript_path: string; source_kind: string }) => boolean,
+): number {
+  const db = connect();
+  const rows = db
+    .query("SELECT transcript_path, source_kind FROM capture_queue WHERE status='pending'")
+    .all() as { transcript_path: string; source_kind: string | null }[];
+  let skipped = 0;
+  for (const r of rows) {
+    if (!isSubagent({ transcript_path: r.transcript_path, source_kind: r.source_kind || "claude-jsonl" })) continue;
+    db.run(
+      "UPDATE capture_queue SET status='skipped', byte_offset=?, distilled_at=datetime('now') " +
+        "WHERE transcript_path=? AND status='pending'",
+      [sizeOf(r.transcript_path), r.transcript_path],
+    );
+    skipped++;
+  }
+  db.close();
+  return skipped;
 }
 
 // Worktrees under the OS temp root are ephemeral BY LOCATION: A/B fixtures, scratchpad clones,

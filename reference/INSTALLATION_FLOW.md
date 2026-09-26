@@ -110,11 +110,13 @@ conservative rechecking instead of silently skipping memory capture.
 - Installed surfaces
     - Local capture daemon
     - Native `SessionStart` and `UserPromptSubmit` hooks in `$CODEX_HOME/hooks.json`
+    - One tagged entry in `$CODEX_HOME/config.toml` `[sandbox_workspace_write].writable_roots`: the
+      llmwiki state root, so the default sandbox runs `llmwiki` without an approval per call
     - `$wiki-save`, `$wiki-deep`, `$wiki-doctor`, `$wiki-ask`, `$wiki-quiz`
     - User-level `llmwiki` launcher
 - Ownership boundary
-    - llmwiki does not edit `$CODEX_HOME/config.toml`, `developer_instructions`, `AGENTS.md`, or
-      another orchestrator's runtime or preflight state
+    - llmwiki does not edit `$CODEX_HOME/config.toml` beyond that one tagged sandbox entry, nor
+      `developer_instructions`, `AGENTS.md`, or another orchestrator's runtime or preflight state
     - Diagnose failures from those surfaces with their owner; do not bypass or repair them by
       changing llmwiki wiring
 - Required manual activation

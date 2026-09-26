@@ -297,3 +297,44 @@ describe("the L0 detail page inherits the L0's exemptions", () => {
     expect(linter._noCitation(doc("current-state-detail.md"), uncited).length).toBe(1);
   });
 });
+
+describe("ignored-source-citation", () => {
+  test("a citation of a gitignored path is an advisory warning; a genuinely missing source stays an error", () => {
+    const root = mkdtempSync(join(tmpdir(), "llmwiki-lint-ignored-"));
+    try {
+      Bun.spawnSync(["git", "-C", root, "init", "-q"]);
+      writeFileSync(join(root, ".gitignore"), "docs/e2e-live/evidence/\n*.jsonl\n");
+      const linter = new Linter({ root } as any, null);
+      const content = [
+        "Claims.[^1][^2][^3][^4]",
+        "",
+        "[^1]: docs/e2e-live/evidence/run-7/결과.json",
+        "[^2]: src/missing.ts",
+        "[^3]: gone-session.jsonl", // bare name: not a location, even though `*.jsonl` is ignored
+        "[^4]: ../outside/evidence.json", // outside the repository: never asked
+      ].join("\n");
+
+      const issues = linter._citations("docs/wiki/a.md", content, {});
+
+      expect(issues.map((i) => [i.code, i.severity])).toEqual([
+        ["ignored-source-citation", "warn"],
+        ["unresolved-citation", "error"],
+        ["unresolved-citation", "error"],
+        ["unresolved-citation", "error"],
+      ]);
+      expect(issues[0]!.message).toContain("결과.json");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("outside a git repository nothing is downgraded", () => {
+    const root = mkdtempSync(join(tmpdir(), "llmwiki-lint-nogit-"));
+    try {
+      const issues = new Linter({ root } as any, null)._citations("a.md", "x[^1]\n\n[^1]: docs/e/x.json", {});
+      expect(issues.map((i) => i.code)).toEqual(["unresolved-citation"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

@@ -161,6 +161,8 @@ export interface CodexInstallStatus {
    *  start above ~2,500 approx tokens (10,000 bytes) to a spilled-file preview. */
   sessionSpillGuard: boolean;
   reviewRecords: boolean;
+  /** Whether the configured sandbox can write the llmwiki state root. */
+  sandboxStateRoot: boolean;
   /** Whether THIS home may show the quiz its structured prompt. See codexStructuredAsk. */
   structuredAsk: StructuredAskState;
   missingSkills: string[];
@@ -300,6 +302,7 @@ export function inspectCodexInstall(
     turnHook: false,
     sessionSpillGuard: false,
     reviewRecords: false,
+    sandboxStateRoot: false,
     structuredAsk: codexStructuredAsk(codexHome),
     missingSkills: [],
     staleSkills: [],
@@ -333,6 +336,14 @@ export function inspectCodexInstall(
     } catch {
       /* no review records yet */
     }
+  }
+  try {
+    const config = (Bun as any).TOML.parse(readFileSync(join(codexHome, "config.toml"), "utf8"));
+    const roots = config?.sandbox_workspace_write?.writable_roots;
+    result.sandboxStateRoot =
+      config?.sandbox_mode === "danger-full-access" || (Array.isArray(roots) && roots.includes(effectiveStateRoot()));
+  } catch {
+    /* absent or unparsable: not widened */
   }
   result.missingSkills = CODEX_SKILLS.filter(
     (name) => !existsSync(join(home, ".agents", "skills", name, "SKILL.md")),
@@ -1136,6 +1147,14 @@ export function runDoctor(
         // unless this under-development flag is on — everywhere else the quiz asks in a numbered
         // chat block, which works fine. Reported per home because Codex Desktop gives each
         // signed-in account its own config.toml, so enabling it in one says nothing about another.
+        if (!status.sandboxStateRoot) {
+          console.log(
+            `  [codex] ⚠️ sandbox cannot write the llmwiki state root — state-writing commands may require approval; ` +
+              `re-run \`${WIRE_CODEX_CMD}\``,
+          );
+          actions += 1;
+        }
+
         for (const home of codexHomes()) {
           const state = codexStructuredAsk(home);
           if (state === "unreadable") {

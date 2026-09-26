@@ -7,8 +7,9 @@ import * as capture from "./capture.ts";
 import { today as todayLocal } from "./today.ts";
 import { getConfig, logDirs, pickLangValue, resolveWikiLang, type WikiConfig } from "./config.ts";
 import { render } from "./extract.ts";
-import { sourceForKind, sourceForPath } from "./source.ts";
+import { isSubagentTranscript, sourceForKind, sourceForPath } from "./source.ts";
 import { WikiIndex } from "./db.ts";
+import { sameRepository } from "./enrollment.ts";
 import { appendRepoFile, ensureRepoDir, readRepoFile, repoFileExists, writeRepoFile } from "./repo-write.ts";
 import { screenSecrets } from "./screen.ts";
 
@@ -36,7 +37,9 @@ function basename(p: string): string {
 
 export function enqueue(ws: string, transcriptPath: string, sessionId: string | null): void {
   const source = sourceForPath(transcriptPath);
-  capture.enqueue(transcriptPath, sessionId, resolve(ws), 0, source.kind);
+  capture.enqueue(transcriptPath, sessionId, resolve(ws), 0, source.kind, () =>
+    isSubagentTranscript(source.kind, transcriptPath),
+  );
 }
 
 export function pending(ws: string): capture.CaptureRow[] {
@@ -76,7 +79,10 @@ export function renderRouteLines(ws: string, touched: Record<string, number> | u
   const lines = [`# touched: ${entries.map(([root, n]) => `${root}(${n})`).join(" · ")}`];
   const [topRoot, topCount] = entries[0]!;
   const wsRoot = resolve(ws);
-  if (topRoot !== wsRoot) {
+  // Linked worktrees of the queue repo are the SAME repository: a worktree session files into the
+  // main tree's backlog by design (captureBucket), so its edits landing under the worktree path
+  // are not a misroute. Only a genuinely different repository (another git common dir) warns.
+  if (topRoot !== wsRoot && !sameRepository(topRoot, wsRoot)) {
     lines.push(
       `# ⚠ route: ${topCount} of this segment's file mutations happened under ${topRoot}, not ${wsRoot} — ` +
         `file the session into THAT repo's wiki, then advance the watermark where the transcript is queued ` +
@@ -101,6 +107,7 @@ export function nextIncrement(ws: string, transcriptPath: string): NextIncrement
     return text === null ? [] : [{ ...turn, text }];
   });
   new WikiIndex(ws).registerTranscript(transcriptPath, inc.sessionId);
+  capture.recordIssuedOffset(transcriptPath, inc.newOffset);
   return {
     rendered: render(inc),
     newOffset: inc.newOffset,
@@ -112,8 +119,44 @@ export function nextIncrement(ws: string, transcriptPath: string): NextIncrement
   };
 }
 
+/**
+ * Why `update-done` must refuse this watermark, or null. A filed (non-skipped) mark has to carry
+ * the exact `new_offset` the last `update-next` issued for the transcript — the only evidence that
+ * an extract was produced for the range being closed. `--skipped` stays permissive (skipping is a
+ * judgment, not a claim of filing) but can still never point past the end of the transcript.
+ */
+export function updateDoneProblem(transcriptPath: string, newOffset: number, skipped: boolean): string | null {
+  if (!Number.isInteger(newOffset) || newOffset < 0) return `offset must be a non-negative integer (got ${newOffset})`;
+  const issued = capture.issuedOffset(transcriptPath);
+  // A compressed rollout (foo.jsonl → foo.jsonl.zst) is watermarked in DECOMPRESSED bytes, so its
+  // on-disk size is no bound; the offset update-next issued is.
+  // A transcript already rotated away (retention prune) has no extent either: the issued offset —
+  // or nothing — bounds it, so an expired session can still be closed with --skipped.
+  const { size, compressed, missing } = capture.transcriptExtent(transcriptPath);
+  const bound = compressed || missing ? (issued ?? Number.POSITIVE_INFINITY) : size;
+  if (newOffset > bound) return `offset ${newOffset} is past the end of the transcript (${bound} bytes)`;
+  // Never rewind: a watermark another path (reconcile, autoupdate) already advanced past this
+  // offset would re-pend the gap as "grew" and file it twice.
+  const current = capture.getOffset(transcriptPath);
+  if (newOffset < current) return `offset ${newOffset} is behind the current watermark (${current})`;
+  if (skipped) return null;
+  const rerun = "run `llmwiki update-next <repo> <transcript>`, read the extract, then pass its new_offset";
+  if (newOffset === 0 && (size > 0 || compressed)) {
+    return `offset 0 on a non-empty transcript marks nothing as filed — ${rerun} (or use --skipped)`;
+  }
+  if (issued === null) return `no update-next extract was issued for this transcript — ${rerun}`;
+  if (issued !== newOffset) {
+    return `offset ${newOffset} is not the new_offset update-next last issued (${issued}) — ${rerun}`;
+  }
+  return null;
+}
+
 export function markUpdated(ws: string, transcriptPath: string, newOffset: number, skipped = false): void {
+  const problem = updateDoneProblem(transcriptPath, newOffset, skipped);
+  if (problem) throw new Error(`update-done refused: ${problem}`);
   capture.mark(transcriptPath, newOffset, skipped ? "skipped" : "distilled");
+  // An issuance proves one extract; once spent it must not vouch for a later close-out.
+  capture.clearIssuedOffset(transcriptPath);
 }
 
 export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(ws))): void {

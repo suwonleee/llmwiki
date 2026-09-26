@@ -87,3 +87,18 @@ describe("maintenance skill command contracts", () => {
     );
   });
 });
+
+// The deep pass once read "lossless safety net · process EVERY pending transcript" and answered a
+// 557-row backlog by bulk-marking it done in ten minutes (~48% durable coverage afterwards). The
+// contract is now: file what is important, skip the rest explicitly, report engine counts.
+describe("wiki-deep backlog contract", () => {
+  test("no drain-everything framing; read-before-filing, triage and engine-counted report are pinned", () => {
+    const deep = sourceSkill("wiki-deep");
+    expect(deep).not.toMatch(/lossless|EVERY pending/);
+    expect(deep).toContain("Never mark `update-done` without `--skipped` on a session whose extract you did not read");
+    expect(deep).toContain("triage deterministically first");
+    expect(deep).toContain("`ledger:` line of `llmwiki update-status <repo>`");
+    expect(deep).toContain("⚠ route sessions:");
+    expect(sourceSkill("wiki-save")).not.toMatch(/lossless/);
+  });
+});

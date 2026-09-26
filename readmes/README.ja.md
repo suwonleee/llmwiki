@@ -86,7 +86,7 @@ llmwiki init /absolute/path/to/my-project
 - CLIで探す: `llmwiki --help` は初回の流れとコマンド群を表示し、
   `llmwiki <command> --help` は実行せずに個別の使い方を表示し、`llmwiki --version` は
   エンジンのバージョンを表示します。
-- 自動連携はGit専用・ワークツリー単位。リポジトリを移動した場合は `init` を再実行
+- 自動連携はGit専用・ワークツリー単位。リンクされたワークツリー（`git worktree add`）はメインワークツリーの登録を継承（`llmwiki disable <ワークツリー>` で個別に解除）。リポジトリを移動した場合は `init` を再実行
 - すべてのハーネス構成が同じユーザー用 `llmwiki` ランチャーを導入します。必要な場合は
   setupが表示する `PATH` コマンドを一度適用します
 - **OpenCodeのみ — セットアップ後に一度再起動**（クローンの再指定後も同様）: OpenCodeは

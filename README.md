@@ -106,8 +106,10 @@ there are no further prompts or confirmations, ever.
 - CLI discovery: `llmwiki --help` shows the first-use path and command groups;
   `llmwiki <command> --help` shows one command without running it; `llmwiki --version` prints the
   engine version.
-- automatic integration is **git-only** and per-worktree; two linked worktrees enroll separately,
-  and moving a repository requires re-running `init` (the marker records its canonical path)
+- automatic integration is **git-only** and per-worktree; a linked worktree (`git worktree add`)
+  inherits its main worktree's enrollment (reads its own branch wiki, files sessions into the main
+  tree's backlog; `llmwiki disable <worktree>` opts one out), and moving a repository requires
+  re-running `init` (the marker records its canonical path)
 - every harness install gets the same user-level `llmwiki` launcher; setup prints a one-time `PATH`
   line when the shell does not already include it
 - **OpenCode only — restart it once after setup** (and after re-pointing the clone): OpenCode loads

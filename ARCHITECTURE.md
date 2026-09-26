@@ -27,7 +27,8 @@ Claude / Codex / OpenCode transcript stores (read-only)
 ```
 
 Enrollment under the worktree's `.git/llmwiki/` directory gates both automatic reads and capture.
-A clone containing `docs/wiki/` is inert until `llmwiki init` succeeds.
+A clone containing `docs/wiki/` is inert until `llmwiki init` succeeds. Linked worktrees inherit
+the main worktree's enrollment and can opt out individually with `llmwiki disable`.
 
 ## Module map
 
@@ -37,7 +38,7 @@ A clone containing `docs/wiki/` is inert until `llmwiki init` succeeds.
 | CLI dispatch | `src/cli.ts`, `src/commands/maintenance.ts` | Handlers preserve documented output, exit codes, enrollment, and dry-run defaults. |
 | Repository I/O | `src/engine/repo-write.ts` | Canonical containment, ancestor and leaf symlink refusal, atomic writes. |
 | Durable project content | `<project>/docs/wiki/` | Plain Git Markdown is the source of truth. |
-| Derived project state | `src/engine/project-state.ts`, `src/engine/db.ts` | Machine-local indexes can be rebuilt; worktrees never share an index. |
+| Derived project state | `src/engine/project-state.ts`, `src/engine/db.ts` | Machine-local indexes can be rebuilt; an unindexed linked worktree can read the main wiki index, filtering out pages absent from its checkout. |
 | Capture ledger | `src/engine/capture.ts`, `src/daemon/watch.ts` | Records routing and watermarks without owning harness transcripts. |
 | Harness readers | `src/engine/sources/` | Read external stores defensively and never write into them. |
 | Read injection | `src/engine/context.ts`, `src/engine/turncontext.ts` | Unenrolled or irrelevant sessions are silent. |

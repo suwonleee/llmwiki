@@ -902,6 +902,28 @@ function readMeta(path: string): ExportMeta | null {
   }
 }
 
+/**
+ * A child session (the task tool's sub-agent) has `session.parent_id` set; its only "user" turn is
+ * the parent agent's prompt. Answered from the export's meta line → the OpenCode database it names,
+ * which must still be one this engine reads. Unreadable or unknown → false (the row stays work).
+ */
+export function isOpenCodeChildSession(path: string, allowedDbPaths: readonly string[] = opencodeDbPaths()): boolean {
+  const meta = readMeta(path);
+  if (!meta?.sourcePath || !allowedDbPaths.includes(meta.sourcePath)) return false;
+  const db = openRO(meta.sourcePath);
+  if (!db) return false;
+  try {
+    const row = db.query("SELECT parent_id FROM session WHERE id = ?").get(meta.sessionID) as
+      | { parent_id: unknown }
+      | null;
+    return typeof row?.parent_id === "string" && row.parent_id !== "";
+  } catch {
+    return false; // schema without parent_id
+  } finally {
+    db.close();
+  }
+}
+
 /** Read-only routing seam for deterministic tests/benchmarks and the production registry. */
 export function discoverOpenCodeRoutes(dbPaths: readonly string[] = opencodeDbPaths()): DiscoveredRoute[] {
   const out: DiscoveredRoute[] = [];
@@ -1074,6 +1096,10 @@ export function materializeOpenCodeRoutes(
 
 export const opencodeSource: TranscriptSource = {
   kind: "opencode",
+
+  isSubagent(path: string): boolean {
+    return isOpenCodeChildSession(path);
+  },
 
   // Stage 1 — routing ONLY. Two columns, one table: `session.id` and `session.directory`. Not
   // `title` (harness-generated text about the conversation), never `session_message`, and no

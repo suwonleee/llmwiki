@@ -20,10 +20,11 @@
 // tokens (any user language keeps code terms in ASCII), word runs in any script, and word-sized
 // windows over scripts that write without spaces. Everything is floored at 3 characters, the
 // FTS5 trigram matching floor; shorter terms cannot match and are dropped.
-import { closeSync, constants as fsConstants, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, constants as fsConstants, existsSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
+import { inspectEnrollment } from "./enrollment.ts";
 import { WikiIndex } from "./db.ts";
 import { UNSPACED_ONLY_RE, UNSPACED_RUN_RE, unspacedWindows } from "./segment.ts";
 import { isRepoKorean, effectiveKo, getConfig } from "./config.ts";
@@ -257,6 +258,33 @@ export function termWeight(t: string): number {
   return ([...t].length >= (dense ? 5 : 8)) ? 2 : 1;
 }
 
+/**
+ * The same wiki root inside the enrolled MAIN worktree, when `repo` sits in a linked worktree that
+ * is itself enrolled (own marker or inherited). null for everything else.
+ */
+function mainCheckoutOf(repo: string): string | null {
+  let real: string;
+  try {
+    real = realpathSync(repo);
+  } catch {
+    return null;
+  }
+  const st = inspectEnrollment(real);
+  if (!st.enabled || !st.mainWorktree || !st.worktree) return null;
+  const rel = relative(st.worktree, real);
+  if (rel.startsWith("..") || isAbsolute(rel)) return null;
+  return join(st.mainWorktree, rel);
+}
+
+function hasWikiRows(w: WikiIndex): boolean {
+  const db = w.connect();
+  try {
+    return db.query("SELECT 1 FROM documents WHERE relative_path LIKE 'docs/wiki/%' LIMIT 1").get() !== null;
+  } finally {
+    db.close();
+  }
+}
+
 export function buildTurnContext(repo: string, prompt: string, sessionId = ""): string {
   try {
     const cfg = getConfig(repo);
@@ -271,14 +299,30 @@ export function buildTurnContext(repo: string, prompt: string, sessionId = ""): 
     const subFloor = extractTerms(prompt ?? "", 2).filter((t) => !terms.includes(t));
     if (!terms.length && !subFloor.length) return "";
 
-    const w = new WikiIndex(repo);
+    let w = new WikiIndex(repo);
+    // A linked worktree with no index of its own borrows its main worktree's WIKI index instead of
+    // staying silent (building a full index is a close-out cost, never a per-turn one). The branch
+    // may lack pages the main tree has, so a borrowed hit counts only when the page exists in THIS
+    // checkout, and every path shown is relative to this checkout — which is where it gets read.
+    // "No index" includes an index with no wiki rows: the cold start's synthesis readers open
+    // (and so create) an empty one in a fresh worktree before any turn runs.
+    let here: string | null = null;
+    const main = mainCheckoutOf(repo);
+    if (main !== null && (!existsSync(w.dbPath) || !hasWikiRows(w))) {
+      const borrowed = new WikiIndex(main);
+      if (existsSync(borrowed.dbPath)) {
+        w = borrowed;
+        here = resolve(repo);
+      }
+    }
     if (!existsSync(w.dbPath)) return ""; // no index yet — stay silent, never create state
-    const koRepo = isRepoKorean(w.root);
-    const head = HEADS[koRepo ? "ko" : "en"](displayRoot(w.root)); // the same answer the writers use
+    const root = here ?? w.root;
+    const koRepo = isRepoKorean(root);
+    const head = HEADS[koRepo ? "ko" : "en"](displayRoot(root)); // the same answer the writers use
 
     // HQE-lite (P1): fold prior-turn terms into this turn's query. Persist the merged
     // weights immediately so even a silent turn feeds the next one.
-    const sp = sessionId ? _turnStatePath(w.root, sessionId) : "";
+    const sp = sessionId ? _turnStatePath(root, sessionId) : "";
     const state = sp ? readState(sp) : { seen: new Set<string>(), terms: {} as Record<string, number> };
     let carried: string[] = [];
     if (sp && accumEnabled()) {
@@ -331,7 +375,8 @@ export function buildTurnContext(repo: string, prompt: string, sessionId = ""): 
          rel === COLD_INDEX_RELATIVE_PATH ||
          !rel.includes("docs/wiki/") ||
          l0Basenames.has(base) ||
-         rel.includes(`/${cfg.queueDir}/`)
+         rel.includes(`/${cfg.queueDir}/`) ||
+         (here !== null && !existsSync(join(here, rel)))
        ) continue;
       const fresh = !byPage.has(rel);
       const e =

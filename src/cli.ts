@@ -77,7 +77,13 @@ import { existsSync, readFileSync, statSync, type Stats } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { exportHermesSession, hermesDbPath, hermesSessions } from "./engine/hermes-export.ts";
-import { ensureProjectStateDir, resolveProjectStateLocation } from "./engine/project-state.ts";
+import {
+  ensureProjectStateDir,
+  listProjectStates,
+  removeProjectState,
+  resolveProjectStateLocation,
+} from "./engine/project-state.ts";
+import { orphanGraceDays, orphanVerdict } from "./engine/project-maintenance.ts";
 
 // User-facing CLI output adapts to LLMWIKI_LANG (default English, Korean when set) — same
 // policy as the cold-start context/digest. LLM-facing prompts stay English by design.
@@ -256,14 +262,20 @@ function cmdExcerpt(p: Parsed) {
 function cmdUpdateStatus(p: Parsed) {
   const ws = p.positionals[0] ?? die("update-status <workspace> required");
   const rows = update.pending(ws);
+  // Engine-held ledger for this bucket: a deep pass reports filed/skipped as the difference of this
+  // line before and after, never as its own tally.
+  const ledger = capture.stats(ws);
+  const ledgerLine = `ledger: distilled ${ledger["distilled"] ?? 0} · skipped ${ledger["skipped"] ?? 0} · lost ${ledger["lost"] ?? 0}`;
   if (!rows.length) {
     console.log("✓ No pending transcripts to update.");
+    console.log(ledgerLine);
     return;
   }
   console.log(`${rows.length} transcript(s) pending update:`);
   for (const r of rows) {
     console.log(`  • sess ${(r.session_id || "?").slice(0, 8)} @offset ${r.byte_offset} | ${r.transcript_path}`);
   }
+  console.log(ledgerLine);
 }
 
 /**
@@ -437,7 +449,11 @@ function cmdUpdateDone(p: Parsed) {
   const transcript = p.positionals[1] ?? die("update-done <workspace> <transcript> <offset> required");
   const offset = parseInt(p.positionals[2] ?? die("update-done <workspace> <transcript> <offset> required"), 10);
   const skipped = !!p.flags["--skipped"];
-  update.markUpdated(ws, transcript, offset, skipped);
+  try {
+    update.markUpdated(ws, transcript, offset, skipped);
+  } catch (e) {
+    die(e instanceof Error ? e.message : String(e));
+  }
   console.log(`✓ watermark advanced to ${offset} (${skipped ? "skipped" : "distilled"})`);
 }
 
@@ -528,7 +544,13 @@ async function cmdReview(p: Parsed) {
     return;
   }
   if (r.verdict !== "reviewed") {
-    console.log(`  ❌ ${r.verdict}: ${String(r.reason || "").slice(0, 200)}`);
+    // The cap bounds arbitrary provider failure output. The no-provider reason is
+    // engine-authored, fixed-length, and carries the setup command the operator is meant
+    // to copy — capping it truncated the command mid-token in a live run.
+    const reason = String(r.reason || "");
+    console.log(
+      `  ❌ ${r.verdict}: ${r.verdict === "skipped-no-provider" ? reason : reason.slice(0, 200)}`,
+    );
     return;
   }
   const scopeTxt = r.scope?.bounded
@@ -803,7 +825,9 @@ function cmdStatus(p: Parsed) {
   // transcript content, so it stays safe to paste into a bug report.
   console.log(`${st.enabled ? "enabled" : "disabled"}  ${st.worktree ?? resolve(ws)}`);
   console.log(`  ${enrollment.explain(st, ko)}`);
-  if (st.markerPath) console.log(`  marker: ${st.markerPath}`);
+  // An inheriting worktree has no marker of its own; naming that absent path reads as a claim.
+  if (st.inheritedFrom) console.log(`  inherited from: ${st.inheritedFrom}`);
+  else if (st.markerPath) console.log(`  marker: ${st.markerPath}`);
 }
 
 // One post-install receipt for the only state a person should care about: is the machine wiring
@@ -917,7 +941,44 @@ function cmdMigrateState(p: Parsed) {
   );
 }
 
+// Per-worktree state whose worktree is gone. The daemon does the same daily; this is the explicit,
+// inspectable path: a report by default, deletion only with --confirm, like the whole-root purge.
+function purgeOrphanStates(p: Parsed) {
+  const raw = p.flags["--older-than"] as string | undefined;
+  const graceDays = raw === undefined ? orphanGraceDays() : Number(raw);
+  if (!Number.isFinite(graceDays) || graceDays < 0) {
+    die("purge-state --orphans [--older-than <days>] [--confirm] — days must be a non-negative number");
+  }
+  const commit = !!p.flags["--confirm"];
+  const now = Date.now();
+  const mb = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+  let count = 0;
+  let bytes = 0;
+  for (const entry of listProjectStates()) {
+    if (!entry.orphaned) continue;
+    const verdict = orphanVerdict(entry, now, graceDays);
+    const where = entry.worktree ?? `(no meta.json) ${entry.dir}`;
+    if (!verdict.collect) {
+      console.log(`  kept (${verdict.reason})  ${mb(entry.bytes)}  ${where}  lastUsed=${entry.lastUsed ?? "?"}`);
+      continue;
+    }
+    if (commit && !removeProjectState(entry.dir)) {
+      console.log(`  kept (remove failed)  ${mb(entry.bytes)}  ${where}`);
+      continue;
+    }
+    count += 1;
+    bytes += entry.bytes;
+    console.log(`  ${commit ? "removed" : "would remove"}  ${mb(entry.bytes)}  ${where}  lastUsed=${entry.lastUsed ?? "?"}`);
+  }
+  console.log(
+    commit
+      ? `✓ removed ${count} orphaned project state dir(s), ${mb(bytes)} freed (grace ${graceDays}d)`
+      : `• ${count} orphaned project state dir(s), ${mb(bytes)} reclaimable (grace ${graceDays}d) — delete with \`--confirm\``,
+  );
+}
+
 function cmdPurgeState(p: Parsed) {
+  if (p.flags["--orphans"]) return purgeOrphanStates(p);
   const dir = capture.stateDir();
   if (!p.flags["--confirm"]) {
     console.log(

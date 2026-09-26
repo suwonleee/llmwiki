@@ -40,7 +40,7 @@ describe("public onboarding documentation", () => {
     expect(flow).toContain("`llmwiki doctor --harness codex`");
     expect(flow).toContain("`llmwiki doctor --harness opencode`");
     expect(flow).toContain("Inspect and trust both current llmwiki hook hashes");
-    expect(flow).toContain("llmwiki does not edit `$CODEX_HOME/config.toml`");
+    expect(flow).toContain("llmwiki does not edit `$CODEX_HOME/config.toml` beyond that one tagged sandbox entry");
     expect(flow).toContain("another orchestrator's runtime or preflight state");
     expect(flow).toContain("Restart OpenCode after initial setup or clone re-pointing");
     expect(flow).toContain("Do not migrate automatically");

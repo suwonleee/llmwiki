@@ -1,4 +1,5 @@
 import * as capture from "../engine/capture.ts";
+import { isSubagentTranscript } from "../engine/source.ts";
 import { today } from "../engine/today.ts";
 import { runDoctor, type DoctorHarness } from "../engine/doctor.ts";
 import { refreshGapQueue } from "../engine/gaps.ts";
@@ -107,9 +108,11 @@ export function createMaintenanceHandlers(dependencies: MaintenanceDependencies)
         die("capture-prune [--older-than <days>] — days must be a non-negative number");
       }
       const result = capture.prune(days);
+      const subagents = capture.skipPendingSubagents((r) => isSubagentTranscript(r.source_kind, r.transcript_path));
       console.log(
         `✓ capture queue pruned: ${result.removed} expired row(s) recorded as lost (kept as an audit ledger, never deleted), ` +
-          `${result.skippedEphemeral} deleted temp-repo row(s) marked skipped, ${result.kept} pending kept (age guard ${days}d)`,
+          `${result.skippedEphemeral} deleted temp-repo row(s) marked skipped, ${subagents} sub-agent thread(s) marked skipped, ` +
+          `${result.kept - subagents} pending kept (age guard ${days}d)`,
       );
       // The queue is metadata; the OpenCode exports are conversation TEXT and expire on their own
       // clock (30 days by the newest member of an export/meta pair). The daemon does this daily —

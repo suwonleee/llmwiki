@@ -1,12 +1,12 @@
 #!/usr/bin/env bun
 // First-class Codex wiring for a path-independent llmwiki clone.
 //
-//   bun wire-codex.ts             merge hooks + install skills + user CLI
+//   bun wire-codex.ts             merge hooks + sandbox writable root + install skills + user CLI
 //   bun wire-codex.ts --dry-run   print the exact targets, write nothing
 //   bun wire-codex.ts --revert    remove only llmwiki-managed entries
 //
-// Existing hook groups are preserved. Re-running strips stale llmwiki handlers first,
-// so moving the clone re-points the commands without creating duplicates.
+// Existing hook groups are preserved and never reordered. Re-running rewrites llmwiki handlers in
+// place, so moving the clone re-points the commands without duplicates or lost `/hooks` trust.
 import {
   chmodSync,
   copyFileSync,
@@ -27,10 +27,12 @@ import { RETIRED_CODEX_SKILLS } from "../engine/install-history.ts";
 import { CLONE_ROOT, CLONE_ROOT_SHELL, ENGINE_CLI_TOKEN, engineCliCommand, hookCliCommand } from "../engine/paths.ts";
 import { envValueOutsideRepoFiles } from "../engine/env-policy.ts";
 import { FRONTMATTER_GATE, SKILL_POLICY_REL, skillPolicyYaml } from "../engine/skill-policy.ts";
+import { effectiveStateRoot } from "../engine/state-dir.ts";
 
 const HOME = process.env.HOME?.trim() || homedir();
 const CODEX_HOME = envValueOutsideRepoFiles("CODEX_HOME")?.trim() || join(HOME, ".codex");
 const HOOKS_PATH = join(CODEX_HOME, "hooks.json");
+const CONFIG_PATH = join(CODEX_HOME, "config.toml");
 const SKILLS_ROOT = join(HOME, ".agents", "skills");
 const BIN_DIR = process.env.LLMWIKI_BIN_DIR?.trim() || join(HOME, ".local", "bin");
 const LAUNCHER = join(BIN_DIR, "llmwiki");
@@ -169,25 +171,6 @@ function readHooks(): HooksFile {
   }
 }
 
-function stripManagedHooks(file: HooksFile): number {
-  let removed = 0;
-  for (const event of ["SessionStart", "UserPromptSubmit"]) {
-    const groups = file.hooks?.[event] ?? [];
-    const kept: HookGroup[] = [];
-    for (const group of groups) {
-      const hooks = (group.hooks ?? []).filter((hook) => {
-        const managed =
-          isManagedHookCommand(hook.command);
-        if (managed) removed += 1;
-        return !managed;
-      });
-      if (hooks.length) kept.push({ ...group, hooks });
-    }
-    if (file.hooks && event in file.hooks) file.hooks[event] = kept;
-  }
-  return removed;
-}
-
 function stripCurrentHooks(file: HooksFile): number {
   let removed = 0;
   for (const event of ["SessionStart", "UserPromptSubmit"]) {
@@ -283,44 +266,195 @@ function restorePriorInstall(hooks: HooksFile): boolean {
   return true;
 }
 
-function addHooks(file: HooksFile): void {
+const MANAGED_HANDLERS: ReadonlyArray<readonly [string, HookHandler]> = [
+  [
+    "SessionStart",
+    {
+      type: "command",
+      command: SESSION_CMD,
+      timeout: 20,
+      statusMessage: "llmwiki cold-start context",
+      // Codex spills hook stdout above ~2,500 approx tokens (bytes/4 → 10,000 bytes) to a tmp
+      // file and injects only a head/tail preview (codex-rs output_spill.rs). A healthy wiki's
+      // cold start crosses that quietly — the engine already owns its context budget, so spilling
+      // is disabled here. 0 = "no spill" since 0.145.0 (#34393); older parsers ignore the
+      // unknown field (handler variants never had deny_unknown_fields) and keep the default.
+      additionalContextLimit: 0,
+    },
+  ],
+  ["UserPromptSubmit", { type: "command", command: TURN_CMD, timeout: 10, statusMessage: "llmwiki turn-context" }],
+];
+
+/**
+ * Merge llmwiki's two handlers IN PLACE. Codex keys `/hooks` trust by position
+ * (`[hooks.state."<hooks.json>:user_prompt_submit:<group>:<handler>"]` in config.toml), so the old
+ * strip-then-append moved our group behind any user group added after it — and every re-run of
+ * setup silently revoked trust for both entries. The first managed handler is rewritten where it
+ * stands (re-pointing a moved clone included), duplicates are dropped, and a group is appended only
+ * when none exists. Returns how many handlers changed or were removed.
+ */
+function upsertHooks(file: HooksFile): number {
   file.description ??= "llmwiki lifecycle hooks for Codex";
   file.hooks ??= {};
-  file.hooks.SessionStart ??= [];
-  file.hooks.UserPromptSubmit ??= [];
-  file.hooks.SessionStart.push({
-    matcher: "",
-    hooks: [
-      {
-        type: "command",
-        command: SESSION_CMD,
-        timeout: 20,
-        statusMessage: "llmwiki cold-start context",
-        // Codex spills hook stdout above ~2,500 approx tokens (bytes/4 → 10,000 bytes) to a tmp
-        // file and injects only a head/tail preview (codex-rs output_spill.rs). A healthy wiki's
-        // cold start crosses that quietly — the engine already owns its context budget, so spilling
-        // is disabled here. 0 = "no spill" since 0.145.0 (#34393); older parsers ignore the
-        // unknown field (handler variants never had deny_unknown_fields) and keep the default.
-        additionalContextLimit: 0,
-      },
-    ],
-  });
-  file.hooks.UserPromptSubmit.push({
-    matcher: "",
-    hooks: [{ type: "command", command: TURN_CMD, timeout: 10, statusMessage: "llmwiki turn-context" }],
-  });
+  let changed = 0;
+  for (const [event, handler] of MANAGED_HANDLERS) {
+    let placed = false;
+    const kept: HookGroup[] = [];
+    for (const group of file.hooks[event] ?? []) {
+      const hooks: HookHandler[] = [];
+      for (const hook of group.hooks ?? []) {
+        if (!isManagedHookCommand(hook.command)) {
+          hooks.push(hook);
+          continue;
+        }
+        const current = JSON.stringify(hook) === JSON.stringify(handler);
+        if (placed || !current) changed += 1;
+        if (!placed) hooks.push(current ? hook : { ...handler });
+        placed = true;
+      }
+      if (hooks.length) kept.push({ ...group, hooks });
+    }
+    if (!placed) kept.push({ matcher: "", hooks: [{ ...handler }] });
+    file.hooks[event] = kept;
+  }
+  return changed;
 }
 
 function writeJsonAtomic(path: string, value: unknown): boolean {
-  mkdirSync(dirname(path), { recursive: true });
   const text = JSON.stringify(value, null, 2) + "\n";
   JSON.parse(text);
+  return writeTextAtomic(path, text);
+}
+
+function writeTextAtomic(path: string, text: string): boolean {
+  mkdirSync(dirname(path), { recursive: true });
   if (existsSync(path) && readFileSync(path, "utf8") === text) return false;
   if (existsSync(path)) copyFileSync(path, `${path}.llmwiki-bak.${timestamp()}`);
   const tmp = `${path}.llmwiki-tmp`;
   writeFileSync(tmp, text, "utf8");
+  // config.toml ships 0600; the rename must not widen it to the umask default.
+  if (existsSync(path)) chmodSync(tmp, statSync(path).mode & 0o777);
   renameSync(tmp, path);
   return true;
+}
+
+// Codex's default sandbox (workspace-write) lets a command write the workspace, /tmp and $TMPDIR
+// only. The engine's state root sits outside every workspace, so each state-writing `llmwiki`
+// call (update-status, update-next, lint …) hit EPERM and fell back to an approval prompt — three
+// human interventions in one measured $wiki-deep. `[sandbox_workspace_write].writable_roots` is
+// the codex-cli 0.156.0 key both the TUI and `codex exec` read (probed with `codex sandbox`).
+//
+// Edited as text, never re-serialized, so the user's comments and layout survive. Every line this
+// adds carries a tag: re-runs strip and re-add (a moved state root re-points, never duplicates),
+// and --revert removes only tagged lines — plus the key and table if this wiring created them.
+const SANDBOX_TAG = `# ${MANAGED}`;
+const SANDBOX_ROOT_TAG = `${SANDBOX_TAG} state root`;
+/** Our entry had to split a line of the user's array; stripping it joins that line back. */
+const SANDBOX_SPLIT_TAG = `${SANDBOX_ROOT_TAG} (split)`;
+const SANDBOX_KEY_TAG = `${SANDBOX_TAG} key`;
+const SANDBOX_TABLE_TAG = `${SANDBOX_TAG} table`;
+const SANDBOX_HEADER_RE = /^\s*\[\s*sandbox_workspace_write\s*\]\s*(#.*)?$/;
+const TABLE_HEADER_RE = /^\s*\[/;
+const ROOTS_KEY_RE = /^\s*writable_roots\s*=\s*\[/;
+
+function parseToml(text: string): any {
+  return (Bun as any).TOML.parse(text);
+}
+
+function tableEnd(lines: string[], header: number): number {
+  let end = header + 1;
+  while (end < lines.length && !TABLE_HEADER_RE.test(lines[end])) end++;
+  return end;
+}
+
+function stripManagedSandbox(text: string): { text: string; removed: number } {
+  const kept: string[] = [];
+  let removed = 0;
+  let join = false;
+  for (const line of text.split("\n")) {
+    if (line.trimStart().startsWith('"') && line.includes(SANDBOX_ROOT_TAG)) {
+      removed += 1;
+      join = line.includes(SANDBOX_SPLIT_TAG);
+    } else if (join && kept.length) {
+      kept[kept.length - 1] += line;
+      join = false;
+    } else {
+      kept.push(line);
+    }
+  }
+  if (!removed) return { text, removed };
+  // Our own key, now empty, goes; then our own table, if nothing else lives in it.
+  const key = kept.findIndex((line, i) => line.includes(SANDBOX_KEY_TAG) && /^\s*\]\s*$/.test(kept[i + 1] ?? ""));
+  if (key !== -1) kept.splice(key, 2);
+  const header = kept.findIndex((line) => SANDBOX_HEADER_RE.test(line) && line.includes(SANDBOX_TABLE_TAG));
+  if (header !== -1 && kept.slice(header + 1, tableEnd(kept, header)).every((line) => line.trim() === "")) {
+    const start = header > 0 && kept[header - 1].trim() === "" ? header - 1 : header;
+    kept.splice(start, header + 1 - start);
+  }
+  return { text: kept.join("\n"), removed };
+}
+
+/** Our root goes FIRST in the array, as a whole line, so the user's elements are never touched. */
+function addManagedSandbox(text: string, root: string): string {
+  const entry = `  ${JSON.stringify(root)}, ${SANDBOX_ROOT_TAG}`;
+  const lines = text.split("\n");
+  const header = lines.findIndex((line) => SANDBOX_HEADER_RE.test(line));
+  if (header === -1) {
+    const body = text === "" || text.endsWith("\n") ? text : `${text}\n`;
+    const table = `[sandbox_workspace_write] ${SANDBOX_TABLE_TAG}\nwritable_roots = [ ${SANDBOX_KEY_TAG}\n${entry}\n]\n`;
+    return `${body}${body.trim() ? "\n" : ""}${table}`;
+  }
+  const key = lines.slice(header + 1, tableEnd(lines, header)).findIndex((line) => ROOTS_KEY_RE.test(line));
+  if (key === -1) {
+    lines.splice(header + 1, 0, `writable_roots = [ ${SANDBOX_KEY_TAG}`, entry, "]");
+    return lines.join("\n");
+  }
+  const keyLine = header + 1 + key;
+  const open = lines[keyLine].indexOf("[");
+  const rest = lines[keyLine].slice(open + 1);
+  if (rest.trim() === "" || rest.trimStart().startsWith("#")) {
+    lines.splice(keyLine + 1, 0, entry);
+  } else {
+    lines.splice(keyLine, 1, lines[keyLine].slice(0, open + 1), `  ${JSON.stringify(root)}, ${SANDBOX_SPLIT_TAG}`, rest);
+  }
+  return lines.join("\n");
+}
+
+/** The config.toml text that lets the sandbox write the state root, or null with the reason. */
+function planSandbox(): { root: string; text: string | null; note: string } {
+  const root = effectiveStateRoot();
+  let original = "";
+  try {
+    original = readFileSync(CONFIG_PATH, "utf8");
+  } catch {
+    /* absent: created */
+  }
+  try {
+    const stripped = stripManagedSandbox(original);
+    // Exactly one managed entry, and it is this root: keep the file as it stands. Strip-and-re-add
+    // would move a table this wiring created to the end of the file on every run.
+    if (stripped.removed === 1 && original.includes(`${JSON.stringify(root)}, ${SANDBOX_ROOT_TAG}`)) {
+      return { root, text: original, note: "merge" };
+    }
+    const base = stripped.text;
+    const baseParsed = parseToml(base);
+    const existing = baseParsed?.sandbox_workspace_write?.writable_roots;
+    if (Array.isArray(existing) && existing.includes(root)) {
+      return { root, text: base, note: "already listed by your own entry" };
+    }
+    const next = addManagedSandbox(base, root);
+    // Refuse anything that is not exactly "base plus our one root": a form this text edit does not
+    // understand (a dotted key, an inline table) must never become a corrupted config.
+    const roots = parseToml(next)?.sandbox_workspace_write?.writable_roots;
+    if (!Array.isArray(roots) || !roots.includes(root)) throw new Error("merge did not take effect");
+    if (JSON.stringify(parseToml(stripManagedSandbox(next).text)) !== JSON.stringify(baseParsed)) {
+      throw new Error("merge would change other settings");
+    }
+    return { root, text: next, note: "merge" };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return { root, text: null, note: `cannot edit ${CONFIG_PATH} (${reason})` };
+  }
 }
 
 function codexSkill(sourceName: (typeof SKILLS)[number]): string {
@@ -435,8 +569,8 @@ function apply(dryRun: boolean): number {
   }
   const hooks = readHooks();
   const prior = capturePriorInstall(hooks);
-  const repointed = stripManagedHooks(hooks);
-  addHooks(hooks);
+  const repointed = upsertHooks(hooks);
+  const sandbox = planSandbox();
 
   if (dryRun) {
     console.log("=== llmwiki Codex wiring [DRY-RUN] ===");
@@ -449,6 +583,11 @@ function apply(dryRun: boolean): number {
       );
     }
     console.log(`  CLI   : ${LAUNCHER}`);
+    console.log(
+      sandbox.text === null
+        ? `  sandbox: ⚠️ ${sandbox.note}`
+        : `  sandbox: ${CONFIG_PATH} [sandbox_workspace_write].writable_roots += ${JSON.stringify(sandbox.root)} (${sandbox.note})`,
+    );
     if (prior) console.log(`  backup: preserve the previous llmwiki install for --revert (${INSTALL_BACKUP})`);
     return 0;
   }
@@ -471,6 +610,19 @@ function apply(dryRun: boolean): number {
   );
   console.log(`  [codex] ✅ skills installed: ${SKILLS.map((skill) => `$${skill}`).join(", ")}`);
   console.log(`  [codex] ✅ CLI installed: ${LAUNCHER}`);
+  if (sandbox.text === null) {
+    // A convenience, not a dependency: without it llmwiki still works, one approval per call.
+    console.log(`  [codex] ⚠️ sandbox not widened: ${sandbox.note}`);
+    console.log(
+      `          add ${JSON.stringify(sandbox.root)} to [sandbox_workspace_write].writable_roots by hand ` +
+        "to stop approval prompts on llmwiki commands",
+    );
+  } else {
+    const changed = writeTextAtomic(CONFIG_PATH, sandbox.text);
+    console.log(
+      `  [codex] ✅ sandbox ${changed ? "now allows" : "already allows"} llmwiki state writes: ${sandbox.root} (${CONFIG_PATH})`,
+    );
+  }
   console.log("  [codex] ACTION REQUIRED: start Codex, open `/hooks`, and trust the two llmwiki hooks once.");
   if (process.platform === "win32") {
     // The bare command is a convenience here, never a dependency: the skills carry the explicit
@@ -510,14 +662,17 @@ function revert(dryRun: boolean): number {
       }
     })();
   const removed = stripCurrentHooks(hooks);
+  const sandbox = existsSync(CONFIG_PATH) ? stripManagedSandbox(readFileSync(CONFIG_PATH, "utf8")) : null;
   if (dryRun) {
     console.log("=== llmwiki Codex revert [DRY-RUN] ===");
     console.log(
-      `  hooks=${removed}, skills=${SKILLS.length}, CLI=${LAUNCHER}, restore_previous=${currentOwned && existsSync(INSTALL_BACKUP)}`,
+      `  hooks=${removed}, skills=${SKILLS.length}, CLI=${LAUNCHER}, sandbox_roots=${sandbox?.removed ?? 0}, ` +
+        `restore_previous=${currentOwned && existsSync(INSTALL_BACKUP)}`,
     );
     return 0;
   }
   if (existsSync(HOOKS_PATH)) writeJsonAtomic(HOOKS_PATH, hooks);
+  if (sandbox?.removed) writeTextAtomic(CONFIG_PATH, sandbox.text);
   for (const name of [...SKILLS, ...RETIRED_CODEX_SKILLS]) removeManagedSkill(name, true);
   try {
     const launcher = readFileSync(LAUNCHER, "utf8");
@@ -529,7 +684,7 @@ function revert(dryRun: boolean): number {
   }
   const restored = currentOwned ? restorePriorInstall(hooks) : false;
   console.log(
-    `  [codex] ↩ removed ${removed} hook handler(s), managed skills, and managed CLI` +
+    `  [codex] ↩ removed ${removed} hook handler(s), ${sandbox?.removed ?? 0} sandbox root(s), managed skills, and managed CLI` +
       (restored ? "; restored the previous llmwiki install" : ""),
   );
   return 0;

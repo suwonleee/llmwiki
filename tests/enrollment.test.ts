@@ -7,6 +7,7 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -25,6 +26,8 @@ import {
   isEnrolled,
   isEnrolledFresh,
   markerBytes,
+  OPT_OUT_BASENAME,
+  explain,
   resetEnrollmentCache,
   worktreeGitDir,
 } from "../src/engine/enrollment.ts";
@@ -235,7 +238,7 @@ describe("enrollment marker", () => {
     expect(inspectEnrollment(r).reason).toBe("marker-permissive-mode");
   });
 
-  test("two linked worktrees enroll independently", () => {
+  test("a linked worktree's own marker never enrolls its siblings or the primary", () => {
     const base = scratch();
     const primary = makeGitRepo(join(base, "primary"));
     const linkedA = join(base, "wt-a");
@@ -256,7 +259,10 @@ describe("enrollment marker", () => {
     enroll(primary);
     resetEnrollmentCache();
     expect(isEnrolled(primary)).toBe(true);
-    expect(isEnrolled(linkedB)).toBe(false); // …and the primary's marker never leaks to a sibling
+    // …while the primary's enrollment IS inherited by its linked worktrees (same .git, same consent)
+    expect(isEnrolled(linkedB)).toBe(true);
+    expect(inspectEnrollment(linkedB).inheritedFrom).toBe(primary);
+    expect(inspectEnrollment(linkedA).inheritedFrom).toBeUndefined(); // own marker is the answer
   });
 
   test("disable removes only this worktree's marker", () => {
@@ -290,5 +296,110 @@ describe("enrollment marker", () => {
 
     expect(existsSync(victim)).toBe(true);
     expect(readFileSync(victim, "utf-8")).toBe("KEEP\n");
+  });
+});
+
+describe("linked worktree inheritance", () => {
+  function primaryWithLinked(): { primary: string; linked: string } {
+    const base = scratch();
+    const primary = makeGitRepo(join(base, "primary"));
+    const linked = join(base, "wt");
+    git(primary, ["worktree", "add", "-q", "-b", "wt", linked]);
+    return { primary, linked };
+  }
+
+  test("a linked worktree of an enrolled main inherits, reads its own tree, and says so", () => {
+    const { primary, linked } = primaryWithLinked();
+    expect(isEnrolled(linked)).toBe(false); // main not enrolled → nothing to inherit
+    expect(inspectEnrollment(linked).reason).toBe("no-marker");
+
+    enroll(primary);
+    resetEnrollmentCache();
+    const st = inspectEnrollment(join(linked)); // any path inside the linked worktree
+    expect(st.enabled).toBe(true);
+    expect(st.reason).toBe("enabled");
+    expect(st.worktree).toBe(realpathSync(linked)); // reads bind to the linked checkout itself
+    expect(st.inheritedFrom).toBe(primary);
+    expect(st.mainWorktree).toBe(primary);
+    expect(existsSync(markerOf(linked))).toBe(false); // inheritance writes nothing
+    expect(explain(st)).toContain("inherited");
+    expect(explain(st, true)).toContain("상속");
+
+    // revoking the main revokes every inheriting worktree
+    disable(primary);
+    resetEnrollmentCache();
+    expect(isEnrolled(linked)).toBe(false);
+  });
+
+  test("disable on a linked worktree opts it out and wins over inheritance; init re-enables", () => {
+    const { primary, linked } = primaryWithLinked();
+    enroll(primary);
+    resetEnrollmentCache();
+    expect(isEnrolled(linked)).toBe(true);
+
+    expect(disable(linked).ok).toBe(true);
+    resetEnrollmentCache();
+    const st = inspectEnrollment(linked);
+    expect(st.enabled).toBe(false);
+    expect(st.reason).toBe("opted-out");
+    expect(isEnrolledFresh(linked)).toBe(false);
+    expect(isEnrolled(primary)).toBe(true); // the main tree is untouched
+    expect(existsSync(markerOf(primary))).toBe(true);
+    const optOut = join(worktreeGitDir(linked)!, MARKER_DIR, OPT_OUT_BASENAME);
+    expect(existsSync(optOut)).toBe(true);
+    if (POSIX) expect(lstatSync(optOut).mode & 0o777).toBe(0o600);
+    expect(disable(linked).ok).toBe(true); // idempotent
+
+    // an opt-out recorded BEFORE the main is enrolled still holds afterwards
+    disable(primary);
+    enroll(primary);
+    resetEnrollmentCache();
+    expect(isEnrolled(linked)).toBe(false);
+
+    enroll(linked);
+    resetEnrollmentCache();
+    expect(isEnrolled(linked)).toBe(true);
+    expect(inspectEnrollment(linked).inheritedFrom).toBeUndefined();
+    expect(existsSync(optOut)).toBe(false);
+  });
+
+  test("an opt-out of any file type (a planted symlink included) reads as opted out", () => {
+    const { primary, linked } = primaryWithLinked();
+    enroll(primary);
+    const dir = join(worktreeGitDir(linked)!, MARKER_DIR);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    symlinkSync("/nonexistent", join(dir, OPT_OUT_BASENAME));
+    resetEnrollmentCache();
+    expect(inspectEnrollment(linked).reason).toBe("opted-out");
+  });
+
+  test("a broken own marker is never papered over by inheritance", () => {
+    const { primary, linked } = primaryWithLinked();
+    enroll(primary);
+    const dir = join(worktreeGitDir(linked)!, MARKER_DIR);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(dir, MARKER_BASENAME), '{"version":1,"worktree":"/somewhere/else"}\n', { mode: 0o600 });
+    resetEnrollmentCache();
+    expect(inspectEnrollment(linked).reason).toBe("marker-foreign-worktree");
+    expect(isEnrolled(linked)).toBe(false);
+  });
+
+  test("a moved main (marker names another path) gives its linked worktrees nothing to inherit", () => {
+    const { primary, linked } = primaryWithLinked();
+    const dir = join(primary, ".git", MARKER_DIR);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(dir, MARKER_BASENAME), '{"version":1,"worktree":"/somewhere/else"}\n', { mode: 0o600 });
+    resetEnrollmentCache();
+    expect(isEnrolled(primary)).toBe(false);
+    expect(isEnrolled(linked)).toBe(false);
+    expect(inspectEnrollment(linked).mainWorktree).toBeNull();
+  });
+
+  test("the primary never inherits from a linked worktree", () => {
+    const { primary, linked } = primaryWithLinked();
+    enroll(linked);
+    resetEnrollmentCache();
+    expect(isEnrolled(primary)).toBe(false);
+    expect(inspectEnrollment(primary).mainWorktree).toBeNull();
   });
 });

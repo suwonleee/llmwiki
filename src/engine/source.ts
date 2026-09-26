@@ -96,6 +96,11 @@ export interface TranscriptSource {
   // claims must still be grounded in the raw extract (summary = material, wiki = record).
   // Omitted / null → condense works from the raw extract alone (current behavior).
   summaryFor?(path: string): string | null;
+  // Optional: true only on POSITIVE evidence that this transcript is a sub-agent/fork thread
+  // (Codex session_meta thread_source="subagent", an OpenCode child session) — it replays the
+  // parent's context and carries no human turn of its own. Such rows are queued as `skipped`.
+  // Omitted (Claude excludes subagents/ at discovery) or unsure → false, the row stays work.
+  isSubagent?(path: string): boolean;
 }
 
 // Order is LOAD-BEARING: the greedy `plain` adapter (probe matches any readable text) MUST
@@ -118,6 +123,15 @@ export function discoverableSources(): TranscriptSource[] {
 // historical default) so old capture rows keep parsing correctly.
 export function sourceForKind(kind: string): TranscriptSource {
   return REGISTRY.find((s) => s.kind === kind) ?? claudeJsonlSource;
+}
+
+/** Adapter-backed sub-agent check for a queue row; a probe that throws proves nothing. */
+export function isSubagentTranscript(kind: string, path: string): boolean {
+  try {
+    return sourceForKind(kind).isSubagent?.(path) ?? false;
+  } catch {
+    return false;
+  }
 }
 
 // path → adapter (ingest / single-file side). First source whose probe() claims the path

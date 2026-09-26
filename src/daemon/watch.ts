@@ -16,6 +16,7 @@ import { isEnrolled, isEnrolledFresh, resetEnrollmentCache } from "../engine/enr
 import {
   sources,
   discoverableSources,
+  isSubagentTranscript,
   routeNeedsMaterialization,
   type DiscoveredRoute,
   type DiscoveredSession,
@@ -150,7 +151,9 @@ function process_(d: DiscoveredSession, kind: string): "enqueued" | "skipped_sho
   // Re-check immediately before the write. Materialization can take a while on a large session,
   // and `llmwiki disable` during that window must not still land a row.
   if (!isEnrolledFresh(d.repo)) return "skipped_unenrolled";
-  const outcome = capture.enqueue(d.path, d.sessionId, d.repo, d.lines, kind);
+  const outcome = capture.enqueue(d.path, d.sessionId, d.repo, d.lines, kind, () =>
+    isSubagentTranscript(kind, d.path),
+  );
   // Every sweep re-offers every discovered session, so most calls record nothing. Announcing
   // those too buried the real events: idle sessions were re-logged every minute, and daemon.log
   // reached 11 MB of lines that described no change. The row is still offered exactly as before —
@@ -395,6 +398,13 @@ function pruneExportsIfDue(force = false): void {
     }
   } catch (e) {
     log(`queue prune FAILED (will retry tomorrow): ${e}`);
+  }
+  // Rows queued before enqueue learned the sub-agent rule leave the backlog on the same clock.
+  try {
+    const skipped = capture.skipPendingSubagents((r) => isSubagentTranscript(r.source_kind, r.transcript_path));
+    if (skipped) log(`retention: ${skipped} pending sub-agent thread(s) marked skipped`);
+  } catch (e) {
+    log(`sub-agent skip FAILED (will retry tomorrow): ${e}`);
   }
   rotateDaemonLogIfOversized();
 }

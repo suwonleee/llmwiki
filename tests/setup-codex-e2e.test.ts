@@ -82,7 +82,10 @@ describe("fresh Codex setup", () => {
     expect(output).toContain("ACTION REQUIRED");
     expect(output).toContain("one-time review required");
     expect(output).toContain(`export PATH='${join(home, ".local", "bin")}'`);
-    expect(readFileSync(configPath, "utf8")).toBe(foreignConfig);
+    // Foreign config stays in place; the only addition is the tagged sandbox state-root entry.
+    const mergedConfig = readFileSync(configPath, "utf8");
+    expect(mergedConfig.startsWith(foreignConfig)).toBe(true);
+    expect(mergedConfig).toContain(`${JSON.stringify(join(dir, "state"))}, # llmwiki-codex-managed state root`);
     // The daemon carries the Codex home it was installed with, in this platform's syntax.
     expect(readServiceDefinition(home)).toContain(serviceEnvEntry("CODEX_HOME", codexHome));
     expect(readFileSync(join(codexHome, "hooks.json"), "utf8")).toContain("sessionstart-inject.sh");
@@ -115,7 +118,7 @@ describe("fresh Codex setup", () => {
     expect(readFileSync(savePath, "utf8")).toBe(firstSaveSkill);
     expect(readFileSync(deepPath, "utf8")).toBe(firstDeepSkill);
     expect(readFileSync(doctorPath, "utf8")).toContain("name: wiki-doctor");
-    expect(readFileSync(configPath, "utf8")).toBe(foreignConfig);
+    expect(readFileSync(configPath, "utf8")).toBe(mergedConfig);
 
     const cli = Bun.spawnSync([join(home, ".local", "bin", "llmwiki"), "--help"], {
       cwd: ROOT,

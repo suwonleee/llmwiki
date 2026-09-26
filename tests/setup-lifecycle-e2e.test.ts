@@ -224,6 +224,8 @@ describe("setup lifecycle across every harness", () => {
         "user.name=llmwiki-test",
         "-c",
         "user.email=llmwiki-test@example.invalid",
+        "-c",
+        "core.hooksPath=/dev/null", // a machine-level commit-msg policy must not decide this fixture
         "commit",
         "-qm",
         "advance installed source",
@@ -252,6 +254,8 @@ describe("setup lifecycle across every harness", () => {
           "user.name=llmwiki-test",
           "-c",
           "user.email=llmwiki-test@example.invalid",
+          "-c",
+          "core.hooksPath=/dev/null",
           "commit",
           "-qm",
           "install receipt feature",

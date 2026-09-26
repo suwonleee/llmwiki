@@ -410,6 +410,37 @@ function routeMeta(path: string): { cwd: string | null; session: string | null }
   return scanIdentity(path, CODEX_IDENTITY);
 }
 
+// Sub-agent threads (multi-agent `thread_spawn`, review, …) say so in the same head record:
+// session_meta.payload.thread_source = "subagent" (every rollout since Codex 0.145 on the measured
+// machine; user threads say "user", older ones omit it). The shared scanner reads it under the
+// same body-free budget — its `cwd` slot simply carries this one declared string field. A user
+// `/fork` stays "user": it continues with the human's own turns, so it remains work.
+const CODEX_THREAD_ORIGIN: IdentitySpec = { cwd: ["payload.thread_source"], session: ["payload.id"] };
+
+function isSubagentRollout(path: string): boolean {
+  const real = resolveRolloutPath(path);
+  if (!real.endsWith(".zst")) return scanIdentity(real, CODEX_THREAD_ORIGIN).cwd === "subagent";
+  // A compressed rollout is answered from Codex's own thread index, never by decompressing it.
+  const id = real.replace(/\\/g, "/").match(THREAD_ID_RE)?.[1]?.toLowerCase();
+  if (!id) return false;
+  for (const { path: dbPath } of stateDbPaths()) {
+    let db: Database | null = null;
+    try {
+      db = openReadonlyDatabase(dbPath);
+      const row = db?.query("SELECT thread_source FROM threads WHERE id = ?").get(id) as
+        | { thread_source: unknown }
+        | null
+        | undefined;
+      if (row) return row.thread_source === "subagent";
+    } catch {
+      /* older index without thread_source, or a transient lock: unproven → not a sub-agent */
+    } finally {
+      db?.close();
+    }
+  }
+  return false;
+}
+
 /** Plain-rollout discovery seam for deterministic tests/benchmarks. Compressed routes stay indexed. */
 export function discoverCodexFileRoutes(root: string = sessionsRoot()): DiscoveredRoute[] {
   const files: string[] = [];
@@ -525,6 +556,7 @@ function summaryFor(path: string): string | null {
 export const codexSource: TranscriptSource = {
   kind: "codex",
   summaryFor,
+  isSubagent: isSubagentRollout,
 
   // Routing reads the HEAD of a plain rollout under the shared byte/record budget, and does not
   // touch compressed ones at all: decompressing a .zst means materializing an entire conversation

@@ -13,7 +13,7 @@ Close the session by filing **THIS session's** work into durable knowledge, **ri
 | Pass | Scope | When | Work |
 |------|-------|------|------|
 | **`/wiki-save`** (this skill) | THIS session | every session close | file the session into the log + fold its durable concepts into `5_topic` + L0 freshness + deterministic checks |
-| **`/wiki-deep`** (deep) | everything queued | day end · weekly · when the close-out report recommends it | drain the whole transcript backlog + semantic review + gap queue + re-distill oversized topics |
+| **`/wiki-deep`** (deep) | everything queued | day end · weekly · when the close-out report recommends it | file what matters from the transcript backlog (skip the rest) + semantic review + gap queue + re-distill oversized topics |
 
 The wiki itself has two layers on different axes: the **log** (`2_milestone`·`3_decision`·`4_insight` — time axis, one immutable entry per session, append-only) and the **topic encyclopedia** (`5_topic` — concept axis, one living page per recurring concept, create-or-update merged in place). A close-out writes the session's log entry AND selectively folds its durable concepts into `5_topic`. Promotion is one-directional (log → topic), never the reverse.
 
@@ -224,7 +224,7 @@ Draft (candidate 1_direction page; moved into 1_direction/ once confirmed):
 - Topic merges re-ground from the raw transcript, never from other wiki pages. transcript = immutable raw (citation only). Incremental: process only past the watermark → zero re-cost.
 - Routine judgment (classification, grounding, topic merge) is the strong model's; direction and unresolved contradictions are the human's (omit, never fabricate).
 - Be selective with `5_topic` (opposite of the log): only durable/recurring concepts. Don't force-fill. Don't over-format to silence warnings.
-- **Defer, never drop**: this pass defers volume work because deferral is lossless by construction — transcripts are immutable; watermarks, the gap queue, and the lint backlog are durable and self-tracking. Slowness, not deferral, is what loses information: a close-out people skip records nothing.
+- **Defer, don't drain**: this pass defers volume work — transcripts are immutable; watermarks, the gap queue, and the lint backlog are durable and self-tracking. The backlog is raw material, not debt: `/wiki-deep` files what is important and skips the rest, and unfiled records expire by design. Slowness, not deferral, is what loses information: a close-out people skip records nothing.
 - Concurrency-safe: mostly new pages + appends. Commits are in the user's name alone — only when instructed.
 - Team merge recovery: `log.md` merges automatically (`merge=union` via the skeleton's `.gitattributes`). `gap-queue.md` and `overview.md` are whole-file regenerated — on a git conflict, take either side, then re-run `llmwiki gaps <repo>` / `llmwiki overview --normalize <repo>`; both converge. Never hand-merge their generated bodies.
 - Use `/wiki-save` to close out a session (this skill), `/wiki-ask` for a question, `/wiki-deep` for the periodic deep pass (backlog · review · gaps · re-distill).
