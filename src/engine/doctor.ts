@@ -78,6 +78,7 @@ const CORE = [
   "skill/wiki-deep.md",
   "skill/wiki-quiz.md",
   "skill/wiki-doctor.md",
+  "skill/ref", // on-demand reference sections the skills fetch via `conventions --section`
 ];
 // slash commands that must be present in every profile's commands/ dir.
 // Must stay in sync with wire.ts SKILLS and the repo's skill/ dir — tests/skills-drift.test.ts

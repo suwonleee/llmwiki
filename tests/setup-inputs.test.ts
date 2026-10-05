@@ -9,7 +9,7 @@ test("setup inputs: installers and the renderers of installed copies, not the en
     expect(`${path}: ${needsSetup(path)}`).toBe(`${path}: true`);
   }
   for (const path of ["hooks/sessionstart-inject.sh", "githooks/pre-push", "src/daemon/watch.ts", "src/engine/lint.ts",
-    "tests/lint.test.ts", "docs/x.md", "ARCHITECTURE.md"]) {
+    "tests/lint.test.ts", "docs/x.md", "ARCHITECTURE.md", "skill/ref/topic-page.md"]) {
     expect(`${path}: ${needsSetup(path)}`).toBe(`${path}: false`);
   }
 });

@@ -219,10 +219,11 @@ function readInstallReceipt(stateRoot: string): InstallReceipt | null {
 // What a commit must touch before the installed copies are actually stale. Hooks and githooks are
 // invoked by path, engine code under src/ is loaded fresh by every CLI/hook call, and the daemon
 // restarts itself onto new code (`daemon-sync`) — so a change confined to those runs in place and
-// needs no ./setup.sh. Everything else counts: setup.sh, skill/ (copied into every harness),
+// needs no ./setup.sh. So does skill/ref/: `conventions --section` reads it from the clone at call
+// time and nothing copies it into a harness. Everything else counts: setup.sh, skill/ (copied into every harness),
 // adapters/, daemon/, package.json, and the src/ files that RENDER the installed copies. The notice
 // used to fire on any HEAD difference, including a hook-only commit, which taught people to ignore it.
-const IN_PLACE_DIRS = /^(hooks|githooks|tests|docs)\//;
+const IN_PLACE_DIRS = /^(hooks|githooks|tests|docs|skill\/ref)\//;
 const SETUP_RENDERERS = /^src\/(daemon\/wire[^/]*\.ts|engine\/(claude-commands|skill-policy|tool-locate)\.ts|plugin\/)/;
 
 export function needsSetup(path: string): boolean {

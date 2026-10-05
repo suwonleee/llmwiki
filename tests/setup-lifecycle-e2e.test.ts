@@ -111,10 +111,11 @@ describe("setup lifecycle across every harness", () => {
       "src/engine/sources/codex.ts", // doctor compares against codexHomes()
       "src/engine/state-dir.ts",
       "src/engine/update-check.ts",
+      "skill/ref", // doctor checks it as a CORE path (the on-demand skill reference sections)
     ]) {
       const target = join(clone, relative);
       mkdirSync(dirname(target), { recursive: true });
-      cpSync(join(ROOT, relative), target);
+      cpSync(join(ROOT, relative), target, { recursive: true });
     }
   }
 

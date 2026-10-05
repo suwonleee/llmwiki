@@ -34,7 +34,10 @@ the capture, write, index, and injection paths and identifies the files that own
 - Harness integration: preserve unenrolled-project silence and treat harness transcript stores as
   read-only inputs.
 - Skills: `skill/*.md` is the source; `skills/*/SKILL.md` is generated. After editing a source, run
-  `bun src/plugin/build-assets.ts` and commit both the source and deterministic output.
+  `bun src/plugin/build-assets.ts` and commit both the source and deterministic output. Reference
+  detail a run needs only sometimes goes in `skill/ref/<name>.md`, which the skill fetches at the
+  step that needs it with `llmwiki conventions <repo> --section <name>`; `wiki-save.md` stays at or
+  under 15,000 bytes (`tests/skill-sections.test.ts`).
 - Dependencies: prefer Bun and existing utilities. Do not add a runtime dependency without an
   explicit, reviewed need.
 

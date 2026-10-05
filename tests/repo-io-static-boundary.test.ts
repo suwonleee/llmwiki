@@ -71,7 +71,7 @@ const ALLOWED_MUTATORS: Record<string, string> = {
 
 const ALLOWED_READERS: Record<string, string> = {
   ...ALLOWED_MUTATORS,
-  "cli.ts": "reads the optional team git-conventions doc from the engine clone",
+  "cli.ts": "reads the optional team git-conventions doc and the skill reference sections (skill/ref/) from the engine clone",
   "engine/config.ts": "reads trusted engine-clone config templates, never repository content",
   "engine/db.ts": "reads the trusted engine-bundled schema.sql; repository indexing uses repo-write",
   "engine/consolidate.ts": "stats machine-local transcript files from the capture ledger",

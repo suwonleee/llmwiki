@@ -73,7 +73,7 @@ import {
 import { verifyDistillFiles } from "./engine/distill.ts";
 import { runArm, loadArm, judgeArms } from "./engine/compare.ts";
 import { CLONE_ROOT } from "./engine/paths.ts";
-import { existsSync, readFileSync, statSync, type Stats } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, type Stats } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { exportHermesSession, hermesDbPath, hermesSessions } from "./engine/hermes-export.ts";
@@ -1458,7 +1458,28 @@ function cmdDaemonSync() {
   }
 }
 
+// Reference sections: the on-demand half of the /wiki-* skills (progressive disclosure). The skills
+// carry only what every run needs and name `conventions <repo> --section <name>` at the moment a
+// step needs more, so the detail costs context only when used. Read from the engine clone itself
+// (skill/ref/), which ships wherever the engine runs — clone, plugin cache, or launcher — so no
+// skill ever depends on a path relative to where a harness copied it.
+const SECTION_DIR = join(CLONE_ROOT, "skill", "ref");
+function conventionSections(): string[] {
+  try {
+    return readdirSync(SECTION_DIR).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3)).sort();
+  } catch {
+    return [];
+  }
+}
+
 function cmdConventions(p: Parsed) {
+  const section = p.flags["--section"];
+  if (typeof section === "string") {
+    const names = conventionSections();
+    if (!names.includes(section)) die(`unknown section: ${section} (available: ${names.join(", ") || "none"})`);
+    process.stdout.write(readFileSync(join(SECTION_DIR, `${section}.md`), "utf-8"));
+    return;
+  }
   const c = getConfig(p.positionals[0] ?? process.cwd());
   console.log(`# wiki conventions (source: ${c.source})`);
   if (c.error) console.log(`✗ config INVALID — defaults in effect: ${c.error}`);
@@ -1472,6 +1493,8 @@ function cmdConventions(p: Parsed) {
   console.log(`special files: L0=${c.files.l0} (human-owned) · ${c.files.overview} (entry point) · ${c.files.log} (append-only ledger)`);
   console.log("frontmatter (required): title · description · date · tags(≥2) · status(ready|draft) · domain · source; queue items also stamp owner(github login); authorship comes from git history (mailmap-aware), never `author:`; optional: updated");
   if (c.bannedTerms.length) console.log(`banned terms: ${c.bannedTerms.map(([a, b]) => `${a}→${b}`).join(" · ")}`);
+  const sections = conventionSections();
+  if (sections.length) console.log(`reference sections (conventions [workspace] --section <name>): ${sections.join(" · ")}`);
 }
 
 // Restructure the wiki to the effective config (folder renames + link rewriting + domain

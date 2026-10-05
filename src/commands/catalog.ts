@@ -27,7 +27,7 @@ export const COMMANDS = [
   { name: "locate", group: "Project setup", usage: "locate [claude|codex|opencode] [path]", summary: "Find and verify harness transcript storage." },
   { name: "connect", group: "Project setup", usage: "connect <harness> <path> | connect <harness> --forget", summary: "Persist or forget one verified harness data location." },
   { name: "config", group: "Project setup", usage: "config [workspace]", summary: "Show the effective project conventions and validation result." },
-  { name: "conventions", group: "Project setup", usage: "conventions [workspace]", summary: "Render the effective authoring rules for an agent." },
+  { name: "conventions", group: "Project setup", usage: "conventions [workspace] [--section NAME]", summary: "Render the effective authoring rules, or one on-demand skill reference section." },
   { name: "state-path", group: "Project setup", usage: "state-path <workspace> [subpath] [--ensure]", summary: "Print or create this worktree's engine-held state path." },
   { name: "migrate-state", group: "Project setup", usage: "migrate-state [--commit]", summary: "Plan or apply migration from the legacy state root." },
   { name: "purge-state", group: "Project setup", usage: "purge-state [--report|--confirm] [--orphans [--older-than DAYS]]", summary: "Describe or remove only llmwiki-owned machine state." },
