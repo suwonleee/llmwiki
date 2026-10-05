@@ -127,9 +127,17 @@ export function codexHomes(): string[] {
   // so a machine that had nothing set ends up exporting the DEFAULT as if it were a choice. That
   // frozen default is not a decision, and treating it as one is precisely what kept the daemon
   // pinned to a home Codex had stopped writing to.
-  const candidates = sameDir(configured, fallback)
-    ? [fallback, ...orcaCodexHomes()]
-    : [configured];
+  //
+  // A CODEX_HOME that IS one of the desktop app's own managed homes is not a decision either:
+  // Codex Desktop exports it into every terminal it opens, so running setup from such a terminal
+  // baked it into the service definition and the daemon stopped sweeping ~/.codex and the other
+  // account homes (measured 2026-10-05: three homes → one). Those homes are discovered here anyway,
+  // so it widens to the same set as the default instead of pinning one of them.
+  const orca = orcaCodexHomes();
+  const candidates =
+    sameDir(configured, fallback) || orca.some((dir) => sameDir(configured, dir))
+      ? [fallback, ...orca]
+      : [configured];
   const seen = new Set<string>();
   const out: string[] = [];
   for (const dir of candidates) {

@@ -75,7 +75,9 @@ Machines differ, and the engine resolves that itself where it can: when the defa
 up empty it also checks the ones they predictably miss — a mounted Windows profile under
 `/mnt/c/Users/*` (WSL), XDG variants, `~/.opencode`, and the per-account Codex homes that Codex
 Desktop keeps under its own data directory (every home found is swept; an explicit `CODEX_HOME`
-stays exclusive) — and verifies each by schema signature. A
+stays exclusive, unless it is one of the app's own homes — the app exports that into its
+terminals, so running setup there must not narrow the sweep) — and verifies each by schema
+signature. A
 single verified candidate **inside your own home** is connected without asking. Anything outside
 your home (a mounted Windows profile is routinely another person's) is never auto-connected: it is
 reported with the exact `llmwiki connect` command, so claiming it is one paste and one deliberate

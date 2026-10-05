@@ -89,6 +89,21 @@ describe("Codex reads every home this machine owns", () => {
     expect(routes.map((r) => r.repo).sort()).toEqual(["/repo/app", "/repo/cli"]);
   });
 
+  test("a CODEX_HOME exported by the desktop app widens instead of pinning one app home", () => {
+    // Codex Desktop exports its runtime home into every terminal it opens; setup run there baked
+    // it into the daemon's service definition, which then swept that one home only.
+    const home = mkdtempSync(join(tmpdir(), "llmwiki-orca-env-"));
+    dirs.push(home);
+    setEnv("HOME", home);
+    const cliHome = join(home, ".codex");
+    mkdirSync(join(cliHome, "sessions"), { recursive: true });
+    const appHome = orcaAccountHome(home, "0e1c9d2a-4b6f-4a1e-8c3d-5f7a9b1c2d3e");
+    const otherApp = orcaAccountHome(home, "7f3e2d1c-0b9a-4c8d-9e7f-6a5b4c3d2e1f");
+    setEnv("CODEX_HOME", appHome);
+    if (process.platform !== "darwin") return; // orca's data root is platform-specific
+    expect(codexHomes().sort()).toEqual([cliHome, appHome, otherApp].sort());
+  });
+
   test("a real override is exclusive — it never drags in the other homes", () => {
     if (process.platform !== "darwin") return;
     const home = scratch();
