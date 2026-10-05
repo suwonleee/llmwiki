@@ -142,3 +142,32 @@ export function sourceForPath(path: string): TranscriptSource {
   }
   return plainSource;
 }
+
+/**
+ * The adapter kind a SessionStart route hint should record for a harness-supplied transcript path,
+ * or null when no adapter claims it. Both hook entrypoints (src/hook-cli.ts, src/cli.ts) and the
+ * `save-current` consumer go through the SAME registry probe, so a relocated harness home (Codex
+ * Desktop's per-account CODEX_HOME, an explicit CLAUDE_CONFIG_DIR, a `connect`ed directory) is
+ * classified by the adapter that actually owns it — never by a path substring.
+ */
+export function routeHintKind(path: string): string | null {
+  // routeFor, not probe: this runs inside the SessionStart hook on every resume and compact, and
+  // probe() reads and line-counts the WHOLE transcript — latency that grows with the session. The
+  // routing stage claims the path by the homes the adapter owns and reads at most the bounded
+  // identity head (ROUTE_MAX_BYTES), so classification costs the same on a 15 MB transcript as on
+  // a new one. `plain` has no routeFor, so an unowned file stays null rather than "plain".
+  for (const s of discoverableSources()) {
+    if (s.routeFor?.(path)) return s.kind;
+  }
+  // Last resort, still without reading the file: the harness's own on-disk layout. The registry
+  // only knows the homes THIS process can see, and a hook runs with whatever CODEX_HOME the
+  // launching app exported — Codex Desktop exports its runtime home, so a ~/.codex rollout came
+  // back null and `save-current` fell back to the plain parser. These shapes are the formats'
+  // fixed naming (Codex: sessions/YYYY/MM/DD/rollout-*.jsonl[.zst]; Claude: projects/<dir>/<uuid>.jsonl).
+  const p = path.replace(/\\/g, "/");
+  if (/\/sessions\/\d{4}\/\d{2}\/\d{2}\/rollout-[^/]+\.jsonl(\.zst)?$/.test(p)) return "codex";
+  if (/\/\.claude[^/]*\/projects\/[^/]+\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/i.test(p)) {
+    return "claude-jsonl";
+  }
+  return null;
+}

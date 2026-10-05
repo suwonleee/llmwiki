@@ -1,10 +1,11 @@
 // TranscriptSource abstraction — registry routing, plain adapter parse (byte-offset on
 // multibyte), and claude probe rejection of non-~/.claude paths.
-import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { test, expect, describe, beforeEach, afterEach, spyOn } from "bun:test";
+import * as fs from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sources, sourceForKind, sourceForPath } from "../src/engine/source.ts";
+import { sources, sourceForKind, sourceForPath, routeHintKind, ROUTE_MAX_BYTES } from "../src/engine/source.ts";
 import { plainSource } from "../src/engine/sources/plain.ts";
 import { claudeJsonlSource } from "../src/engine/sources/claude.ts";
 
@@ -90,5 +91,103 @@ describe("claude adapter probe", () => {
     writeFileSync(m, "# notes\n");
     expect(sourceForPath(j).kind).toBe("plain");
     expect(sourceForPath(m).kind).toBe("plain");
+  });
+});
+
+describe("routeHintKind — the kind a SessionStart hint records", () => {
+  // The SessionStart route hint is what `save-current` enqueues under, and the condense pass picks
+  // its parser from that kind. A Codex rollout recorded as claude-jsonl is parsed by the Claude
+  // parser and extracts ZERO turns. The classifier must therefore go through the registry probe —
+  // which knows every home an adapter owns — not a path substring: Codex Desktop relocates
+  // CODEX_HOME per signed-in account (…/orca/codex-accounts/<uuid>/home/sessions/…), so a genuine
+  // Codex rollout path never contains "/.codex/".
+  let dir: string;
+  const saved: Record<string, string | undefined> = {};
+  beforeEach(() => (dir = mkdtempSync(join(tmpdir(), "llmwiki-hintkind-"))));
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+      delete saved[k];
+    }
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const setEnv = (name: string, value: string): void => {
+    if (!(name in saved)) saved[name] = process.env[name];
+    process.env[name] = value;
+  };
+
+  test("a relocated-home Codex rollout is classified codex, not claude-jsonl", () => {
+    // A CODEX_HOME whose path does NOT contain ".codex": the exact shape of a desktop-app home.
+    const codexHome = join(dir, "relocated-home");
+    const day = join(codexHome, "sessions", "2026", "09", "05");
+    mkdirSync(day, { recursive: true });
+    const rollout = join(day, "rollout-2026-09-05T20-01-56-01a00000-0000-7000-8000-00000000000a.jsonl");
+    writeFileSync(
+      rollout,
+      JSON.stringify({ type: "session_meta", payload: { id: "01a00000", cwd: dir } }) + "\n",
+    );
+    expect(rollout.includes("/.codex/")).toBe(false); // the old substring test would have missed it
+    setEnv("CODEX_HOME", codexHome);
+    expect(routeHintKind(rollout)).toBe("codex");
+  });
+
+  test("a Claude transcript stays claude-jsonl; an unowned file is null", () => {
+    const claudeCfg = join(dir, ".claude");
+    const projects = join(claudeCfg, "projects", "p");
+    mkdirSync(projects, { recursive: true });
+    const jsonl = join(projects, "s.jsonl");
+    writeFileSync(jsonl, '{"type":"user","message":{"role":"user","content":"hi"},"cwd":"' + dir + '"}\n');
+    setEnv("CLAUDE_CONFIG_DIR", claudeCfg);
+    expect(routeHintKind(jsonl)).toBe("claude-jsonl");
+    // An arbitrary markdown file belongs to no harness → no hint kind (never the plain fallback).
+    const md = join(dir, "notes.md");
+    writeFileSync(md, "# notes\n");
+    expect(routeHintKind(md)).toBeNull();
+  });
+
+  test("a rollout in a home this process cannot see still classifies by the harness layout", () => {
+    // The hook inherits whatever CODEX_HOME the launching app exported (Codex Desktop: its runtime
+    // home), so a ~/.codex rollout is outside every home the registry knows about here.
+    const elsewhere = join(dir, "orca-runtime-home");
+    mkdirSync(join(elsewhere, "sessions"), { recursive: true });
+    setEnv("CODEX_HOME", elsewhere);
+    const day = join(dir, "dot-codex", "sessions", "2026", "10", "05");
+    mkdirSync(day, { recursive: true });
+    const rollout = join(day, "rollout-2026-10-05T09-30-00-01c00000-0000-7000-8000-00000000000c.jsonl");
+    writeFileSync(rollout, JSON.stringify({ type: "session_meta", payload: { id: "01c00000", cwd: dir } }) + "\n");
+    expect(routeHintKind(rollout)).toBe("codex");
+    expect(routeHintKind(`${rollout}.zst`)).toBe("codex");
+    const claudeElsewhere = join(dir, "other", ".claude", "projects", "-Users-x-repo");
+    mkdirSync(claudeElsewhere, { recursive: true });
+    const jsonl = join(claudeElsewhere, "0a1b2c3d-0000-4000-8000-00000000000d.jsonl");
+    writeFileSync(jsonl, "{}\n");
+    setEnv("CLAUDE_CONFIG_DIR", join(dir, "unrelated-claude"));
+    expect(routeHintKind(jsonl)).toBe("claude-jsonl");
+    // Lookalikes that are not the layout stay unowned.
+    const loose = join(dir, "rollout-notes.jsonl");
+    writeFileSync(loose, "{}\n");
+    expect(routeHintKind(loose)).toBeNull();
+  });
+
+  test("classification reads a bounded head, never the whole transcript", () => {
+    // SessionStart re-runs on every resume/compact; a whole-file read there is hook latency that
+    // grows with the session. A transcript far past the routing budget, whose tail is not even
+    // JSON, must classify from its head alone — and without a single whole-file read.
+    const codexHome = join(dir, "relocated-home");
+    const day = join(codexHome, "sessions", "2026", "10", "05");
+    mkdirSync(day, { recursive: true });
+    const rollout = join(day, "rollout-2026-10-05T09-00-00-01b00000-0000-7000-8000-00000000000b.jsonl");
+    writeFileSync(rollout, JSON.stringify({ type: "session_meta", payload: { id: "01b00000", cwd: dir } }) + "\n");
+    appendFileSync(rollout, Buffer.alloc(ROUTE_MAX_BYTES * 4, 0xff));
+    expect(statSync(rollout).size).toBeGreaterThan(ROUTE_MAX_BYTES * 4);
+    setEnv("CODEX_HOME", codexHome);
+    const whole = spyOn(fs, "readFileSync");
+    try {
+      expect(routeHintKind(rollout)).toBe("codex");
+      expect(whole.mock.calls.filter(([p]) => String(p) === rollout)).toEqual([]);
+    } finally {
+      whole.mockRestore();
+    }
   });
 });

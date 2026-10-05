@@ -86,10 +86,18 @@ async function contextHook(repo: string): Promise<void> {
   if (!isEnrolled(target)) return;
   const status = inspectEnrollment(target);
   if (transcript && status.worktree) {
-    const [{ resolve }, capture] = await Promise.all([import("node:path"), import("./engine/capture.ts")]);
-    const normalized = transcript.replaceAll("\\", "/");
-    const kind = normalized.includes("/.codex/") ? "codex" : normalized.endsWith(".jsonl") ? "claude-jsonl" : null;
-    capture.recordRouteHint(resolve(transcript), target, sessionId || null, kind);
+    // The adapter registry decides which parser owns this transcript — the same probe the daemon
+    // and `save-current` use. A path substring cannot: Codex Desktop relocates CODEX_HOME per
+    // signed-in account (…/orca/codex-accounts/<uuid>/home/sessions/…), so "/.codex/" never
+    // appears and a Codex rollout was hinted as claude-jsonl — `save-current` then parsed it with
+    // the Claude parser and extracted zero turns (measured 2026-09-05, Codex 0.153.4). SessionStart
+    // runs once per session, so the registry import costs nothing per turn.
+    const [{ resolve }, capture, { routeHintKind }] = await Promise.all([
+      import("node:path"),
+      import("./engine/capture.ts"),
+      import("./engine/source.ts"),
+    ]);
+    capture.recordRouteHint(resolve(transcript), target, sessionId || null, routeHintKind(transcript));
   }
   const [{ wikiRootFor }, { buildContext }, { recordEmission }] = await Promise.all([
     import("./engine/wiki-root.ts"),

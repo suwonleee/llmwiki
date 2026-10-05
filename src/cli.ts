@@ -18,7 +18,7 @@ import { rebuildReferenceGraph, referenceGraphCounts } from "./engine/refs.ts";
 import { effectiveKo, getConfig, isRepoKorean, CONFIG_BASENAME, CONFIGS_DIR } from "./engine/config.ts";
 import { Linter, formatReport } from "./engine/lint.ts";
 import * as update from "./engine/update.ts";
-import { countLines, sourceForPath } from "./engine/source.ts";
+import { countLines, routeHintKind, sourceForPath } from "./engine/source.ts";
 import { opencodeSource, opencodeDbPaths } from "./engine/sources/opencode.ts";
 import { claudeConfigDirs } from "./engine/sources/claude.ts";
 import { codexHome } from "./engine/sources/codex.ts";
@@ -727,11 +727,14 @@ async function noteHarnessSession(repo: string): Promise<{ cwd: string | null; s
   }
 }
 
-/** Which adapter owns this path, for reporting only — the daemon matches hints by path. */
+/**
+ * Which adapter owns this path. Not just for reporting: `save-current` enqueues the hinted
+ * transcript under this kind, and the condense pass picks its parser from it — a Codex rollout
+ * recorded as claude-jsonl extracts zero turns. The registry probe knows every home an adapter
+ * owns (Codex Desktop's per-account CODEX_HOME included); a "/.codex/" substring did not.
+ */
 function sourceKindForTranscript(path: string): string | null {
-  if (path.includes("/.codex/")) return "codex";
-  if (path.endsWith(".jsonl")) return "claude-jsonl";
-  return null;
+  return routeHintKind(path);
 }
 
 async function cmdContext(p: Parsed) {
