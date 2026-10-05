@@ -361,6 +361,7 @@ cd ~/llmwiki
     - 사용자 CLI + `$wiki-*` 스킬 5개 설치, `$CODEX_HOME/hooks.json`에 native `SessionStart`/`UserPromptSubmit` 훅 병합
     - 최초 1회: Codex를 시작해 `/hooks`에서 정확한 명령을 검토 — 새 훅·변경된 훅은 신뢰 전까지 실행되지 않음
     - 캡처는 `$CODEX_HOME/sessions/**/*.jsonl[.zst]` 감시
+    - Codex Desktop(orca)의 런타임·계정별 홈도 함께 수집 — 앱이 같은 rollout을 여러 홈에 하드링크해도 대기열에는 **1행**·진행 위치 1개로 남아 두 번 기록되지 않음. 앱 터미널(그 홈이 `CODEX_HOME`으로 export됨)에서 setup을 실행해도 수집 범위가 좁아지지 않음
     - 웜 스킬은 Codex 자체로 동작 · 무인 `autoupdate`/`review`는 `LLMWIKI_LLM_CMD`를 설정한 경우에만 동작
 - **OpenCode** — `./setup.sh --harness opencode`
     - 전역 `/wiki-*` custom command, clone 경로가 내장된 읽기 주입 플러그인, 사용자 CLI 설치
@@ -452,6 +453,7 @@ cd llmwiki
     - Claude Code는 두 훅이 자동 배선 · 최신 Codex는 같은 훅 스크립트를 네이티브로 실행(`adapters/codex/`) · OpenCode는 1파일 플러그인이 주입(`adapters/opencode/`)
     - 그 밖의 하네스는 AGENTS.md·시작 프롬프트에서 같은 명령 호출
     - 턴별 주입은 점진적 향상 — cold-start + `search` 기준선은 어디서나 동일
+    - 읽기 루프는 어떤 포인터가 실제로 열렸는지 학습 — 데몬이 하루 1회 방출 원장과 하네스별 열람 기록을 작은 `affinity.json`으로 집계하고, 두 주입은 이를 **순위 조정에만** 사용(포인터 개수·텍스트 불변). 증거는 관찰된 세션 단위·채널별: 2일 이상 8개 세션 이상 노출되고 한 번도 안 열린 페이지는 자리를 양보할 수 있고, 2개 세션 이상에서 열린 페이지는 위로 올라갈 수 있음(cold-start: 최신 2개는 고정, 최근 6칸 중 최대 2칸·spine 1칸만 변경; 턴별: 관련도 2점 차를 뒤집지 못하는 제한된 보정). 파일이 없으면 기존 순위 그대로 (수동 갱신: `llmwiki downstream-read <repo> --refresh-affinity`)
 
 ### 인덱스 유지보수 에스컬레이션 (상한 있음 · 옵트인)
 
@@ -526,6 +528,7 @@ guide = "분기 목표. 변경은 사람이 확정."
 - 사실 = AI 자동 / 판단(결정 Why·What·Alt·방향성) = 사람 — `status: draft` 플래그
 - git markdown = 단일 진실원 — 커밋은 단일 작성자 명의(저장소 소유자)
 - 과적재 금지 — 100k 토큰 미만이면 vector DB·RAG 불필요 (index.md 내비게이션으로 충분)
+- 쓸수록 컨텍스트가 무거워지지 않음 — 주입 예산은 비례가 아니라 상한; `/wiki-*` 스킬은 절차만 항상 로드(`/wiki-save` ≤ 15KB)하고 참고 내용은 필요한 단계에서만 불러옴(`llmwiki conventions <repo> --section <name>`); 읽기 루프는 텍스트를 늘리지 않고 사용 기록으로 순위만 조정
 
 ## 라이선스
 

@@ -435,6 +435,7 @@ The canonical machine-readable platform, runtime, CI-evidence, and privacy contr
     - installs the user CLI + five `$wiki-*` skills, and merges native `SessionStart`/`UserPromptSubmit` hooks into `$CODEX_HOME/hooks.json`
     - one-time: start Codex and review the exact commands in `/hooks` — new or changed hooks stay skipped until trusted
     - capture watches `$CODEX_HOME/sessions/**/*.jsonl[.zst]`
+    - Codex Desktop's own homes (runtime + per-account) are swept too; the app hardlinks one rollout into several of them, and that rollout stays **one** queue row with one watermark — never filed twice
     - warm skills run on Codex itself; unattended `autoupdate`/`review` run only when `LLMWIKI_LLM_CMD` is set
 - **OpenCode** — `./setup.sh --harness opencode`
     - installs global `/wiki-*` custom commands, a clone-pinned read-injection plugin, and the user CLI
@@ -626,6 +627,7 @@ gate before review.
 - fact = automatic by AI / judgment (decision Why·What·Alt·direction) = human — the `status: draft` flag
 - git markdown = single source of truth — commits under a single author's identity (the repo owner)
 - no over-engineering — under 100k tokens, no vector DB·RAG needed (index.md navigation suffices)
+- context cost must not grow with use — injection budgets are capped, not proportional; the `/wiki-*` skills keep only the procedure always loaded (`/wiki-save` ≤ 15KB) and fetch reference detail at the step that needs it (`llmwiki conventions <repo> --section <name>`); the read loop reranks from use instead of adding text
 
 ## License
 

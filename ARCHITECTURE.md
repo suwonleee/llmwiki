@@ -39,12 +39,12 @@ the main worktree's enrollment and can opt out individually with `llmwiki disabl
 | Repository I/O | `src/engine/repo-write.ts` | Canonical containment, ancestor and leaf symlink refusal, atomic writes. |
 | Durable project content | `<project>/docs/wiki/` | Plain Git Markdown is the source of truth. |
 | Derived project state | `src/engine/project-state.ts`, `src/engine/db.ts` | Machine-local indexes can be rebuilt; an unindexed linked worktree can read the main wiki index, filtering out pages absent from its checkout. |
-| Capture ledger | `src/engine/capture.ts`, `src/daemon/watch.ts` | Records routing and watermarks without owning harness transcripts. |
+| Capture ledger | `src/engine/capture.ts`, `src/daemon/watch.ts` | Records routing and watermarks without owning harness transcripts; one logical transcript is one row even when a harness hardlinks or copies it into several homes. |
 | Harness readers | `src/engine/sources/` | Read external stores defensively and never write into them. |
 | Read injection | `src/engine/context.ts`, `src/engine/turncontext.ts` | Unenrolled or irrelevant sessions are silent. |
 | Page affinity | `src/engine/affinity.ts`, `src/daemon/watch.ts` | Daily, off the hot path: ledger + observed harness reads → `observe/affinity.json`, counted in sessions per channel. Consumers rerank only — same pointer count, no added text, bounded slot changes; missing or stale data means the unadjusted ranking. |
 | Installation wiring | `src/daemon/wire*.ts`, `setup.sh`, `daemon/` | Merge only owned surfaces and preserve unrelated user configuration. |
-| Skill distribution | `skill/`, `src/plugin/build-assets.ts`, `skills/` | One source renders deterministic Claude/Codex plugin assets. |
+| Skill distribution | `skill/`, `skill/ref/`, `src/plugin/build-assets.ts`, `skills/` | One source renders deterministic Claude/Codex plugin assets; reference detail lives in `skill/ref/` and is printed on demand by `conventions --section`, so the always-loaded skill stays small. |
 | Public boundary | `src/plugin/preflight.ts`, `tests/release-boundary.test.ts` | Private runtime material and unreviewed reference files never ship. |
 
 ## Change recipes

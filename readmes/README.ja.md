@@ -356,6 +356,7 @@ cd ~/llmwiki
     - ユーザーCLI + `$wiki-*` スキル5つを導入し、`$CODEX_HOME/hooks.json` にnative `SessionStart`/`UserPromptSubmit` フックをマージ
     - 初回のみ: Codexを起動し `/hooks` で正確なコマンドをレビュー — 新規·変更フックは信頼されるまで実行されない
     - キャプチャは `$CODEX_HOME/sessions/**/*.jsonl[.zst]` を監視
+    - Codex Desktop（orca）のランタイム・アカウント別ホームも併せて収集 — アプリが同じrolloutを複数ホームにハードリンクしても、キューでは**1行**・ウォーターマーク1つのままで二重に記録されない。アプリのターミナル（そのホームが `CODEX_HOME` としてexportされる）でsetupを実行しても収集範囲は狭まらない
     - ウォームスキルはCodex自体で動作 · 無人の `autoupdate`/`review` は `LLMWIKI_LLM_CMD` を設定したときのみ動作
 - **OpenCode** — `./setup.sh --harness opencode`
     - グローバル `/wiki-*` カスタムコマンド、クローン固定の読み込み注入プラグイン、ユーザーCLIを導入
@@ -431,6 +432,7 @@ cd llmwiki
     - Claude Codeは両フックを自動配線 · 最近のCodexは同じフックスクリプトをネイティブ実行（`adapters/codex/`）· OpenCodeは1ファイルプラグインが注入（`adapters/opencode/`）
     - その他のハーネスはAGENTS.mdや起動プロンプトから同じコマンドを呼ぶだけ
     - ターン毎注入はprogressive enhancement — コールドスタート + `search` のベースラインはどこでも同一
+    - 読み取りループはどのポインタが実際に開かれたかを学習 — デーモンが1日1回、放出台帳とハーネスごとの閲覧記録を小さな `affinity.json` に集計し、両方の注入はそれを**並べ替えだけ**に使う（ポインタ数・テキストは不変）。証拠は観測できたセッション単位・チャネル別: 2日以上・8セッション以上提示されて一度も開かれないページは枠を譲ることがあり、2セッション以上で開かれたページは上がることがある（コールドスタート: 最新2件は固定、最近6枠のうち最大2枠・spine 1枠のみ変更; ターン毎: 関連度2点差を覆さない有界の補正）。ファイルがなければ従来の順位そのまま（手動更新: `llmwiki downstream-read <repo> --refresh-affinity`）
 
 ### インデックス保守のエスカレーション（上限つき · オプトイン）
 
@@ -505,6 +507,7 @@ guide = "四半期目標。変更は人間が確定。"
 - 事実 = AI自動 / 判断（決定のWhy·What·Alt·方向性）= 人間 — `status: draft` フラグ
 - git markdown = 単一の真実源 — コミットは単一作成者の名義（リポジトリ所有者）
 - 過剰設計の禁止 — 100kトークン未満ならvector DB·RAG不要（index.mdナビゲーションで十分）
+- 使うほどコンテキストが重くならない — 注入予算は比例ではなく上限; `/wiki-*` スキルは手順だけを常時ロード（`/wiki-save` ≤ 15KB）し、参照内容は必要なステップでのみ取得（`llmwiki conventions <repo> --section <name>`）; 読み取りループはテキストを増やさず利用記録で並べ替えるだけ
 
 ## ライセンス
 

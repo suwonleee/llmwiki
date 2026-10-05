@@ -348,6 +348,7 @@ cd ~/llmwiki
     - 安装用户 CLI + 5 个 `$wiki-*` 技能，并把原生 `SessionStart`/`UserPromptSubmit` 钩子合并进 `$CODEX_HOME/hooks.json`
     - 仅一次: 启动 Codex，在 `/hooks` 里审查确切命令 — 新钩子·改动过的钩子在被信任前不会执行
     - 捕获监视 `$CODEX_HOME/sessions/**/*.jsonl[.zst]`
+    - 也会扫描 Codex Desktop（orca）的运行时主目录和各账户主目录 — 应用把同一个 rollout 硬链接到多个主目录时，队列里仍只有**一行**、一个水位线，不会被记录两次。在应用的终端里（该主目录被 export 为 `CODEX_HOME`）运行 setup 也不会缩小扫描范围
     - 温热技能靠 Codex 本身即可运行 · 无人值守的 `autoupdate`/`review` 仅在设置了 `LLMWIKI_LLM_CMD` 时运行
 - **OpenCode** — `./setup.sh --harness opencode`
     - 安装全局 `/wiki-*` 自定义命令、内嵌克隆路径的读取注入插件、用户 CLI
@@ -422,6 +423,7 @@ cd llmwiki
     - Claude Code 自动接线两个钩子 · 近期 Codex 可原生执行同一批钩子脚本（`adapters/codex/`）· OpenCode 用单文件插件注入（`adapters/opencode/`）
     - 其他 harness 从 AGENTS.md 或启动提示词调用同样的命令即可
     - 每轮注入是渐进增强 — 冷启动 + `search` 的基线在哪里都一样
+    - 读取循环会学习哪些指针真正被打开 — 守护进程每天一次把发射台账和各 harness 的读取记录汇总成小小的 `affinity.json`，两种注入只用它来**重新排序**（指针数量和文本不变）。证据按已观测的会话、分通道计算：在 2 天以上、8 个以上会话中出现却从未被打开的页面可能让出位置，在 2 个以上会话中被打开的页面可能上移（冷启动：最新 2 个固定，最近 6 个位置中最多改 2 个、spine 最多改 1 个；每轮：有界微调，永远不会推翻 2 分的相关度差距）。没有该文件时排序与以前完全相同（手动刷新：`llmwiki downstream-read <repo> --refresh-affinity`）
 
 ### 索引维护升级（有上限 · 需主动触发）
 
@@ -496,6 +498,7 @@ guide = "季度目标。变更须人工确认。"
 - 事实 = AI 自动 / 判断（决定的 Why·What·Alt·方向）= 人 — `status: draft` 标记
 - git markdown = 单一事实源 — 提交使用单一作者身份（仓库所有者）
 - 拒绝过度设计 — 不到 100k token 就不需要 vector DB·RAG（index.md 导航足矣）
+- 上下文成本不随使用增长 — 注入预算是上限而非按比例；`/wiki-*` 技能只常驻加载流程（`/wiki-save` ≤ 15KB），参考细节只在需要的步骤读取（`llmwiki conventions <repo> --section <name>`）；读取循环只根据使用记录重新排序，不增加文本
 
 ## 许可证
 
