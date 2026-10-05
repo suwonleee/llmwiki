@@ -193,7 +193,7 @@ export function measureScaleWorkspace(root: string, repeats = 5): ScaleReport {
     connection.close();
     samples.context.push(elapsed(() => {
       for (const query of queries) {
-        if (buildTurnContext(root, query.question).includes(query.target)) contextHits += 1;
+        if (buildTurnContext(root, query.question, "", { affinity: null }).includes(query.target)) contextHits += 1;
       }
     }));
     samples.source_bytes.push(repoTreeBytes(root, join("docs", "wiki")));

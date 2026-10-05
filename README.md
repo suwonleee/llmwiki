@@ -531,6 +531,7 @@ screens down to nothing cancels the call instead of sending the remainder.
     - Claude Code wires both hooks automatically; recent Codex runs the same hook scripts natively (`adapters/codex/`); OpenCode injects via a one-file plugin (`adapters/opencode/`)
     - any other harness calls the same commands from AGENTS.md or a startup prompt
     - per-turn injection is a progressive enhancement — the cold-start + `search` baseline is identical everywhere
+    - the read loop learns which pointers get opened: once a day the daemon folds the emission ledger and each harness's read records into a small per-project `affinity.json`, and both injections use it to **rerank only** — the same number of pointers, no added text. Evidence is counted in observed sessions, per channel: a page pointed at in 8+ sessions over 2+ days and never opened may yield its slot, and a page opened in 2+ sessions over 2+ days may move up past one that is evidenced as unopened (cold start: the two newest pages never move and at most two of six recent slots — one spine slot — change; per turn: a bounded nudge that never overturns a relevance gap of two points). A page whose file was modified since it was pointed at starts over — by mtime, so a `git checkout`/`pull` resets it too, and the mtime-ordered recent list rarely qualifies for demotion; the spine and long-untouched pages are where it acts. No file means exactly the old ranking (refresh on demand: `llmwiki downstream-read <repo> --refresh-affinity`)
 
 ### Index maintenance escalation (bounded, opt-in)
 

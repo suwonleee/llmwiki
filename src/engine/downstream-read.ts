@@ -45,6 +45,7 @@ export interface TranscriptScan {
   pointers: PointerOccurrence[];
   reads: ReadOccurrence[];
   malformed: number; // lines that were not JSON — counted, never fatal
+  unreadable?: boolean; // the file could not be read at all — not observed, as opposed to "no reads"
 }
 
 export interface ChannelStat {
@@ -197,18 +198,26 @@ export function readsIn(rec: any, seq: number): ReadOccurrence[] {
   return out;
 }
 
-export function scanTranscript(path: string): TranscriptScan {
+// `wikiLinesOnly` skips JSON.parse for every line that cannot name a wiki page, so a reads-only
+// caller (the daily affinity refresh) pays a substring test per line instead of a parse. The test is
+// deliberately loose — "wiki" and ".md" anywhere — because a Read path can arrive with Windows
+// separators (`docs\\wiki\\…` inside JSON) or relative to a cwd inside docs/ (`wiki/x.md`), and
+// splitWikiPath accepts those after normalization. `malformed` then counts only
+// the lines it actually parsed, which is why the full report never sets it.
+export function scanTranscript(path: string, wikiLinesOnly = false): TranscriptScan {
   const scan: TranscriptScan = { path, pointers: [], reads: [], malformed: 0 };
   let text: string;
   try {
     text = readFileSync(path, "utf-8");
   } catch {
+    scan.unreadable = true;
     return scan; // unreadable (deleted, compressed) → not measurable, not zero
   }
   let seq = 0;
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
     seq += 1;
+    if (wikiLinesOnly && !(line.includes("wiki") && line.includes(".md"))) continue;
     let rec: any;
     try {
       rec = JSON.parse(line);
@@ -360,4 +369,37 @@ export function pickTranscripts(candidates: readonly string[], limit: number): s
     .filter((x): x is { p: string; m: number } => x !== null)
     .sort((a, b) => b.m - a.m || a.p.localeCompare(b.p));
   return stamped.slice(0, Math.max(1, limit)).map((x) => resolve(x.p));
+}
+
+/**
+ * Transcripts modified inside a window, newest first, until a byte budget is spent. A transcript
+ * older than the window cannot hold a read that answers a pointer inside it; the budget bounds the
+ * daily work on a heavy machine; `untilMs` leaves out files still being written. Whatever is left
+ * out is UNOBSERVED, and callers must treat it so.
+ */
+export function pickRecentTranscripts(
+  candidates: readonly string[],
+  sinceMs: number,
+  maxBytes: number,
+  untilMs = Number.POSITIVE_INFINITY,
+): string[] {
+  const stamped = candidates
+    .map((p) => {
+      try {
+        const st = statSync(p);
+        return { p, m: st.mtimeMs, size: st.size };
+      } catch {
+        return null;
+      }
+    })
+    .filter((x): x is { p: string; m: number; size: number } => x !== null && x.m >= sinceMs && x.m <= untilMs)
+    .sort((a, b) => b.m - a.m || a.p.localeCompare(b.p));
+  const out: string[] = [];
+  let spent = 0;
+  for (const x of stamped) {
+    if (spent + x.size > maxBytes) continue; // one oversized file must not hide the smaller ones after it
+    spent += x.size;
+    out.push(resolve(x.p));
+  }
+  return out;
 }

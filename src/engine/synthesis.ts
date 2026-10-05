@@ -20,6 +20,7 @@ import { join, resolve } from "node:path";
 import { WikiIndex } from "./db.ts";
 import { effectiveKo, getConfig, logDirs, type WikiConfig } from "./config.ts";
 import { readRepoDir } from "./repo-write.ts";
+import { rerankByAffinity, SPINE_POLICY, type AffinityFile } from "./affinity.ts";
 
 // User-facing output adapts to LLMWIKI_LANG (default English, Korean when set) — same policy as
 // the cold-start context builder. (The LLM-facing prompts stay English elsewhere by design.)
@@ -100,7 +101,7 @@ function analyze(repo: string, cfg: WikiConfig = getConfig(repo)): Analysis {
 // Compact synthesis spine for the cold-start read loop: the conceptual centers (top hubs by
 // in-degree — distinct from "recent pages") + a one-line freshness/open summary. Bounded to a
 // handful of lines so it never bloats cold-start. Returns content lines (no header).
-export function buildSpine(repo: string, max = 4): string[] {
+export function buildSpine(repo: string, max = 4, affinity: AffinityFile | null = null): string[] {
   let a: Analysis;
   let cfg: WikiConfig;
   try {
@@ -111,11 +112,18 @@ export function buildSpine(repo: string, max = 4): string[] {
   }
   if (!a.pages.length) return [];
   const out: string[] = [];
-  const hubs = a.pages
-    .map((d) => ({ d, n: a.indeg.get(String(d.id)) ?? 0 }))
-    .filter((x) => x.n >= 2)
-    .sort((x, y) => y.n - x.n)
-    .slice(0, max);
+  // Affinity (cold start only) may swap at most one hub (SPINE_POLICY) and keeps in-degree order;
+  // null keeps the plain in-degree top-N.
+  const hubs = rerankByAffinity(
+    a.pages
+      .map((d) => ({ d, n: a.indeg.get(String(d.id)) ?? 0 }))
+      .filter((x) => x.n >= 2)
+      .sort((x, y) => y.n - x.n),
+    max,
+    affinity,
+    (x) => String(x.d.relative_path),
+    SPINE_POLICY,
+  );
   for (const { d, n } of hubs) out.push(`  • ${titleOf(d)}  →  ${d.relative_path}  (${n}x)`);
   const staleN = a.pages.filter((d) => d.stale_since).length;
   if (staleN || a.open.length) {

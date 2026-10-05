@@ -96,27 +96,21 @@ describe("setup lifecycle across every harness", () => {
     });
   }
 
-  // Overlays the CURRENT receipt engine onto a clone of committed HEAD. The list must therefore
-  // cover everything the overlaid files import that the clone does not already have: a working-tree
-  // doctor.ts that reaches for a module added in the same change would otherwise fail to import
-  // inside the clone, and surface here as `setup.sh` merely exiting 1.
+  // Overlays the CURRENT engine (all of src/ plus setup.sh) onto a clone of committed HEAD. It used
+  // to copy a hand-kept list of receipt-engine files, and every change that gave one of them a new
+  // import had to remember to extend the list — otherwise the overlaid file failed to import inside
+  // the clone and surfaced here as `setup.sh` merely exiting 1. Copying the whole engine keeps the
+  // test's intent (current engine, HEAD-era installed surfaces) without that coupling. skill/ is
+  // deliberately NOT copied: the tests below change a skill source and need it to be the only
+  // difference between what was installed and what is now in the clone.
   function overlayCurrentReceiptEngine(clone: string): void {
-    for (const relative of [
-      "setup.sh",
-      "src/daemon/install-receipt.ts",
-      "src/engine/context.ts",
-      "src/engine/daemon-control.ts",
-      "src/engine/doctor.ts",
-      "src/engine/daemon-resolved.ts", // doctor reads the daemon's resolved-location breadcrumb
-      "src/engine/sources/codex.ts", // doctor compares against codexHomes()
-      "src/engine/state-dir.ts",
-      "src/engine/update-check.ts",
-      "skill/ref", // doctor checks it as a CORE path (the on-demand skill reference sections)
-    ]) {
-      const target = join(clone, relative);
-      mkdirSync(dirname(target), { recursive: true });
-      cpSync(join(ROOT, relative), target, { recursive: true });
-    }
+    cpSync(join(ROOT, "setup.sh"), join(clone, "setup.sh"));
+    rmSync(join(clone, "src"), { recursive: true, force: true });
+    cpSync(join(ROOT, "src"), join(clone, "src"), { recursive: true });
+    // skill/ref is a doctor CORE path (the on-demand skill reference sections); the rest of skill/
+    // stays at HEAD so the test's own skill edit remains the only skill difference.
+    rmSync(join(clone, "skill", "ref"), { recursive: true, force: true });
+    cpSync(join(ROOT, "skill", "ref"), join(clone, "skill", "ref"), { recursive: true });
   }
 
   test("install → user edit → reinstall → unified purge uninstall is complete and narrow", () => {

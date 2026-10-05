@@ -70,6 +70,7 @@ import {
   scanCodexReads,
   scanOpenCodeReads,
 } from "./engine/observe.ts";
+import { refreshAffinity } from "./engine/affinity.ts";
 import { verifyDistillFiles } from "./engine/distill.ts";
 import { runArm, loadArm, judgeArms } from "./engine/compare.ts";
 import { CLONE_ROOT } from "./engine/paths.ts";
@@ -1273,6 +1274,51 @@ async function cmdBenchCapture(p: Parsed) {
 // worth asking without one. Reads captured transcripts only — no wiki writes, no session cost.
 function cmdDownstreamRead(p: Parsed) {
   const scope = p.positionals[0] ?? "";
+  // The daemon refreshes page affinity daily; this is the same refresh on demand, for one repo.
+  if (p.flags["--refresh-affinity"]) {
+    if (!scope) die("downstream-read <workspace> --refresh-affinity — a workspace is required");
+    const root = resolve(scope);
+    // The same consent gate as every automatic path: an unenrolled repository gets no state.
+    if (!isEnrolled(root)) die(`downstream-read --refresh-affinity: ${root} is not enrolled (run \`llmwiki init\` first)`);
+    let r: ReturnType<typeof refreshAffinity>;
+    try {
+      r = refreshAffinity(wikiRootFor(root, enrollment.inspectEnrollment(root).worktree));
+    } catch (e) {
+      die(`downstream-read --refresh-affinity: could not write the affinity file: ${e}`);
+    }
+    if (r.status === "not-central") {
+      console.log(
+        ko
+          ? "page affinity: 이 디렉터리는 git 워크트리가 아니라 엔진 보관 상태가 없다 — affinity 는 git 워크트리에서만 쓴다"
+          : "page affinity: not a git worktree, so there is no engine-held state — affinity is kept for git worktrees only",
+      );
+      return;
+    }
+    if (r.status === "no-state") {
+      console.log(
+        ko
+          ? "page affinity: 이 레포의 엔진 상태가 아직 없다 — 갱신할 것이 없다"
+          : "page affinity: this repository has no engine-held state yet — nothing to refresh",
+      );
+      return;
+    }
+    if (r.status === "no-ledger") {
+      console.log(
+        ko
+          ? "page affinity: 방출 원장 없음 — 갱신할 것이 없다 (포인터가 주입된 세션 이후부터 생긴다)"
+          : "page affinity: no emission ledger — nothing to refresh (it starts once pointers have been injected)",
+      );
+      return;
+    }
+    const aff = r.affinity;
+    const pages = Object.values(aff.pages);
+    const opened = pages.filter((a) => Object.values(a).some((c) => (c?.opened ?? 0) > 0)).length;
+    console.log(
+      `page affinity: ${aff.observedEmissions}/${aff.emissions} emission(s) in the last ${aff.windowDays}d observed · ` +
+        `${pages.length} page(s) · ${opened} opened in at least one session`,
+    );
+    return;
+  }
   const transcript = typeof p.flags["--transcript"] === "string" ? (p.flags["--transcript"] as string) : "";
   const limitFlag = typeof p.flags["--limit"] === "string" ? Number(p.flags["--limit"]) : NaN;
   const cap = Number.isFinite(limitFlag) ? limitFlag : 30;

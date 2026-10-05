@@ -24,7 +24,7 @@
 import { appendFileSync, readdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
-import { ensureProjectStateDir } from "./project-state.ts";
+import { ensureProjectStateDir, projectStateIsRegularFile, projectStatePath } from "./project-state.ts";
 import { openReadonlyDatabase } from "./sqlite-open.ts";
 import { opencodeDbPaths } from "./sources/opencode.ts";
 import { codexHome } from "./sources/codex.ts";
@@ -126,17 +126,21 @@ export function recordEmission(
 
 // ---- reading the ledger -------------------------------------------------------------------
 
+// A reader creates nothing: resolving the directory with ensureProjectStateDir stamped the
+// project's lastUsed, so the daemon's daily affinity refresh would have kept every project
+// "in use" forever and idle eviction (project-maintenance.ts) would never fire.
 export function readEmissionsFor(root: string): Emission[] {
   const out: Emission[] = [];
   let dir: string;
   try {
-    dir = ensureProjectStateDir(root, "observe");
+    dir = projectStatePath(root, "observe");
   } catch {
     return out;
   }
   for (const name of [`${LEDGER_NAME}.1`, LEDGER_NAME]) {
     let text: string;
     try {
+      if (!projectStateIsRegularFile(root, "observe", name)) continue; // absent, or a planted link
       text = readFileSync(join(dir, name), "utf-8");
     } catch {
       continue;
@@ -176,7 +180,9 @@ export function readEmissionsFor(root: string): Emission[] {
 // "state":{"input":{"filePath":…}}}). The DB is opened read-only, the same discipline as the
 // capture adapter; schema churn degrades to "no reads", never to a crash.
 
-export function scanOpenCodeReads(dbPath?: string): LedgerRead[] {
+// `observed`, when given, receives every session id the DB knows about — read in the SAME open as
+// the reads, so a DB that is locked or has drifted contributes neither reads nor "observed".
+export function scanOpenCodeReads(dbPath?: string, observed?: Set<string>): LedgerRead[] {
   const out: LedgerRead[] = [];
   const paths = dbPath ? [dbPath] : opencodeDbPaths();
   for (const p of paths) {
@@ -189,6 +195,8 @@ export function scanOpenCodeReads(dbPath?: string): LedgerRead[] {
           "SELECT session_id AS s, time_created AS t, data AS d FROM part WHERE data LIKE '%docs/wiki/%' AND data LIKE '%\"tool\"%'",
         )
         .all() as { s: string; t: number; d: string }[];
+      const sessions = observed ? (db.query("SELECT id FROM session").all() as { id: string }[]) : [];
+      for (const row of sessions) observed?.add(String(row.id));
       for (const row of rows) {
         try {
           const part = JSON.parse(row.d);
@@ -244,7 +252,8 @@ export function discoverCodexRollouts(rootDir?: string): string[] {
   return out;
 }
 
-export function scanCodexReads(files: readonly string[]): LedgerRead[] {
+// `observed`, when given, receives the session id of every rollout that was actually read.
+export function scanCodexReads(files: readonly string[], observed?: Set<string>): LedgerRead[] {
   const out: LedgerRead[] = [];
   for (const f of files) {
     let text: string;
@@ -256,7 +265,8 @@ export function scanCodexReads(files: readonly string[]): LedgerRead[] {
     let session = "";
     let cwd = "";
     for (const line of text.split("\n")) {
-      if (!line.trim()) continue;
+      // Only session_meta and lines naming a wiki page can matter; skip the parse for the rest.
+      if (!line.includes("docs/wiki/") && !line.includes("session_meta")) continue;
       let rec: any;
       try {
         rec = JSON.parse(line);
@@ -267,6 +277,7 @@ export function scanCodexReads(files: readonly string[]): LedgerRead[] {
       if (rec?.type === "session_meta") {
         session = String(payload.id ?? payload.session_id ?? "");
         cwd = String(payload.cwd ?? "").replace(/\\/g, "/");
+        if (session) observed?.add(session);
         continue;
       }
       if (rec?.type !== "response_item" || !CODEX_CALL_TYPES.has(String(payload.type ?? ""))) continue;
@@ -291,11 +302,18 @@ export function scanCodexReads(files: readonly string[]): LedgerRead[] {
 // ledger's shape (session id = transcript filename stem) so all three harnesses answer the same
 // emission ledger with the same record type.
 
-export function claudeLedgerReads(limit = 30): LedgerRead[] {
+// `observed`, when given, receives the session id of every transcript that was actually read.
+export function claudeLedgerReads(
+  limit = 30,
+  candidates: readonly string[] = discoverClaudeTranscripts(),
+  observed?: Set<string>,
+): LedgerRead[] {
   const out: LedgerRead[] = [];
-  for (const f of pickTranscripts(discoverClaudeTranscripts(), limit)) {
+  for (const f of pickTranscripts(candidates, limit)) {
     const session = basename(f).replace(/\.jsonl$/, "");
-    for (const r of scanTranscript(f).reads) {
+    const scan = scanTranscript(f, true); // reads only: pointers come from the ledger
+    if (!scan.unreadable) observed?.add(session);
+    for (const r of scan.reads) {
       out.push({ ts: r.ts, session, root: r.root, page: r.page, harness: "claude" });
     }
   }
@@ -309,6 +327,14 @@ function splitWiki(abs: string): { root: string; page: string } | null {
   const i = p.lastIndexOf("/docs/wiki/");
   if (i < 0) return p.startsWith("docs/wiki/") && p.endsWith(".md") ? { root: "", page: p } : null;
   return p.endsWith(".md") ? { root: p.slice(0, i), page: p.slice(i + 1) } : null;
+}
+
+/**
+ * The read that answers one pointer of one emission, or undefined. The single home of the match
+ * rule, shared by the report below and the page-affinity aggregate (affinity.ts).
+ */
+export function answeringRead(e: Emission, page: string, candidates: readonly LedgerRead[]): LedgerRead | undefined {
+  return candidates.find((r) => r.page === page && r.ts >= e.ts && (!r.root || !e.root || r.root === e.root));
 }
 
 /**
@@ -346,9 +372,7 @@ export function matchEmissions(emissions: readonly Emission[], reads: readonly L
     for (const page of e.pages) {
       by[e.channel].injected += 1;
       injected += 1;
-      const hit = candidates.find(
-        (r) => r.page === page && r.ts >= e.ts && (!r.root || !e.root || r.root === e.root),
-      );
+      const hit = answeringRead(e, page, candidates);
       if (hit) {
         by[e.channel].matched += 1;
         matched += 1;

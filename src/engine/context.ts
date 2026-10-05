@@ -16,6 +16,7 @@ import { pending } from "./capture.ts";
 import { uncitedPending } from "./reconcile.ts";
 import { sourceForKind } from "./source.ts";
 import { buildSpine, topicGaps } from "./synthesis.ts";
+import { loadAffinity, rerankByAffinity, RECENT_POLICY, type AffinityFile } from "./affinity.ts";
 import { auditNudge } from "./context-audit.ts";
 import { parseQueue } from "./gaps.ts";
 import { dueCount } from "./quiz.ts";
@@ -176,7 +177,9 @@ function categoryPages(root: string, catDirs: string[]): string[] {
   return out.map((x) => x.p);
 }
 
-export function buildContext(repo: string): string {
+// `opts.affinity` pins the page-affinity input (null = none) instead of reading this machine's live
+// aggregate — the seam deterministic callers (bench) use so a measurement cannot drift with use.
+export function buildContext(repo: string, opts: { affinity?: AffinityFile | null } = {}): string {
   // FAIL CLOSED FIRST — before the per-repo config resolution, before any repository read.
   // An unenrolled repository (a fresh clone of someone else's project, a directory you merely
   // chatted in) produces EXACTLY zero bytes: no header, no newline, no "run init" nag. The
@@ -298,9 +301,14 @@ export function buildContext(repo: string): string {
     L.push("");
   }
 
+  // Page affinity (affinity.ts): which pointers this project's sessions actually open. It only
+  // decides WHICH candidates fill B2/B3's fixed slots — same counts, same lines, no new text — and
+  // absent/stale data leaves both lists exactly as they were.
+  const affinity = !hasWiki ? null : opts.affinity !== undefined ? opts.affinity : loadAffinity(proj);
+
   // (B2) lightweight on-the-fly page index — recent 6 titles (filesystem-derived, never stale).
   if (hasWiki) {
-    const pages = categoryPages(proj, catDirs).slice(0, 6);
+    const pages = rerankByAffinity(categoryPages(proj, catDirs), 6, affinity, (p) => p, RECENT_POLICY);
     if (pages.length) {
       L.push(T.indexHead);
       for (const p of pages) L.push(`  • ${title(proj, p)}  →  ${p}`);
@@ -312,7 +320,7 @@ export function buildContext(repo: string): string {
   // recent). Deterministic/regenerable relational synthesis — no LLM, no
   // new claims, just links from the grounded graph. Bounded; failure-safe (never breaks cold-start).
   if (hasWiki) {
-    const spine = buildSpine(proj);
+    const spine = buildSpine(proj, 4, affinity);
     if (spine.length) {
       L.push(T.spineHead);
       for (const s of spine) L.push(s);

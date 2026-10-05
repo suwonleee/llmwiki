@@ -42,6 +42,7 @@ the main worktree's enrollment and can opt out individually with `llmwiki disabl
 | Capture ledger | `src/engine/capture.ts`, `src/daemon/watch.ts` | Records routing and watermarks without owning harness transcripts. |
 | Harness readers | `src/engine/sources/` | Read external stores defensively and never write into them. |
 | Read injection | `src/engine/context.ts`, `src/engine/turncontext.ts` | Unenrolled or irrelevant sessions are silent. |
+| Page affinity | `src/engine/affinity.ts`, `src/daemon/watch.ts` | Daily, off the hot path: ledger + observed harness reads → `observe/affinity.json`, counted in sessions per channel. Consumers rerank only — same pointer count, no added text, bounded slot changes; missing or stale data means the unadjusted ranking. |
 | Installation wiring | `src/daemon/wire*.ts`, `setup.sh`, `daemon/` | Merge only owned surfaces and preserve unrelated user configuration. |
 | Skill distribution | `skill/`, `src/plugin/build-assets.ts`, `skills/` | One source renders deterministic Claude/Codex plugin assets. |
 | Public boundary | `src/plugin/preflight.ts`, `tests/release-boundary.test.ts` | Private runtime material and unreviewed reference files never ship. |

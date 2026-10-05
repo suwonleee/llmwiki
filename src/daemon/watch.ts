@@ -12,6 +12,7 @@ import { rotateDaemonLog } from "../engine/state-dir.ts";
 import { reassertClaudeReadHooks } from "../engine/doctor.ts";
 import { checkEngineUpdate } from "../engine/update-check.ts";
 import { runProjectMaintenance } from "../engine/project-maintenance.ts";
+import { refreshDueAffinity } from "../engine/affinity.ts";
 import { isEnrolled, isEnrolledFresh, resetEnrollmentCache } from "../engine/enrollment.ts";
 import {
   sources,
@@ -250,6 +251,7 @@ async function pollLoop(): Promise<void> {
     reassertWiringIfDue();
     checkEngineUpdateIfDue();
     maintainProjectStateIfDue();
+    refreshAffinityIfDue();
     await Bun.sleep(POLL_SECONDS * 1000);
   }
 }
@@ -314,6 +316,33 @@ function maintainProjectStateIfDue(): void {
     }
   } catch (e) {
     log(`index maintenance FAILED (will retry tomorrow): ${e}`);
+  }
+}
+
+// Page affinity — which injected pointers each enrolled project's sessions actually open
+// (engine/affinity.ts). Daily, from the loop ONLY, like the passes above: it scans harness
+// transcripts, which is exactly the cost the per-turn path must never pay, and a `--once` test
+// sweep must not read the developer's transcript stores. A project that fails keeps its old file,
+// which is what makes the next daily pass retry it.
+//
+// The first pass waits AFFINITY_STARTUP_DELAY_MS after the daemon starts, so a restart (setup.sh,
+// login, a crash loop) never opens with a transcript scan. Not a full day: a machine that reboots
+// every night would then never refresh at all. Each project is also skipped while its file is
+// under a day old, so a pass that runs soon after a restart only touches what is actually due.
+const AFFINITY_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const AFFINITY_STARTUP_DELAY_MS = 60 * 60 * 1000;
+let lastAffinityAt = Date.now() - AFFINITY_INTERVAL_MS + AFFINITY_STARTUP_DELAY_MS;
+
+function refreshAffinityIfDue(): void {
+  const now = Date.now();
+  if (now - lastAffinityAt < AFFINITY_INTERVAL_MS) return;
+  lastAffinityAt = now;
+  try {
+    const r = refreshDueAffinity(now);
+    if (r.refreshed) log(`page affinity: refreshed ${r.refreshed} project(s)`);
+    for (const f of r.failed) log(`page affinity FAILED for ${f.worktree} (will retry tomorrow): ${f.error}`);
+  } catch (e) {
+    log(`page affinity FAILED (will retry tomorrow): ${e}`);
   }
 }
 

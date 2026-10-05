@@ -451,6 +451,25 @@ export function writeProjectState(root: string, name: string, content: string): 
   writePrivateFile(join(location.dir, name), content);
 }
 
+/**
+ * Write one file into a project's EXISTING engine-held state without stamping `lastUsed`. For
+ * background refreshers (the daemon): their writes are not activity, and counting them as such
+ * would keep every project "in use" forever, so idle eviction would never fire. Returns false —
+ * writing nothing, minting nothing — when the project has no central state directory yet.
+ */
+export function writeProjectStateQuietly(root: string, relative: readonly string[], content: string): boolean {
+  const location = resolveProjectStateLocation(root);
+  if (location === null || !location.central) return false;
+  for (const directory of [effectiveStateRoot(), projectsRoot(), location.dir]) {
+    if (!isRealDirectory(directory)) return false;
+  }
+  const target = join(location.dir, ...relative);
+  const descendants = centralDescendants(location.dir, target);
+  for (const directory of descendants.slice(0, -1)) ensureRealPrivateDirectory(directory);
+  writePrivateFile(target, content);
+  return true;
+}
+
 export function projectStateExists(root: string, ...relative: string[]): boolean {
   try {
     lstatSync(projectStatePath(root, ...relative));

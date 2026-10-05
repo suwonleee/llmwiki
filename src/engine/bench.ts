@@ -288,7 +288,7 @@ export function runBench(
   let labelled = 0;
   try {
     for (const q of selected) {
-      const tc = buildTurnContext(root, q.question); // no sessionId → no dedup state
+      const tc = buildTurnContext(root, q.question, "", { affinity: null }); // no sessionId → no dedup state; pinned affinity → deterministic
       turnBytes.push(Buffer.byteLength(tc, "utf-8"));
       if (q.must_refuse) {
         nRefusal += 1;
@@ -342,7 +342,7 @@ export function runBench(
       silence,
       // The cold-start channel is a per-session constant, not an average over queries: every
       // session pays it once, whatever is asked. Reported as the one number it is.
-      coldstart_bytes: Buffer.byteLength(buildContext(root), "utf-8"),
+      coldstart_bytes: Buffer.byteLength(buildContext(root, { affinity: null }), "utf-8"),
       turn_bytes_p50: percentile(turnBytes, 0.5),
       turn_bytes_p95: percentile(turnBytes, 0.95),
       // Claimed only for what a human actually labelled. An unlabelled golden set claims nothing.

@@ -29,6 +29,7 @@ import { WikiIndex } from "./db.ts";
 import { UNSPACED_ONLY_RE, UNSPACED_RUN_RE, unspacedWindows } from "./segment.ts";
 import { isRepoKorean, effectiveKo, getConfig } from "./config.ts";
 import { COLD_INDEX_RELATIVE_PATH } from "./cold-index.ts";
+import { adjustedScore, loadAffinity, type AffinityFile } from "./affinity.ts";
 
 const MAX_TERMS = 12;
 const MAX_PAGES = 3;
@@ -285,7 +286,14 @@ function hasWikiRows(w: WikiIndex): boolean {
   }
 }
 
-export function buildTurnContext(repo: string, prompt: string, sessionId = ""): string {
+// `opts.affinity` pins the page-affinity input (null = none) instead of the live aggregate — the
+// seam deterministic callers (bench) use.
+export function buildTurnContext(
+  repo: string,
+  prompt: string,
+  sessionId = "",
+  opts: { affinity?: AffinityFile | null } = {},
+): string {
   try {
     const cfg = getConfig(repo);
     // L0 / meta pages are already injected whole at session start — never re-suggest them.
@@ -441,9 +449,15 @@ export function buildTurnContext(repo: string, prompt: string, sessionId = ""): 
     // backwards here — in a focused wiki the content words are the COMMON ones (캡처 37%, 훅 27%)
     // and the filler is rare (해야 5%, 이거 2%), so "common = uninformative" would drop exactly the
     // words worth matching. Measured trade: relevant Korean prompts 1/7 → 5/7, filler 0/5 → 1/5.
-    let pages = [...byPage.entries()]
-      .filter(([, e]) => e.cur >= 1 && score(e) >= 2) // current witness + (two weak / one specific)
-      .sort((a, b) => score(b[1]) - score(a[1]) || b[1].hits - a[1].hits);
+    // Page affinity (affinity.ts) is a bounded correction applied AFTER the gate: it can reorder
+    // near-ties among pages that already earned a place on relevance (a >=2-point gap never flips),
+    // never admit one that did not. With no affinity file the order is the pure relevance order.
+    // Read only when there is something to order: a lone (or no) candidate costs no file read.
+    let pages = [...byPage.entries()].filter(([, e]) => e.cur >= 1 && score(e) >= 2); // current witness + (two weak / one specific)
+    const affinity = pages.length < 2 ? null : opts.affinity !== undefined ? opts.affinity : loadAffinity(repo);
+    const ranked = (rel: string, e: { terms: Set<string>; idTerms: Set<string> }) =>
+      adjustedScore(score(e), affinity, rel);
+    pages.sort((a, b) => ranked(b[0], b[1]) - ranked(a[0], a[1]) || b[1].hits - a[1].hits);
     if (!pages.length) return "";
 
     // session dedup BEFORE the top-N cut — if the best pages were already suggested this
