@@ -287,6 +287,8 @@ export async function updateOne(
   const vm = verifyModel ?? generativeModel(root, "heavy", cfg.models.heavy);
   const ko = effectiveKo(cfg);
   const name = basename(root);
+  // Another home's spelling of a queued transcript reads and advances the queued row's watermark.
+  transcriptPath = capture.canonicalQueuePath(transcriptPath, root);
   const fn = basename(transcriptPath);
   const offset = capture.getOffset(transcriptPath);
   // Route to the parser the capture row was enqueued with. Legacy/claude rows →

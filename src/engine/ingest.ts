@@ -37,8 +37,10 @@ export async function ingest(
   const sessionId = probed?.sessionId ?? null;
   const lines = probed?.lines ?? 0;
 
-  // --force: reset an existing row's watermark so an edited re-drop is re-read from the top.
-  if (opts.force) capture.mark(path, 0, "pending");
+  // --force: reset an existing row's watermark so an edited re-drop is re-read from the top — the
+  // row that carries it, which for another home's hardlink/copy of a queued transcript is not
+  // the row keyed by this spelling.
+  if (opts.force) capture.mark(capture.canonicalQueuePath(path, repo), 0, "pending");
   capture.enqueue(path, sessionId, repo, lines, src.kind);
 
   // Reuse the gated condense pass. updateOne re-selects the parser by the row's source_kind,

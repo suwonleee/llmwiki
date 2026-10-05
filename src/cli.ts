@@ -331,8 +331,13 @@ function cmdSaveCurrent(p: Parsed) {
       lines,
       hint.sourceKind ?? sourceForPath(hint.transcriptPath).kind,
     );
+    // Print the QUEUED path: a hint recorded under another Codex home's hardlink is the same row,
+    // and the close-out must run update-next against the path that carries its watermark.
+    const queued = capture.canonicalQueuePath(hint.transcriptPath, hint.repo);
+    if (seen.has(queued)) continue;
     seen.add(hint.transcriptPath);
-    found.push({ path: hint.transcriptPath, note: `${lines} lines` });
+    seen.add(queued);
+    found.push({ path: queued, note: `${lines} lines` });
   }
 
   // 2) Queue rows already carrying this session id (a resumed session hinted in an earlier run).

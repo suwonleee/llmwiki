@@ -13,7 +13,7 @@
 // vote — MINUS the user-ROLE text the harness feeds on the human's behalf (see humanSaid below):
 // a skill body is recorded as a user turn, so every session that ran /wiki-save shares the skill's
 // own vocabulary, and that alone gate-passed 8 of 59 real pending sessions.
-import { getSourceKind, pending, type CaptureRow } from "./capture.ts";
+import { canonicalQueuePath, getSourceKind, pending, type CaptureRow } from "./capture.ts";
 import { sourceForKind } from "./source.ts";
 import { extractTerms, termWeight } from "./turncontext.ts";
 
@@ -106,6 +106,8 @@ export function relatedFromRows(
 
 /** Same-topic pending sessions for the repo's queue, anchored on this session's transcript. */
 export function relatedPending(repo: string, anchorTranscript: string): RelatedCandidate[] {
+  // An alias spelling must still parse with the queued kind and exclude its own queued row.
+  anchorTranscript = canonicalQueuePath(anchorTranscript, repo);
   const anchor = userText(anchorTranscript, getSourceKind(anchorTranscript));
   if (!anchor.text.trim()) return [];
   return relatedFromRows(pending(repo), anchorTranscript, anchor.sessionId, extractTerms(anchor.text));

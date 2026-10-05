@@ -93,6 +93,8 @@ export function renderRouteLines(ws: string, touched: Record<string, number> | u
 }
 
 export function nextIncrement(ws: string, transcriptPath: string): NextIncrement {
+  // Another home's spelling of a queued transcript continues from the queued row's watermark.
+  transcriptPath = capture.canonicalQueuePath(transcriptPath, ws);
   const offset = capture.getOffset(transcriptPath);
   // Capture-time source_kind is the queue contract. This keeps update-next harness-neutral
   // even after a transcript moves or the user's active harness profile changes.
@@ -152,6 +154,7 @@ export function updateDoneProblem(transcriptPath: string, newOffset: number, ski
 }
 
 export function markUpdated(ws: string, transcriptPath: string, newOffset: number, skipped = false): void {
+  transcriptPath = capture.canonicalQueuePath(transcriptPath, ws); // same row update-next issued against
   const problem = updateDoneProblem(transcriptPath, newOffset, skipped);
   if (problem) throw new Error(`update-done refused: ${problem}`);
   capture.mark(transcriptPath, newOffset, skipped ? "skipped" : "distilled");

@@ -3,7 +3,7 @@
 // the daemon sees, regardless of terminal/profile/repo. The update step (per-repo)
 // reads its slice by repo path and advances the watermark here.
 import { Database } from "bun:sqlite";
-import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, unlinkSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { captureBucket } from "./wiki-root.ts";
@@ -55,11 +55,22 @@ CREATE TABLE IF NOT EXISTS capture_queue (
     status TEXT DEFAULT 'pending' CHECK (status IN ('pending','distilled','skipped','lost')),
     source_kind TEXT DEFAULT 'claude-jsonl',
     file_id TEXT,
+    file_key TEXT,
     first_seen TEXT DEFAULT (datetime('now')),
     distilled_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_capture_repo ON capture_queue(repo);
 CREATE INDEX IF NOT EXISTS idx_capture_status ON capture_queue(status);
+CREATE INDEX IF NOT EXISTS idx_capture_session ON capture_queue(session_id);
+-- Another spelling of a queued transcript (a hardlink or copy in another harness home) → the path
+-- whose row carries its watermark. See "one logical transcript, one queue row" below.
+CREATE TABLE IF NOT EXISTS capture_alias (
+    alias_path TEXT PRIMARY KEY,
+    canonical_path TEXT NOT NULL,
+    alias_key TEXT,
+    via TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_alias_canonical ON capture_alias(canonical_path);
 CREATE TABLE IF NOT EXISTS route_hint (
     transcript_path TEXT PRIMARY KEY,
     repo TEXT NOT NULL,
@@ -221,6 +232,7 @@ function connect(): Database {
       db.exec("ALTER TABLE capture_queue_v2 RENAME TO capture_queue");
       db.exec("CREATE INDEX IF NOT EXISTS idx_capture_repo ON capture_queue(repo)");
       db.exec("CREATE INDEX IF NOT EXISTS idx_capture_status ON capture_queue(status)");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_capture_session ON capture_queue(session_id)");
       db.exec("COMMIT");
     } catch (e) {
       db.exec("ROLLBACK");
@@ -235,6 +247,26 @@ function connect(): Database {
   }
   if (!appendCols.some((c) => c.name === "owner_token")) {
     db.exec("ALTER TABLE opencode_append ADD COLUMN owner_token TEXT NOT NULL DEFAULT ''");
+  }
+  // file_key: the device-free identity the alias search is indexed by (see fileKey). Added after the
+  // CHECK rebuild above, which copies an explicit column list.
+  const queueCols = db.query("PRAGMA table_info(capture_queue)").all() as { name: string }[];
+  if (!queueCols.some((c) => c.name === "file_key")) {
+    db.exec("ALTER TABLE capture_queue ADD COLUMN file_key TEXT");
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_capture_file_key ON capture_queue(file_key)");
+  // First-run fold of the alias rows written before enqueue learned to recognise them (see
+  // collapseAliasRows — the daemon repeats it daily). Guarded by user_version so every later
+  // connect pays one PRAGMA read; the version is re-read inside an IMMEDIATE transaction because
+  // the daemon and a hook can open the database at the same moment, and only one may do the fold.
+  if ((db.query("PRAGMA user_version").get() as { user_version: number }).user_version < ALIAS_COLLAPSE_VERSION) {
+    db.transaction(() => {
+      if ((db.query("PRAGMA user_version").get() as { user_version: number }).user_version >= ALIAS_COLLAPSE_VERSION) {
+        return;
+      }
+      collapseAliasRows(db);
+      db.exec(`PRAGMA user_version = ${ALIAS_COLLAPSE_VERSION}`);
+    }).immediate();
   }
   return db;
 }
@@ -669,12 +701,447 @@ function sizeOf(path: string): number {
   return existsSync(path) ? statSync(path).size : 0;
 }
 
+// Identity reads go through one stat seam so a test can reproduce what a platform without birthtime
+// (Linux without statx → birthtimeMs 0) or with an unstable st_dev (macOS) reports.
+type IdentityStat = { dev: number; ino: number; birthtimeMs: number };
+let identityStat: (path: string) => IdentityStat = (path) => statSync(path);
+
+/** Test seam: replace the stat behind file identity; null restores the real statSync. */
+export function _setIdentityStatForTests(fn: ((path: string) => IdentityStat) | null): void {
+  identityStat = fn ?? ((path) => statSync(path));
+}
+
 function fileIdentity(path: string): string | null {
   try {
-    const st = statSync(path);
+    const st = identityStat(path);
     return `${st.dev}:${st.ino}:${st.birthtimeMs}`;
   } catch {
     return null;
+  }
+}
+
+/** A recorded `dev:ino:birthtime` without its device — the comparable part (see fileKey). */
+function sansDevice(fileId: string | null): string | null {
+  return fileId === null ? null : fileId.slice(fileId.indexOf(":") + 1);
+}
+
+// ---- one logical transcript, one queue row ---------------------------------------------------
+//
+// The queue is keyed by PATH, but a path is not an identity. Codex Desktop ("orca") HARDLINKS one
+// rollout into several CODEX_HOMEs (~/.codex/sessions, orca/codex-runtime-home/home/sessions,
+// orca/codex-accounts/<uuid>/home/sessions — verified on disk: same inode, link count 3), and the
+// daemon sweeps every home. Keyed by path, one session became three rows with three independent
+// watermarks. Measured on the author's machine: 50 Codex sessions duplicated; a repository's
+// update-status listing 12 pending where 7 were real; and one session whose ~/.codex row sat at
+// byte 2092162 (partly filed) while its two alias rows sat at 0 and pending — so the next close-out
+// would have filed already-filed content into the wiki again. Every duplicate also inflates the
+// cold-start "unsaved sessions" notice, i.e. the backlog grew faster than the work did.
+//
+// Two independent signals identify an alias:
+//   - the SAME FILE (`via = 'inode'`): inode + birthtime, both files present NOW. Not the device:
+//     the same inode was observed under two st_dev values (16777230 vs 16777231) across sweeps on
+//     macOS. Not without birthtime: a freed inode is reused by the next file created, so on a
+//     platform reporting birthtime 0 an inode number alone would hand a NEW transcript an old
+//     row's watermark and status. And never from recorded history alone: a row whose file is gone
+//     proves nothing about the inode that now carries its number.
+//   - for Codex, the SAME THREAD (`via = 'thread'`): a thread id names exactly one rollout, so the
+//     same session id in the same repository bucket is one conversation even when a home holds a
+//     COPY. A copy can freeze while another keeps growing, so a thread alias is re-judged every
+//     time it is offered (settleAlias) instead of trusted once.
+// Other harnesses get only the first signal: two distinct Claude files can legitimately share a
+// session id (resume/fork), and merging them would hide one of them.
+//
+// Cost: an alias is resolved by search ONCE and then remembered in capture_alias, so the daemon's
+// every-30s re-offer of each alias is a primary-key lookup plus a stat — never a scan that grows
+// with the queue. The search itself is indexed (file_key, session_id).
+
+const ALIAS_COLLAPSE_VERSION = 2;
+const STATUS_RANK: Record<string, number> = { distilled: 0, pending: 1, skipped: 2, lost: 3 };
+
+type AliasVia = "inode" | "thread" | "distinct";
+
+/** Device-free identity of a file on disk now (`ino:birthtime`), or null when it is not provable. */
+function fileKey(path: string): string | null {
+  try {
+    const st = identityStat(path);
+    return st.birthtimeMs ? `${st.ino}:${st.birthtimeMs}` : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A queued transcript still exists — plainly or as the `.zst` Codex rotated it into. */
+function transcriptPresent(path: string): boolean {
+  return existsSync(path) || (!path.endsWith(".zst") && existsSync(`${path}.zst`));
+}
+
+function hasRow(db: Database, path: string): boolean {
+  return db.query("SELECT 1 FROM capture_queue WHERE transcript_path = ?").get(path) !== null;
+}
+
+function rowOffset(db: Database, path: string): number {
+  return (
+    (db.query("SELECT byte_offset FROM capture_queue WHERE transcript_path = ?").get(path) as {
+      byte_offset: number | null;
+    } | null)?.byte_offset ?? 0
+  );
+}
+
+const PREFIX_CHUNK = 64 * 1024;
+
+/**
+ * Are the first `n` bytes of two files identical? Compared in 64 KB chunks that stop at the first
+ * mismatch: this runs under the queue's write lock, and a watermark can be tens of MB — allocating
+ * two offset-sized buffers there would make the lock's hold time and the memory grow with use.
+ */
+function sharesPrefix(x: string, y: string, n: number): boolean {
+  if (n <= 0) return true;
+  let fx: number | null = null;
+  let fy: number | null = null;
+  try {
+    fx = openSync(x, "r");
+    fy = openSync(y, "r");
+    const bx = Buffer.alloc(Math.min(PREFIX_CHUNK, n));
+    const by = Buffer.alloc(bx.length);
+    for (let pos = 0; pos < n; ) {
+      const want = Math.min(bx.length, n - pos);
+      const rx = readSync(fx, bx, 0, want, pos);
+      const ry = readSync(fy, by, 0, want, pos);
+      if (rx !== want || ry !== want || bx.compare(by, 0, want, 0, want) !== 0) return false;
+      pos += want;
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (fx !== null) closeSync(fx);
+    if (fy !== null) closeSync(fy);
+  }
+}
+
+/**
+ * THE rule for two spellings of one Codex thread that are different files (a copy, not a
+ * hardlink): may the row `held` carries at watermark `offset` and the file `other` be one log?
+ * enqueue (settleAlias) and the daily fold (collapseAliasRows) both decide with this, so the fold
+ * can never re-merge a pair enqueue split — which would delete the split row and have the next
+ * sweep re-insert it at offset 0, re-filing it every day.
+ *   - both readable: one must be a byte prefix of the other (rollouts are append-only logs);
+ *   - `held` gone, `other` readable: the row would MOVE onto `other`, so its watermark must fit;
+ *   - a compressed (.zst-only) or vanished side cannot be compared without decompressing whole
+ *     conversations, and the thread id — unique per rollout — stands.
+ */
+function sameThreadLog(held: string, offset: number, other: string): boolean {
+  const heldPlain = existsSync(held);
+  const otherPlain = existsSync(other);
+  if (heldPlain && otherPlain) return sharesPrefix(held, other, Math.min(sizeOf(held), sizeOf(other)));
+  if (otherPlain && !transcriptPresent(held)) return sizeOf(other) >= offset;
+  return true;
+}
+
+function recordAlias(db: Database, alias: string, canonical: string, via: AliasVia): void {
+  db.run(
+    "INSERT INTO capture_alias (alias_path, canonical_path, alias_key, via) VALUES (?, ?, ?, ?) " +
+      "ON CONFLICT(alias_path) DO UPDATE SET canonical_path=excluded.canonical_path, " +
+      "alias_key=excluded.alias_key, via=excluded.via",
+    [alias, canonical, fileKey(alias), via],
+  );
+}
+
+/**
+ * Move a row (watermark, status and issued offset intact) onto another spelling of the same
+ * transcript. Runs inside the caller's IMMEDIATE transaction, which is what makes the `to` path's
+ * absence — checked by the caller — still true at the UPDATE: no concurrent enqueue can insert it.
+ * Callers only move onto a file that exists, so a `lost` tombstone (the transcript expired
+ * unfiled) is no longer true of the row: it becomes `pending` again — the content is readable
+ * after all, and a tombstone on a live file would hide it from every backlog for good.
+ */
+function moveRow(db: Database, from: string, to: string, via: AliasVia): void {
+  db.run("DELETE FROM issued_offset WHERE transcript_path = ?", [to]);
+  db.run(
+    "UPDATE capture_queue SET transcript_path = ?, file_id = COALESCE(?, file_id), file_key = ?, " +
+      "status = CASE WHEN status = 'lost' THEN 'pending' ELSE status END WHERE transcript_path = ?",
+    [to, fileIdentity(to), fileKey(to), from],
+  );
+  // An issued offset is evidence about the row, not the spelling: it moves with the row.
+  db.run("UPDATE issued_offset SET transcript_path = ? WHERE transcript_path = ?", [to, from]);
+  db.run("DELETE FROM capture_alias WHERE alias_path = ?", [to]);
+  db.run("UPDATE capture_alias SET canonical_path = ? WHERE canonical_path = ? AND via != 'distinct'", [to, from]);
+  if (transcriptPresent(from)) recordAlias(db, from, to, via);
+}
+
+/**
+ * The existing row this (row-less) path is an alias of, or null. The most advanced candidate wins
+ * so a fold can never land on a lower watermark than the one already filed.
+ *
+ * `sessionId === null` is the lookup case (update-next/update-done hand us a bare path): the Codex
+ * thread signal then falls back to the rollout's file name, which embeds the thread id
+ * (`rollout-<timestamp>-<thread uuid>.jsonl`), scoped to the repository bucket when one is known.
+ */
+function findAliasRow(
+  db: Database,
+  transcriptPath: string,
+  sessionId: string | null,
+  repo: string | null,
+  sourceKind: string | null,
+): { path: string; via: AliasVia } | null {
+  const key = fileKey(transcriptPath);
+  if (key !== null) {
+    const candidates = db
+      .query(
+        "SELECT transcript_path FROM capture_queue WHERE file_key = ? AND transcript_path != ? ORDER BY byte_offset DESC",
+      )
+      .all(key, transcriptPath) as { transcript_path: string }[];
+    // The recorded key only nominates; the candidate's file must carry that identity right now.
+    for (const c of candidates) if (fileKey(c.transcript_path) === key) return { path: c.transcript_path, via: "inode" };
+  }
+  if (sessionId !== null) {
+    if (sourceKind !== "codex") return null;
+    const row = db
+      .query(
+        "SELECT transcript_path FROM capture_queue WHERE source_kind = 'codex' AND session_id = ? " +
+          "AND repo IS ? AND transcript_path != ? ORDER BY byte_offset DESC LIMIT 1",
+      )
+      .get(sessionId, repo, transcriptPath) as { transcript_path: string } | null;
+    return row ? { path: row.transcript_path, via: "thread" } : null;
+  }
+  const name = transcriptPath.slice(transcriptPath.lastIndexOf(sep) + 1).replace(/\.zst$/, "");
+  if (!name.startsWith("rollout-")) return null;
+  const tail = `${sep}${name}`;
+  const row = db
+    .query(
+      "SELECT transcript_path FROM capture_queue WHERE source_kind = 'codex' AND (? IS NULL OR repo = ?) " +
+        "AND (substr(transcript_path, -length(?)) = ? OR substr(transcript_path, -length(?)) = ?) " +
+        "AND transcript_path != ? ORDER BY byte_offset DESC LIMIT 1",
+    )
+    .get(repo, repo, tail, tail, `${tail}.zst`, `${tail}.zst`, transcriptPath) as { transcript_path: string } | null;
+  return row ? { path: row.transcript_path, via: "thread" } : null;
+}
+
+/**
+ * Which of the two spellings carries the row from now on. Normally the canonical one. The row
+ * MOVES to the alias when the canonical file is gone (a home deleted, an account migrated) — a
+ * canonical path nobody can read would strand the session — or, for a thread alias, when the alias
+ * is the copy that kept growing: a frozen copy as canonical would report "unchanged" forever while
+ * the live file accumulated work nobody sees. A thread pair is judged by sameThreadLog when it is
+ * first seen and whenever the alias overtakes the canonical file; a pair that is not one log is
+ * remembered as `distinct` and the alias keeps its own row. `fresh` = first sighting of this alias.
+ */
+function settleAlias(db: Database, alias: string, canonical: string, via: AliasVia, fresh: boolean): string {
+  if (!transcriptPresent(alias)) return canonical;
+  const canonicalGone = !transcriptPresent(canonical);
+  if (via === "inode") {
+    if (!canonicalGone) return canonical;
+    moveRow(db, canonical, alias, via);
+    return alias;
+  }
+  let overtaken = false;
+  if (!canonicalGone && existsSync(alias) && existsSync(canonical)) {
+    const a = statSync(alias);
+    const c = statSync(canonical);
+    overtaken = a.size > c.size && a.mtimeMs >= c.mtimeMs;
+  }
+  if ((fresh || canonicalGone || overtaken) && !sameThreadLog(canonical, rowOffset(db, canonical), alias)) {
+    // Not provably one log: stop folding, remember the verdict, let the alias carry its own row.
+    recordAlias(db, alias, canonical, "distinct");
+    return alias;
+  }
+  if (canonicalGone ? existsSync(alias) : overtaken) {
+    moveRow(db, canonical, alias, via);
+    return alias;
+  }
+  return canonical;
+}
+
+/**
+ * The path whose row carries this transcript's watermark. Callers hold an IMMEDIATE transaction.
+ * A path with its own row is its own canonical path; a remembered alias is re-checked (its
+ * canonical row still exists, both files are still the ones remembered) and settled; a pair once
+ * judged `distinct` stays apart; an unknown row-less path is searched once and remembered.
+ */
+function resolveQueuePath(
+  db: Database,
+  transcriptPath: string,
+  sessionId: string | null,
+  repo: string | null,
+  sourceKind: string | null,
+): string {
+  if (hasRow(db, transcriptPath)) return transcriptPath;
+  const mapped = db
+    .query("SELECT canonical_path, alias_key, via FROM capture_alias WHERE alias_path = ?")
+    .get(transcriptPath) as { canonical_path: string; alias_key: string | null; via: AliasVia } | null;
+  if (mapped) {
+    if (mapped.via === "distinct") return transcriptPath;
+    const aliasSame = mapped.alias_key === null || mapped.alias_key === fileKey(transcriptPath);
+    // A hardlink pair stays one only while the canonical path is still that inode: a canonical
+    // path deleted and recreated as a different file must not keep absorbing this one.
+    const canonicalSame =
+      mapped.via !== "inode" || !existsSync(mapped.canonical_path) || fileKey(mapped.canonical_path) === mapped.alias_key;
+    if (hasRow(db, mapped.canonical_path) && aliasSame && canonicalSame) {
+      return settleAlias(db, transcriptPath, mapped.canonical_path, mapped.via, false);
+    }
+    db.run("DELETE FROM capture_alias WHERE alias_path = ?", [transcriptPath]);
+  }
+  const found = findAliasRow(db, transcriptPath, sessionId, repo, sourceKind);
+  if (found === null) return transcriptPath;
+  recordAlias(db, transcriptPath, found.path, found.via);
+  return settleAlias(db, transcriptPath, found.path, found.via, true);
+}
+
+/**
+ * The queue path for any spelling of a transcript — what every path-keyed close-out entrypoint
+ * (update-next, update-done, save-current, related, ingest, autoupdate) resolves first, so
+ * `update-next <alias>` continues from the canonical watermark instead of re-reading from byte 0.
+ * `repo` (any spelling; bucketed here) scopes the rollout-name fallback when the caller knows it.
+ */
+export function canonicalQueuePath(transcriptPath: string, repo: string | null = null): string {
+  const bucket = repo ? captureBucket(repo) : null;
+  const db = connect();
+  try {
+    return db.transaction(() => resolveQueuePath(db, transcriptPath, null, bucket, null)).immediate();
+  } finally {
+    release(db);
+  }
+}
+
+type FoldRow = {
+  transcript_path: string;
+  session_id: string | null;
+  repo: string | null;
+  byte_offset: number | null;
+  status: string | null;
+  source_kind: string | null;
+  first_seen: string | null;
+};
+
+/** Most advanced first: highest watermark, then the most settled status, then the oldest. */
+function moreAdvanced(a: FoldRow, b: FoldRow): number {
+  return (
+    (b.byte_offset ?? 0) - (a.byte_offset ?? 0) ||
+    (STATUS_RANK[a.status ?? ""] ?? 9) - (STATUS_RANK[b.status ?? ""] ?? 9) ||
+    (a.first_seen ?? "").localeCompare(b.first_seen ?? "")
+  );
+}
+
+/**
+ * Fold duplicate rows of one transcript, keeping the most advanced row of each group and deleting
+ * the rest with their issued offsets, remembered as aliases. Two passes, the same two signals as
+ * enqueue and the same rules:
+ *   1. inode: rows whose files BOTH exist and stat to the same inode+birthtime now;
+ *   2. thread (Codex session id + repo bucket), over what is left: a row joins a group only when
+ *      sameThreadLog says it is one log with the group's kept row and no `distinct` verdict
+ *      stands between them; a new verdict of "not one log" is remembered, so a split pair is
+ *      compared once, not every day.
+ * The kept watermark is never lowered. A kept row whose file is gone moves onto a live member —
+ * which, by sameThreadLog, is at least as long as that watermark — exactly as settleAlias does.
+ *
+ * Repeatable and idempotent, not a one-shot: the first connect() runs it, and the daemon runs it
+ * again at startup and daily — an older daemon still running after an upgrade keeps writing alias
+ * rows until it restarts, and only a repeat pass folds those. Candidate selection is indexed.
+ */
+function collapseAliasRows(db: Database): number {
+  // Rows written before file_key existed (or by an older binary) get a NOMINATING key from their
+  // recorded id; it is verified against the files below and never trusted on its own.
+  db.run(
+    "UPDATE capture_queue SET file_key = substr(file_id, instr(file_id, ':') + 1) " +
+      "WHERE file_key IS NULL AND file_id LIKE '%:%:%' AND file_id NOT LIKE '%:0'",
+  );
+  const select =
+    "SELECT q.transcript_path, q.session_id, q.repo, q.byte_offset, q.status, q.source_kind, q.first_seen " +
+    "FROM capture_queue q WHERE ";
+  let removed = 0;
+  const fold = (keep: FoldRow, members: FoldRow[], via: AliasVia): void => {
+    let canonical = keep.transcript_path;
+    for (const d of members) {
+      db.run("DELETE FROM capture_queue WHERE transcript_path = ?", [d.transcript_path]);
+      db.run("DELETE FROM issued_offset WHERE transcript_path = ?", [d.transcript_path]);
+      removed += 1;
+    }
+    if (!transcriptPresent(canonical)) {
+      const live = members.find((d) => existsSync(d.transcript_path));
+      if (live) {
+        moveRow(db, canonical, live.transcript_path, via);
+        canonical = live.transcript_path;
+      }
+    }
+    for (const d of members) {
+      if (d.transcript_path !== canonical && transcriptPresent(d.transcript_path)) {
+        recordAlias(db, d.transcript_path, canonical, via);
+      }
+    }
+  };
+
+  // 1. inode
+  const byKey = new Map<string, FoldRow[]>();
+  const inodeRows = db
+    .query(
+      select +
+        "q.file_key IS NOT NULL AND EXISTS (SELECT 1 FROM capture_queue o " +
+        "WHERE o.file_key = q.file_key AND o.transcript_path != q.transcript_path)",
+    )
+    .all() as FoldRow[];
+  for (const r of inodeRows) {
+    const key = fileKey(r.transcript_path);
+    if (key !== null) byKey.set(key, [...(byKey.get(key) ?? []), r]);
+  }
+  for (const group of byKey.values()) {
+    if (group.length < 2) continue;
+    group.sort(moreAdvanced);
+    fold(group[0]!, group.slice(1), "inode");
+  }
+
+  // 2. thread
+  const threadRows = db
+    .query(
+      select +
+        "q.source_kind = 'codex' AND q.session_id IS NOT NULL AND EXISTS (SELECT 1 FROM capture_queue o " +
+        "WHERE o.session_id = q.session_id AND o.source_kind = 'codex' AND o.repo IS q.repo " +
+        "AND o.transcript_path != q.transcript_path)",
+    )
+    .all() as FoldRow[];
+  const byThread = new Map<string, FoldRow[]>();
+  for (const r of threadRows) {
+    const key = `${r.session_id}\0${r.repo ?? ""}`;
+    byThread.set(key, [...(byThread.get(key) ?? []), r]);
+  }
+  const distinct = db.query(
+    "SELECT 1 FROM capture_alias WHERE via = 'distinct' AND " +
+      "((alias_path = ? AND canonical_path = ?) OR (alias_path = ? AND canonical_path = ?))",
+  );
+  for (const group of byThread.values()) {
+    group.sort(moreAdvanced);
+    const clusters: { keep: FoldRow; members: FoldRow[] }[] = [];
+    for (const r of group) {
+      const home = clusters.find((c) => {
+        const k = c.keep.transcript_path;
+        if (distinct.get(r.transcript_path, k, k, r.transcript_path)) return false;
+        if (sameThreadLog(k, c.keep.byte_offset ?? 0, r.transcript_path)) return true;
+        recordAlias(db, r.transcript_path, k, "distinct");
+        return false;
+      });
+      if (home) home.members.push(r);
+      else clusters.push({ keep: r, members: [] });
+    }
+    for (const c of clusters) if (c.members.length) fold(c.keep, c.members, "thread");
+  }
+
+  // A remembered alias whose canonical row is gone (pruned, folded) or that now has a row of its
+  // own (written by an older binary) remembers nothing true — except a `distinct` verdict, which
+  // is ABOUT two rows that both exist, and lapses only once neither does.
+  db.run(
+    "DELETE FROM capture_alias WHERE (via != 'distinct' AND (canonical_path NOT IN (SELECT transcript_path FROM capture_queue) " +
+      "OR alias_path IN (SELECT transcript_path FROM capture_queue))) OR (via = 'distinct' AND " +
+      "canonical_path NOT IN (SELECT transcript_path FROM capture_queue) AND alias_path NOT IN (SELECT transcript_path FROM capture_queue))",
+  );
+  return removed;
+}
+
+/** The repeatable fold (see collapseAliasRows); returns how many duplicate rows were removed. */
+export function collapseAliases(): number {
+  const db = connect();
+  try {
+    return db.transaction(() => collapseAliasRows(db)).immediate();
+  } finally {
+    release(db);
   }
 }
 
@@ -736,79 +1203,105 @@ export function enqueue(
   // captured, invisible, unselectable — and self-selection cannot happen to a session nobody sees.
   if (repo) repo = captureBucket(repo);
   const db = connect();
-  const size = sizeOf(transcriptPath);
-  const currentFileId = fileIdentity(transcriptPath);
-  let recorded: EnqueueOutcome = "unchanged";
-  const row = db
-    .query(
-      "SELECT byte_offset, source_kind, file_id, status, lines, repo, session_id " +
-        "FROM capture_queue WHERE transcript_path = ?",
-    )
-    .get(transcriptPath) as {
-    byte_offset: number;
-    source_kind: string | null;
-    file_id: string | null;
-    status: string | null;
-    lines: number | null;
-    repo: string | null;
-    session_id: string | null;
-  } | null;
-  if (row === null) {
-    db.run(
-      "INSERT INTO capture_queue " +
-        "(transcript_path, session_id, repo, lines, status, source_kind, file_id) " +
-        "VALUES (?, ?, ?, ?, 'pending', ?, ?)",
-      [transcriptPath, sessionId, repo, lines, sourceKind, currentFileId],
-    );
-    recorded = "new";
-  } else if (
-    sourceKind === "opencode" &&
-    row.source_kind === "opencode" &&
-    ((row.file_id !== null && currentFileId !== null && row.file_id !== currentFileId) ||
-      (size > 0 && size < row.byte_offset))
-  ) {
-    // A retained distilled ledger row may outlive the 30-day plaintext export. If that logical
-    // path is later recreated with only newer messages, inode identity proves it is a new
-    // generation — except where stat cannot: Linux runtimes without statx birthtime report
-    // birthtimeMs=0, and a delete+recreate routinely REUSES the freed inode, so both generations
-    // stat to the same `dev:ino:0`. Exports are append-only, so a body shorter than the recorded
-    // watermark is itself positive evidence of regeneration — the fallback that needs no stat
-    // support. Both remain correct across a crash between file creation and enqueue.
-    db.run(
-      "UPDATE capture_queue SET byte_offset=0, status='pending', distilled_at=NULL, " +
-        "repo=COALESCE(repo, ?), session_id=COALESCE(session_id, ?), lines=?, file_id=? " +
-        "WHERE transcript_path=?",
-      [repo, sessionId, lines, currentFileId, transcriptPath],
-    );
-    // An offset issued against the previous generation says nothing about this one.
-    db.run("DELETE FROM issued_offset WHERE transcript_path = ?", [transcriptPath]);
-    recorded = "regenerated";
-  } else if (size > row.byte_offset && !alreadyRecorded(row, lines, repo, sessionId, currentFileId)) {
-    db.run(
-      "UPDATE capture_queue SET status='pending', repo=COALESCE(repo, ?), " +
-        "session_id=COALESCE(session_id, ?), lines=?, file_id=COALESCE(file_id, ?) WHERE transcript_path=?",
-      [repo, sessionId, lines, currentFileId, transcriptPath],
-    );
-    recorded = "grew";
-  } else if (row.file_id === null && currentFileId !== null) {
-    // Additive migration for a live row created before file identity was recorded. Do not reset
-    // its watermark: there is no earlier identity to compare against.
-    db.run("UPDATE capture_queue SET file_id=? WHERE transcript_path=?", [currentFileId, transcriptPath]);
-    recorded = "identity";
+  // Resolve and write under ONE immediate transaction: an alias of a queued transcript (another
+  // Codex home's hardlink or copy) re-offers THAT row instead of opening a second one, and two
+  // processes offering two spellings at once must not both decide "no row yet" and insert.
+  const offered = transcriptPath;
+  const offer = db.transaction((): EnqueueOutcome => {
+    transcriptPath = resolveQueuePath(db, transcriptPath, sessionId, repo, sourceKind);
+    const size = sizeOf(transcriptPath);
+    const currentFileId = fileIdentity(transcriptPath);
+    const currentKey = fileKey(transcriptPath);
+    let recorded: EnqueueOutcome = "unchanged";
+    const row = db
+      .query(
+        "SELECT byte_offset, source_kind, file_id, file_key, status, lines, repo, session_id " +
+          "FROM capture_queue WHERE transcript_path = ?",
+      )
+      .get(transcriptPath) as {
+      byte_offset: number;
+      source_kind: string | null;
+      file_id: string | null;
+      file_key: string | null;
+      status: string | null;
+      lines: number | null;
+      repo: string | null;
+      session_id: string | null;
+    } | null;
+    // `lines` was counted on the OFFERED file. Folded onto a different file (a copy, not a
+    // hardlink), that count describes the alias, not the row — writing it would overwrite the
+    // canonical count and announce a "grew" that never happened. Keep the row's own count.
+    if (row !== null && transcriptPath !== offered && (currentKey === null || currentKey !== fileKey(offered))) {
+      lines = row.lines ?? lines;
+    }
+    if (row === null) {
+      db.run(
+        "INSERT INTO capture_queue " +
+          "(transcript_path, session_id, repo, lines, status, source_kind, file_id, file_key) " +
+          "VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)",
+        [transcriptPath, sessionId, repo, lines, sourceKind, currentFileId, currentKey],
+      );
+      recorded = "new";
+    } else if (
+      sourceKind === "opencode" &&
+      row.source_kind === "opencode" &&
+      ((row.file_id !== null && currentFileId !== null && sansDevice(row.file_id) !== sansDevice(currentFileId)) ||
+        (size > 0 && size < row.byte_offset))
+    ) {
+      // A retained distilled ledger row may outlive the 30-day plaintext export. If that logical
+      // path is later recreated with only newer messages, inode identity proves it is a new
+      // generation — except where stat cannot: Linux runtimes without statx birthtime report
+      // birthtimeMs=0, and a delete+recreate routinely REUSES the freed inode, so both generations
+      // stat to the same `dev:ino:0`. Exports are append-only, so a body shorter than the recorded
+      // watermark is itself positive evidence of regeneration — the fallback that needs no stat
+      // support. Both remain correct across a crash between file creation and enqueue. The device
+      // is left out of the comparison: macOS reported one inode under two st_dev values across
+      // sweeps, which would otherwise reset a distilled row to 0 and file it all over again.
+      db.run(
+        "UPDATE capture_queue SET byte_offset=0, status='pending', distilled_at=NULL, " +
+          "repo=COALESCE(repo, ?), session_id=COALESCE(session_id, ?), lines=?, file_id=?, file_key=? " +
+          "WHERE transcript_path=?",
+        [repo, sessionId, lines, currentFileId, currentKey, transcriptPath],
+      );
+      // An offset issued against the previous generation says nothing about this one.
+      db.run("DELETE FROM issued_offset WHERE transcript_path = ?", [transcriptPath]);
+      recorded = "regenerated";
+    } else if (size > row.byte_offset && !alreadyRecorded(row, lines, repo, sessionId, currentFileId)) {
+      db.run(
+        "UPDATE capture_queue SET status='pending', repo=COALESCE(repo, ?), " +
+          "session_id=COALESCE(session_id, ?), lines=?, file_id=COALESCE(file_id, ?), " +
+          "file_key=COALESCE(?, file_key) WHERE transcript_path=?",
+        [repo, sessionId, lines, currentFileId, currentKey, transcriptPath],
+      );
+      recorded = "grew";
+    } else if ((row.file_id === null && currentFileId !== null) || (row.file_key === null && currentKey !== null)) {
+      // Additive migration for a live row created before file identity (or its device-free key)
+      // was recorded. Do not reset its watermark: there is no earlier identity to compare against.
+      db.run("UPDATE capture_queue SET file_id=COALESCE(file_id, ?), file_key=? WHERE transcript_path=?", [
+        currentFileId,
+        currentKey,
+        transcriptPath,
+      ]);
+      recorded = "identity";
+    }
+    // A sub-agent/fork thread carries no human turn of its own — it replays the parent's context.
+    // Keep the row (the ledger stays honest) but as `skipped`, with the watermark at
+    // the current size so the next sweep does not re-pend it. Asked lazily, only when a write
+    // happened, so an idle re-offer costs nothing.
+    if ((recorded === "new" || recorded === "grew" || recorded === "regenerated") && isSubagent?.()) {
+      db.run(
+        "UPDATE capture_queue SET status='skipped', byte_offset=?, distilled_at=datetime('now') WHERE transcript_path=?",
+        [size, transcriptPath],
+      );
+      recorded = "subagent";
+    }
+    return recorded;
+  });
+  try {
+    return offer.immediate();
+  } finally {
+    release(db);
   }
-  // A sub-agent/fork thread carries no human turn of its own — it replays the parent's context.
-  // Keep the row (the ledger stays honest) but as `skipped`, with the watermark at
-  // the current size so the next sweep does not re-pend it. Asked lazily, only when a write
-  // happened, so an idle re-offer costs nothing.
-  if ((recorded === "new" || recorded === "grew" || recorded === "regenerated") && isSubagent?.()) {
-    db.run(
-      "UPDATE capture_queue SET status='skipped', byte_offset=?, distilled_at=datetime('now') WHERE transcript_path=?",
-      [size, transcriptPath],
-    );
-    recorded = "subagent";
-  }
-  db.close();
-  return recorded;
 }
 
 export function pending(repo: string | null = null): CaptureRow[] {

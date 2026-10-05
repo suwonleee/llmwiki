@@ -399,6 +399,15 @@ function pruneExportsIfDue(force = false): void {
   } catch (e) {
     log(`queue prune FAILED (will retry tomorrow): ${e}`);
   }
+  // Duplicate rows of one transcript (another home's hardlink or copy) fold on the same clock:
+  // enqueue no longer writes them, but an older daemon still running after an upgrade does, and
+  // connect()'s first-run fold has already happened by then.
+  try {
+    const folded = capture.collapseAliases();
+    if (folded) log(`retention: folded ${folded} duplicate queue row(s) of one transcript`);
+  } catch (e) {
+    log(`alias fold FAILED (will retry tomorrow): ${e}`);
+  }
   // Rows queued before enqueue learned the sub-agent rule leave the backlog on the same clock.
   try {
     const skipped = capture.skipPendingSubagents((r) => isSubagentTranscript(r.source_kind, r.transcript_path));
