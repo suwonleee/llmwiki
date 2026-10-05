@@ -2,7 +2,7 @@
 // CODEX_HOMEs and the daemon sweeps all of them; keyed by path, one session became three rows with
 // independent watermarks (measured: a row at byte 2092162 beside two alias rows at 0, pending).
 // These pin the fold at enqueue, the alias-aware close-out, the re-point, and the one-time collapse.
-import { test, expect, afterEach } from "bun:test";
+import { test, expect, afterEach, beforeEach } from "bun:test";
 import { appendFileSync, readFileSync, linkSync, mkdirSync, mkdtempSync, rmSync, statSync, unlinkSync, writeFileSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,6 +18,19 @@ function tmp(prefix: string): string {
   tmps.push(d);
   return d;
 }
+// These cases model a platform that reports birthtime (macOS/APFS, Linux with statx). Bun 1.1.x on
+// Linux reports birthtimeMs 0, where file identity is deliberately disabled — so give each inode a
+// stable synthetic birthtime there instead of letting the host decide which contract runs. The
+// birthtime-0 contract itself is pinned by the dedicated cases below, which install their own seam.
+function birth(st: { ino: number; birthtimeMs: number }): number {
+  return st.birthtimeMs || 1_000_000_000_000 + st.ino;
+}
+beforeEach(() => {
+  capture._setIdentityStatForTests((p) => {
+    const st = statSync(p);
+    return { dev: st.dev, ino: st.ino, birthtimeMs: birth(st) };
+  });
+});
 afterEach(() => {
   capture._setIdentityStatForTests(null);
   for (const d of tmps.splice(0)) rmSync(d, { recursive: true, force: true });
@@ -200,8 +213,8 @@ test("the one-time migration collapses existing duplicates, keeping the most adv
   ins.run(tie1, "t-2", "/r", 100, "pending", "codex", null, "2026-09-01");
   ins.run(tie2, "t-2", "/r", 100, "distilled", "codex", null, "2026-09-02");
   // Same inode + birthtime under two DIFFERENT device numbers (observed on macOS) → one file.
-  ins.run(cl1, "c-1", "/r", 0, "pending", "claude-jsonl", `16777230:${st.ino}:${st.birthtimeMs}`, "2026-09-01");
-  ins.run(cl2, "c-1", "/r", 50, "pending", "claude-jsonl", `16777231:${st.ino}:${st.birthtimeMs}`, "2026-09-02");
+  ins.run(cl1, "c-1", "/r", 0, "pending", "claude-jsonl", `16777230:${st.ino}:${birth(st)}`, "2026-09-01");
+  ins.run(cl2, "c-1", "/r", 50, "pending", "claude-jsonl", `16777231:${st.ino}:${birth(st)}`, "2026-09-02");
   // Distinct non-codex files that merely share a session id are NOT merged.
   ins.run(sepA, "c-2", "/r", 0, "pending", "claude-jsonl", "1:20:7", "2026-09-01");
   ins.run(sepB, "c-2", "/r", 0, "pending", "claude-jsonl", "1:21:7", "2026-09-01");
@@ -367,7 +380,7 @@ test("opencode regeneration ignores an st_dev change on the same inode", () => {
   let dev = 16777230;
   capture._setIdentityStatForTests((p) => {
     const st = statSync(p);
-    return { dev, ino: st.ino, birthtimeMs: st.birthtimeMs };
+    return { dev, ino: st.ino, birthtimeMs: birth(st) };
   });
   capture.enqueue(exp, "ses_1", repo, 2, "opencode");
   capture.mark(exp, statSync(exp).size, "distilled");
