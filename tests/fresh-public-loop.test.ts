@@ -123,7 +123,11 @@ function prepareCapturedReleaseScenario(): Scenario {
     mustRun(["git", "--git-dir", remote, "tag", "-f", RELEASE_TAG, pinnedSha], scratch);
     mustRun(["git", "clone", "-q", "--branch", RELEASE_TAG, "--single-branch", "--no-hardlinks", remote, clone], scratch);
     expect(mustRun(["git", "rev-parse", "HEAD"]).trim()).toBe(pinnedSha);
-    expect(mustRun(["git", "describe", "--tags", "--exact-match"]).trim()).toBe(RELEASE_TAG);
+    // `--match` pins the lookup to the fixture tag. The bare clone inherits every tag of the source
+    // checkout, and when HEAD is itself a release (an annotated `vX.Y.Z` on the same commit — the
+    // exact state a person gets from `git clone` at a release tag), `git describe` prefers the
+    // annotated tag over this lightweight one and the assertion fails on a healthy tree.
+    expect(mustRun(["git", "describe", "--tags", "--exact-match", "--match", RELEASE_TAG]).trim()).toBe(RELEASE_TAG);
     expect(mustRun(["git", "remote", "get-url", "origin"]).trim()).toBe(remote);
 
     expect(mustRun(["bash", join(clone, "setup.sh"), "--harness", "claude"])).toContain("setup installed");
