@@ -169,9 +169,9 @@ function behindUpstream(repo: string): number {
 
 // category folders scanned for the page index + staleness (numbered + legacy), from the
 // resolved per-repo config: log categories + topic + legacy flat names (scanDirs(cfg)).
-/** Cold-start shape: `full` (default) or `slim` — env LLMWIKI_COLDSTART. */
+/** Cold-start shape: `slim` (default) or `full` — env LLMWIKI_COLDSTART. */
 export function coldStartMode(): "full" | "slim" {
-  return (process.env.LLMWIKI_COLDSTART ?? "").trim().toLowerCase() === "slim" ? "slim" : "full";
+  return (process.env.LLMWIKI_COLDSTART ?? "").trim().toLowerCase() === "full" ? "full" : "slim";
 }
 
 function categoryPages(root: string, catDirs: string[]): string[] {
@@ -323,10 +323,10 @@ export function buildContext(repo: string, opts: { affinity?: AffinityFile | nul
   // absent/stale data leaves both lists exactly as they were.
   const affinity = !hasWiki ? null : opts.affinity !== undefined ? opts.affinity : loadAffinity(proj);
 
-  // Slim cold start (LLMWIKI_COLDSTART=slim, OKF bundles only): the two page lists below give way
-  // to one pointer at the generated listing. Measured on 4 project wikis (160 runs): the injected
-  // context added cost (+$0.02/run) without a measurable accuracy gain over the wiki files alone,
-  // and in 120 runs no agent opened index.md on its own — so the listing is named instead of
+  // Slim cold start (default; LLMWIKI_COLDSTART=full opts out; OKF bundles only): the two page
+  // lists below give way to one pointer at the generated listing. Measured on 4 project wikis
+  // (480 Q&A + 107 code-task runs): slim matched full on accuracy and task score and ran ~7%
+  // cheaper, and no agent opened index.md on its own — so the listing is named instead of
   // pre-loaded, and the agent reads only the folder it needs.
   const slim = hasWiki && coldStartMode() === "slim" && isOkfBundle(proj);
   if (slim) {

@@ -1,5 +1,5 @@
-// Slim cold start (LLMWIKI_COLDSTART=slim): on an OKF bundle the two page lists give way to one
-// pointer at the generated index.md; the default (full) and a pre-OKF wiki are unchanged.
+// Slim cold start (the default): on an OKF bundle the two page lists give way to one pointer at the
+// generated index.md; LLMWIKI_COLDSTART=full and a pre-OKF wiki keep the page lists.
 import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -30,9 +30,10 @@ function okfRepo(): string {
 
 test("slim points at index.md instead of listing recent pages", () => {
   const repo = okfRepo();
+  process.env.LLMWIKI_COLDSTART = "full";
   const full = buildContext(repo);
   expect(full).toContain("recent pages in this repo's wiki");
-  process.env.LLMWIKI_COLDSTART = "slim";
+  delete process.env.LLMWIKI_COLDSTART;
   const slim = buildContext(repo);
   expect(slim).toContain("page listing: docs/wiki/index.md");
   expect(slim).toContain('llmwiki search . "<question>" --kind wiki');
