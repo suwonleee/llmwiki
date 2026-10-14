@@ -3,6 +3,7 @@
 // makes a denylist (the old recommendation) leave MCP and web tools auto-approvable.
 import { describe, expect, test } from "bun:test";
 import { RECOMMENDED_CLAUDE_CMD, claudeCommandRisk } from "../src/engine/claude.ts";
+import { opencodeMajor } from "../src/engine/doctor.ts";
 
 const split = (cmd: string) => cmd.split(/\s+/).filter(Boolean);
 
@@ -65,3 +66,18 @@ describe("claudeCommandRisk", () => {
   });
 });
 
+describe("opencodeMajor", () => {
+  test("reads the major version from either output shape", () => {
+    expect(opencodeMajor("1.19.0\n")).toBe(1);
+    expect(opencodeMajor("opencode 2.0.27")).toBe(2);
+  });
+
+  test("an upgrade notice before the version is not read as the version", () => {
+    expect(opencodeMajor("OpenCode 2.0.3 available — run /update\n1.19.0\n")).toBe(1);
+  });
+
+  test("unparseable output is null, not a guess", () => {
+    expect(opencodeMajor("")).toBeNull();
+    expect(opencodeMajor("dev build")).toBeNull();
+  });
+});

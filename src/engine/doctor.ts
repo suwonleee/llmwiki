@@ -390,6 +390,30 @@ export function inspectCodexInstall(
   return result;
 }
 
+/**
+ * Major version from `opencode --version` output ("1.19.0", "opencode 2.0.27"), or null.
+ *
+ * OpenCode 1.19 offers a one-command upgrade to OpenCode 2, which keeps the binary name and config
+ * folder but does not load 1.x plugins. Every file check below still passes after that upgrade,
+ * so the version is the only signal that read injection has silently stopped.
+ */
+export function opencodeMajor(versionOutput: string): number | null {
+  // The version is the last line: an upgrade notice printed before it ("2.0.3 available") must not
+  // be read as the installed version.
+  const last = versionOutput.trim().split("\n").pop() ?? "";
+  const m = last.match(/(\d+)\.\d+\.\d+/);
+  return m ? Number(m[1]) : null;
+}
+
+function probeOpencodeMajor(): number | null {
+  try {
+    const r = Bun.spawnSync(["opencode", "--version"], { stdout: "pipe", stderr: "ignore", timeout: 5000 });
+    return r.exitCode === 0 ? opencodeMajor(r.stdout.toString()) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function inspectOpenCodeInstall(
   configRoot: string,
   home: string = HOME,
@@ -1260,8 +1284,19 @@ export function runDoctor(
         console.log("  [opencode] ⚠️ OpenCode CLI not found on PATH");
         issues += 1;
       }
+      const major = status.installed ? probeOpencodeMajor() : null;
+      // On 2.x every file below can be in place and still do nothing; say so on each ✅ line too.
+      const inert = major !== null && major >= 2 ? ` (inert on ${major}.x)` : "";
+      if (inert) {
+        console.log(
+          `  [opencode] ❌ OpenCode ${major}.x — the llmwiki plugin targets the 1.x plugin API, which ${major}.x ` +
+            "does not load: read injection and /wiki-* session ids are off. Stay on OpenCode 1.x (npm `opencode-ai`) " +
+            "until the plugin is ported.",
+        );
+        issues += 1;
+      }
       if (status.plugin === "current") {
-        console.log("  [opencode] ✅ global read-injection plugin points to this clone");
+        console.log(`  [opencode] ✅ global read-injection plugin points to this clone${inert}`);
       } else {
         const reason = status.plugin === "foreign" ? "target is unrelated" : status.plugin;
         console.log(`  [opencode] ⚠️ plugin ${reason} — run \`${WIRE_OPENCODE_CMD}\``);
@@ -1280,7 +1315,7 @@ export function runDoctor(
         );
         issues += 1;
       } else {
-        console.log(`  [opencode] ✅ commands present: ${OPENCODE_COMMANDS.map((name) => `/${name}`).join(", ")}`);
+        console.log(`  [opencode] ✅ commands present: ${OPENCODE_COMMANDS.map((name) => `/${name}`).join(", ")}${inert}`);
       }
       if (status.staleCommands.length) {
         console.log(

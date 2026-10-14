@@ -27,3 +27,8 @@ bun <clone>/src/daemon/wire-opencode.ts --revert
 The plugin caches cold-start context per process and keeps the latest prompt per OpenCode
 session before requesting precision-first turn pointers from the shared engine. Failures
 remain silent so llmwiki cannot break an OpenCode turn.
+
+**OpenCode 1.x only.** OpenCode 1.19 offers `/update` / `opencode upgrade --major` to
+OpenCode 2, which keeps the `opencode` binary and config folder but does not load 1.x
+plugins — injection stops without an error. `llmwiki doctor` reports a 2.x CLI; stay on
+1.x (npm `opencode-ai`) until the plugin is ported.
