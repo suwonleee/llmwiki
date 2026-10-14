@@ -1,14 +1,16 @@
 #!/bin/bash
-# llmwiki PreToolUse edit-time rule injection (matcher: Edit|Write|MultiEdit|NotebookEdit).
+# llmwiki PreToolUse edit-time rule injection (matcher: Edit|Write|MultiEdit|NotebookEdit|Bash).
 #
 # Thin Claude-Code adapter: the logic lives in the engine (src/engine/edit-rules.ts). Claude Code
-# pipes the hook payload JSON ({session_id, cwd, tool_name, tool_input.file_path, agent_id?, ...})
-# on stdin; we forward it untouched to the lightweight hook entrypoint.
+# pipes the hook payload JSON ({session_id, cwd, tool_name, tool_input.file_path | .command,
+# agent_id?, ...}) on stdin; we forward it untouched to the lightweight hook entrypoint. For Bash
+# the engine first decides from the command string whether it writes a file at all
+# (src/engine/bash-writes.ts); a read-only command is silent before any wiki read.
 #
 # Output contract: SILENT (zero bytes) unless a human-confirmed rule whose `applies_to` globs match
 # the target file has not yet been shown in this session. Then, by LLMWIKI_EDIT_RULES:
 #   gate (default) → {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",
-#                     "permissionDecisionReason":"<rules> … retry the same edit."}} — once per rule
+#                     "permissionDecisionReason":"<rules> … retry the same edit|command."}} — once per rule
 #                     and per path, so the retry passes
 #   advise         → {"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"<rules>"}}
 #   off            → nothing

@@ -549,6 +549,17 @@ export function reassertClaudeReadHooks(): string[] {
   return notes;
 }
 
+/** The matcher of our PreToolUse group when it is not the current one, else null (or unreadable). */
+function staleEditMatcher(settingsText: string): string | null {
+  try {
+    const groups = (JSON.parse(settingsText)?.hooks?.PreToolUse ?? []) as { matcher?: string; hooks?: { command?: string }[] }[];
+    const ours = groups.find((g) => (g.hooks ?? []).some((h) => (h.command ?? "").includes("pretooluse-inject.sh")));
+    return ours && (ours.matcher ?? "") !== EDIT_HOOK_MATCHER ? (ours.matcher ?? "") : null;
+  } catch {
+    return null;
+  }
+}
+
 function repairHook(sp: string, event = "SessionStart", cmd = SESSIONSTART_CMD, matcher = "", timeout?: number): string {
   let settings: any;
   try {
@@ -1087,8 +1098,16 @@ export function runDoctor(
 
     // edit-time path rules (PreToolUse) — same presence key + self-heal
     const hasEdit = txt.includes("pretooluse-inject.sh") && txt.includes("PreToolUse");
-    if (hasEdit && norm.includes(EDITRULES_SCRIPT)) {
+    const staleMatcher = hasEdit ? staleEditMatcher(txt) : null;
+    if (hasEdit && norm.includes(EDITRULES_SCRIPT) && staleMatcher === null) {
       console.log(`  [${name}] ✅ edit-rules hook present`);
+    } else if (hasEdit && norm.includes(EDITRULES_SCRIPT)) {
+      // An install from before Bash was matched: shell-command writes go unseen. Re-pointing (not
+      // --fix's append) replaces the group in place.
+      console.log(
+        `  [${name}] ⚠️ PreToolUse edit-rules hook matcher is "${staleMatcher}", not "${EDIT_HOOK_MATCHER}" (re-point: ${WIRE_CLAUDE_CMD})`,
+      );
+      issues += 1;
     } else if (hasEdit) {
       console.log(`  [${name}] ⚠️ PreToolUse edit-rules hook points to a different clone (re-point: ${WIRE_CLAUDE_CMD})`);
       issues += 1;

@@ -136,9 +136,13 @@ async function turnContextHook(repo: string): Promise<void> {
 }
 
 /**
- * PreToolUse (Edit|Write|MultiEdit|NotebookEdit): the human-confirmed rules whose `applies_to`
+ * PreToolUse (Edit|Write|MultiEdit|NotebookEdit|Bash): the human-confirmed rules whose `applies_to`
  * globs match the file about to be edited (engine/edit-rules.ts). Unlike turn-context, subagents
  * ARE served — they edit code too, and the rule has to reach whichever context is editing.
+ *
+ * Bash fires on every shell command, so "is this command a write, and of what?" is answered first,
+ * by a pure string scan (engine/bash-writes.ts) — a read-only command exits before the enrollment
+ * check, the edit-rules module or any wiki read is loaded.
  */
 async function editContextHook(repo: string): Promise<void> {
   if ((process.env.LLMWIKI_ENGINE_SUBPROCESS ?? "") !== "") return;
@@ -146,9 +150,18 @@ async function editContextHook(repo: string): Promise<void> {
   if (!payload) return;
   const input = payload.tool_input;
   const tool = typeof input === "object" && input !== null ? (input as Payload) : {};
-  const filePath = String(tool.file_path ?? tool.notebook_path ?? "").trim();
   const sessionId = String(payload.session_id ?? "").trim();
-  if (!filePath || !sessionId) return;
+  if (!sessionId) return;
+  let filePath = "";
+  let bashTargets: string[] | undefined;
+  if (payload.tool_name === "Bash") {
+    const { bashWriteTargets } = await import("./engine/bash-writes.ts");
+    bashTargets = bashWriteTargets(String(tool.command ?? ""));
+    if (!bashTargets.length) return;
+  } else {
+    filePath = String(tool.file_path ?? tool.notebook_path ?? "").trim();
+    if (!filePath) return;
+  }
   const { buildEditRules, editRulesMode } = await import("./engine/edit-rules.ts");
   const mode = editRulesMode();
   if (mode === "off") return;
@@ -164,6 +177,7 @@ async function editContextHook(repo: string): Promise<void> {
     sessionId,
     agentId: String(payload.agent_id ?? "").trim(),
     filePath,
+    bashTargets,
     cwd: target,
     mode,
   });

@@ -9,6 +9,10 @@
 //
 //   x-llmwiki: { applies_to: ["src/adapters/**"], rule: "외부 httpx 요청에 User-Agent: …" }
 //
+// The same delivery covers a file written through the Bash tool (`sed -i`, `python3 - <<EOF …
+// open(p,'w')`, `cat > f`, …): bash-writes.ts decides from the command string alone whether it is
+// a write and which paths it names, and only then does this module resolve and match them.
+//
 // `x-llmwiki` is an OKF producer-extension key (consumers must preserve it, okf.ts). `applies_to`
 // globs are relative to the wiki root — the project directory that owns docs/wiki.
 //
@@ -58,10 +62,11 @@ export const MAX_EDIT_RULES_CHARS = 1200;
 const CACHE_VERSION = 1;
 const CACHE_MAX_BYTES = 1024 * 1024;
 
-// The file-editing tools whose `tool_input` names the target path — the PreToolUse matcher every
-// installer writes. A tool-name regex, not an event-source list, so the SessionStart enumeration
-// hazard (tests/hook-matcher-drift.test.ts) does not apply.
-export const EDIT_HOOK_MATCHER = "Edit|Write|MultiEdit|NotebookEdit";
+// The file-editing tools whose `tool_input` names the target path, plus Bash (whose command is
+// scanned for writes) — the PreToolUse matcher every installer writes. A tool-name regex, not an
+// event-source list, so the SessionStart enumeration hazard (tests/hook-matcher-drift.test.ts)
+// does not apply. One group, not two: install, uninstall and doctor keep handling exactly one entry.
+export const EDIT_HOOK_MATCHER = "Edit|Write|MultiEdit|NotebookEdit|Bash";
 
 export type EditRulesMode = "gate" | "advise" | "off";
 
@@ -160,6 +165,47 @@ export function repoRelativePath(root: string, file: string, cwd: string = root)
   if (!file) return null;
   const abs = resolve(cwd, file);
   return inside(resolve(root), abs) ?? inside(realDeep(resolve(root)), realDeep(abs));
+}
+
+/** Files one expansion may contribute — a fallback candidate must not turn into a repo walk. */
+const EXPAND_CAP = 200;
+
+/**
+ * Shell-command targets (bash-writes.ts) as absolute paths: `~`/`$HOME` expanded, a glob
+ * (`src/adapters/*.py`) and an existing directory (`find src/adapters | xargs sed -i …`) expanded
+ * to the files under it, each capped. Runs only after the command was judged a write.
+ */
+export function expandBashTargets(targets: readonly string[], cwd: string): string[] {
+  const home = process.env.HOME ?? "";
+  const out = new Set<string>();
+  const scan = (base: string, pattern: string): void => {
+    let n = 0;
+    try {
+      for (const f of new Bun.Glob(pattern).scanSync({ cwd: base, onlyFiles: true, absolute: true })) {
+        out.add(f);
+        if (++n >= EXPAND_CAP) break;
+      }
+    } catch {
+      /* missing base → nothing */
+    }
+  };
+  for (const raw of targets) {
+    const t = home ? raw.replace(/^(?:~|\$HOME)(?=\/|$)/, home) : raw;
+    const parts = t.split("/");
+    const g = parts.findIndex((p) => /[*?[{]/.test(p));
+    if (g >= 0) {
+      scan(resolve(cwd, parts.slice(0, g).join("/") || (t.startsWith("/") ? "/" : ".")), parts.slice(g).join("/"));
+      continue;
+    }
+    const abs = resolve(cwd, t);
+    out.add(abs);
+    try {
+      if (lstatSync(abs).isDirectory()) scan(abs, "**/*");
+    } catch {
+      /* a file not written yet */
+    }
+  }
+  return [...out];
 }
 
 // ---- loading (cached) -------------------------------------------------------------------
@@ -381,11 +427,20 @@ const RETRY: LangCatalog<string> = {
   zh: "请先遵循这些规则，然后重试同一编辑。",
 };
 
+const RETRY_COMMAND: LangCatalog<string> = {
+  en: "Apply these, then retry the same command.",
+  ko: "이 규칙을 반영한 뒤 같은 명령을 다시 실행할 것.",
+  ja: "これらを反映してから、同じコマンドをもう一度実行すること。",
+  zh: "请先遵循这些规则，然后重试同一命令。",
+};
+
 export interface EditRulesInput {
   readonly root: string;
   readonly sessionId: string;
   readonly agentId?: string;
   readonly filePath: string;
+  /** Bash: the command's write targets (bash-writes.ts) — replaces `filePath`. */
+  readonly bashTargets?: readonly string[];
   readonly cwd?: string;
   readonly mode: EditRulesMode;
 }
@@ -402,9 +457,21 @@ export interface EditRulesResult {
 export async function buildEditRules(input: EditRulesInput): Promise<EditRulesResult | null> {
   try {
     if (input.mode === "off" || !input.sessionId) return null; // no session → no dedupe → never gate
-    const rel = repoRelativePath(input.root, input.filePath, input.cwd ?? input.root);
-    if (!rel) return null;
-    const matched = await rulesFor(input.root, rel);
+    const cwd = input.cwd ?? input.root;
+    const targets = input.bashTargets ? expandBashTargets(input.bashTargets, cwd) : [input.filePath];
+    const rels = [...new Set(targets.map((t) => repoRelativePath(input.root, t, cwd)).filter((r): r is string => !!r))];
+    if (!rels.length) return null;
+    const hit = new Set<string>(); // the targets some rule applies to — the header and the deny key
+    const matched = (await loadEditRules(input.root)).filter((r) => {
+      let any = false;
+      for (const rel of rels) {
+        if (r.globs.some((g) => globMatches(g, rel))) {
+          hit.add(rel);
+          any = true;
+        }
+      }
+      return any;
+    });
     if (!matched.length) return null;
     const dir = markerDir(input.root, input.sessionId, input.agentId ?? "");
     if (!dir) return null;
@@ -413,8 +480,9 @@ export async function buildEditRules(input: EditRulesInput): Promise<EditRulesRe
 
     const { pickLangValue, resolveWikiLang } = await import("./config.ts");
     const lang = resolveWikiLang(input.root);
-    const head = pickLangValue(HEAD, lang)(rel);
-    const tail = pickLangValue(RETRY, lang);
+    const shown = [...hit];
+    const head = pickLangValue(HEAD, lang)(shown.length > 3 ? `${shown.slice(0, 3).join(", ")}, …` : shown.join(", "));
+    const tail = pickLangValue(input.bashTargets ? RETRY_COMMAND : RETRY, lang);
     const lines: string[] = [];
     let size = head.length + 1 + tail.length;
     for (const r of fresh) {
@@ -429,8 +497,9 @@ export async function buildEditRules(input: EditRulesInput): Promise<EditRulesRe
     }
     if (!lines.length) return null;
     // Never deny the same path twice: rules left over after a gate (past the cap) ride along as
-    // after-the-fact context on the retry instead of blocking it again.
-    const deny = input.mode === "gate" && claim(dir, keyOf("p", rel));
+    // after-the-fact context on the retry instead of blocking it again. Every hit path is claimed
+    // (map, not some — no short-circuit), so a command retried as-is is never denied again.
+    const deny = input.mode === "gate" && shown.map((rel) => claim(dir, keyOf("p", rel))).some(Boolean);
     const text = [head, ...lines, ...(deny ? [tail] : [])].join("\n");
     return { deny, text };
   } catch {

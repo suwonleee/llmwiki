@@ -55,6 +55,8 @@ describe("Claude clone install: PreToolUse edit-rules hook", () => {
       },
     ]);
     expect(settings().hooks.PreToolUse[0]).toEqual(GUARD);
+    // Bash too: agents edit through shell commands (bash-writes.ts), in one group with the edit tools.
+    expect(EDIT_HOOK_MATCHER.split("|")).toEqual(["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"]);
 
     expect(wire().code).toBe(0);
     expect(ours()).toHaveLength(1);
@@ -81,6 +83,20 @@ describe("Claude clone install: PreToolUse edit-rules hook", () => {
     expect(doctor("--fix")).toContain("re-registered");
     expect(ours()).toHaveLength(1);
     expect(ours()[0].matcher).toBe(EDIT_HOOK_MATCHER);
+    expect(settings().hooks.PreToolUse[0]).toEqual(GUARD);
+  });
+
+  test("an install from before Bash was matched is flagged by doctor and re-pointed by setup", () => {
+    wire();
+    const doctor = () => run([join(ROOT, "src", "cli.ts"), "doctor", "--harness", "claude"]).out;
+    const s = settings();
+    for (const g of s.hooks.PreToolUse) if (JSON.stringify(g).includes("pretooluse-inject.sh")) g.matcher = "Edit|Write|MultiEdit|NotebookEdit";
+    writeFileSync(join(profile, "settings.json"), JSON.stringify(s));
+    expect(doctor()).toContain('edit-rules hook matcher is "Edit|Write|MultiEdit|NotebookEdit"');
+    expect(wire().code).toBe(0);
+    expect(ours()).toHaveLength(1);
+    expect(ours()[0].matcher).toBe(EDIT_HOOK_MATCHER);
+    expect(doctor()).toContain("edit-rules hook present");
     expect(settings().hooks.PreToolUse[0]).toEqual(GUARD);
   });
 });
