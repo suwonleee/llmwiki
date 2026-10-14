@@ -10,6 +10,17 @@ function read(relative: string): string {
   return readFileSync(join(ROOT, relative), "utf8");
 }
 
+function guidePath(readme: string): string {
+  return readme === "README.md" ? "readmes/GUIDE.md" : readme.replace("README.", "GUIDE.");
+}
+
+// The short entry point links to the detailed, localized contract; check both surfaces.
+function readPublicDocs(path: string): string {
+  const content = read(path);
+  return /(?:^|\/)README(?:\.[a-z]+)?\.md$/.test(path)
+    ? `${content}\n${read(guidePath(path))}` : content;
+}
+
 type PlatformSupport = {
   installation: "supported";
   setup_shell: "posix" | "git-bash" | "posix-wsl2";
@@ -236,10 +247,10 @@ describe("public machine-readable support contract", () => {
 
   test("publishes native-Windows Bun setup without retired service instructions in every language", () => {
     for (const path of ["readmes/README.ja.md", "readmes/README.zh.md"]) {
-      expect(read(path)).toContain("irm bun.sh/install.ps1 \\| iex");
+      expect(readPublicDocs(path)).toContain("irm bun.sh/install.ps1 \\| iex");
     }
     for (const path of ["setup_text.md", "reference/INSTALLATION_FLOW.md", "README.md", "readmes/README.ko.md", "readmes/README.ja.md", "readmes/README.zh.md"]) {
-      const content = read(path);
+      const content = readPublicDocs(path);
       expect(content).not.toMatch(/Do not attempt a native-Windows install/i);
       expect(content).not.toMatch(/native Windows.*(?:Task Scheduler|NSSM).*manual/i);
       expect(content).not.toMatch(/ネイティブWindows.*(?:Task Scheduler|NSSM).*手動/);
@@ -262,7 +273,7 @@ describe("public machine-readable support contract", () => {
       { path: "readmes/README.zh.md", heading: "手动安装备选", native: /原生 Windows 的所有harness: 显式使用 `bun <clone>\/src\/cli\.ts …`/, restart: /OpenCode: 初次setup或clone重新指向后重启/ },
     ];
     for (const item of localized) {
-      const fallback = markdownSection(read(item.path), item.heading);
+      const fallback = markdownSection(read(guidePath(item.path)), item.heading);
       expect(fallback).toMatch(item.native);
       expect(fallback).toMatch(item.restart);
       expect(fallback).toContain("PowerShell");

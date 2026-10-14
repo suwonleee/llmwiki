@@ -8,6 +8,17 @@ function read(relative: string): string {
   return readFileSync(join(ROOT, relative), "utf8");
 }
 
+function guidePath(readme: string): string {
+  return readme === "README.md" ? "readmes/GUIDE.md" : readme.replace("README.", "GUIDE.");
+}
+
+// The short entry point links to the detailed, localized contract; check both surfaces.
+function readPublicDocs(path: string): string {
+  const content = read(path);
+  return /(?:^|\/)README(?:\.[a-z]+)?\.md$/.test(path)
+    ? `${content}\n${read(guidePath(path))}` : content;
+}
+
 describe("public onboarding documentation", () => {
   test("keeps the agent setup contract exact and executable", () => {
     const contract = read("setup_text.md");
@@ -54,7 +65,9 @@ describe("public onboarding documentation", () => {
       ["readmes/README.zh.md", "作者信息"],
     ] as const;
     for (const [path, attributionRule] of readmes) {
-      const content = read(path);
+      const content = readPublicDocs(path);
+      expect(read(path)).toContain(guidePath(path).split("/").pop()!);
+      expect(read(path)).toContain("OKF v0.2");
       expect(content).toContain("setup_text.md");
       expect(content).toContain("INSTALLATION_FLOW.md");
       expect(content).toContain("support-contract.json");
@@ -74,7 +87,7 @@ describe("public onboarding documentation", () => {
       "readmes/README.ja.md",
       "readmes/README.zh.md",
     ]) {
-      const content = read(path);
+      const content = readPublicDocs(path);
       expect(content).toContain("llmwiki init");
       expect(content).toContain("llmwiki --help");
       expect(content).toContain("llmwiki <command> --help");
@@ -92,7 +105,7 @@ describe("public onboarding documentation", () => {
     // the daemon kept sweeping pre-pull code, the OpenCode plugin copy stayed old, and doctor said
     // so while the README had no update procedure at all to send anyone to.
     for (const path of ["README.md", "readmes/README.ko.md", "readmes/README.ja.md", "readmes/README.zh.md"]) {
-      const content = read(path);
+      const content = readPublicDocs(path);
       expect(content, path).toContain("git pull && ./setup.sh");
       // The reason, not just the command — a bare command is the thing people skip.
       expect(content, path).toContain("[daemon] ⚠️ running code older than this clone");
@@ -124,7 +137,7 @@ describe("public onboarding documentation", () => {
       "skill/wiki-save.md",
       "skill/wiki-deep.md",
     ];
-    for (const path of surfaces) expect(read(path)).not.toContain("wiki-fast");
+    for (const path of surfaces) expect(readPublicDocs(path)).not.toContain("wiki-fast");
   });
 });
 
@@ -139,12 +152,12 @@ test("every README says daemon-sync heals the stale-daemon drift and that the cl
     "readmes/README.ja.md",
     "readmes/README.zh.md",
   ]) {
-    const content = read(path);
+    const content = readPublicDocs(path);
     expect(content, `${path} must name the command`).toContain("llmwiki daemon-sync");
     // …and must not leave `doctor --fix` as the only route, which is what sent people to a full
     // health run for a one-line fix.
     expect(content, `${path} must point at the close-out`).toContain("/wiki-save");
-    expect(content, `${path} must list the command in the dispatcher registry`).toContain(
+    expect(content, `${path} guide must list the command in the dispatcher registry`).toContain(
       "db-health·daemon-sync·wiki-clean",
     );
   }
@@ -161,7 +174,7 @@ test("every README's daily-use table keeps its scope caveat and its verification
     "readmes/README.ja.md",
     "readmes/README.zh.md",
   ]) {
-    const content = read(path);
+    const content = readPublicDocs(path);
     // measured, dated, and bounded to one machine — never a projection
     expect(content, `${path} must date the measurement`).toContain("2026-08-21");
     expect(content, `${path} must state the corpus size`).toContain("997");
