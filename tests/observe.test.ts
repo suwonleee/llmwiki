@@ -228,6 +228,13 @@ describe("Codex observer", () => {
     expect(found).toEqual(["rollout-a.jsonl", "rollout-b.jsonl.zst"]);
   });
 
+  test("a rollout caught mid-compression is read once, from the plain file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "llmwiki-sessions-"));
+    writeFileSync(join(dir, "rollout-c.jsonl"), "");
+    writeFileSync(join(dir, "rollout-c.jsonl.zst"), "");
+    expect(discoverCodexRollouts(dir).map((f) => f.split("/").pop())).toEqual(["rollout-c.jsonl"]);
+  });
+
   // Codex compresses cold rollouts; skipping them made an old session's reads count as zero.
   test("a compressed rollout's reads are counted", () => {
     const dir = mkdtempSync(join(tmpdir(), "llmwiki-rollout-"));

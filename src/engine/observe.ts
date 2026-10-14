@@ -250,7 +250,10 @@ export function discoverCodexRollouts(rootDir?: string): string[] {
     }
   };
   walk(base);
-  return out;
+  // While Codex compresses a rollout both spellings exist for a moment; reading both would count
+  // every wiki read in it twice. The plain file is the one still being written — keep it.
+  const plain = new Set(out.filter((f) => f.endsWith(".jsonl")));
+  return out.filter((f) => !f.endsWith(".zst") || !plain.has(f.slice(0, -".zst".length)));
 }
 
 // `observed`, when given, receives the session id of every rollout that was actually read.
