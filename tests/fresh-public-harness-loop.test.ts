@@ -190,15 +190,15 @@ describe("fresh public clone across non-Claude harnesses", () => {
     const session = "fresh-opencode-session";
     seedOpenCode(s, session);
     const pluginPath = join(s.env.XDG_CONFIG_HOME!, "opencode", "plugin", "llmwiki.ts");
-    const plugin = (await import(`${pluginPath}?fresh=${Date.now()}`)).default as (input: any) => Promise<Record<string, any>>;
+    // One file serves both plugin APIs; OpenCode 1.x calls `default.server`.
+    const plugin = (await import(`${pluginPath}?fresh=${Date.now()}`)).default.server as (input: any) => Promise<Record<string, any>>;
     const dollar = (strings: TemplateStringsArray, ...values: unknown[]) => {
-      // The installed adapter has two command templates, both shaped as
-      // `bun ${ROOT}/src/<entrypoint> <command> ${args}`. Preserve interpolated paths as one argv
-      // element even when the public clone path contains spaces.
-      const afterRoot = strings[1]!.trim().split(/\s+/).filter(Boolean);
-      const entrypoint = String(values[0]) + afterRoot.shift();
-      const argv = ["bun", entrypoint, ...afterRoot];
-      const tail = values[1];
+      // The installed adapter runs one template, `bun ${ROOT}/src/${script}.ts ${args}`. Interpolated
+      // paths stay one argv element even when the public clone path contains spaces; the args
+      // array expands to one element per argument, as Bun's shell does.
+      const entrypoint = `${String(values[0])}${strings[1]}${String(values[1])}${strings[2]!.trim()}`;
+      const argv = ["bun", entrypoint];
+      const tail = values[2];
       if (Array.isArray(tail)) argv.push(...tail.map(String));
       else if (tail !== undefined) argv.push(String(tail));
       const chain: any = {
