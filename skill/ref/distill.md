@@ -6,7 +6,7 @@ Use this when lint reports `topic-oversize`. `llmwiki` below — including insid
     - Derived state is engine-held, so this never writes into the repository.
     - The recovery net must hold the page's CURRENT state — git history cannot: commits happen only when instructed, so bullets accreted by recent per-session close-outs are routinely uncommitted, and a git diff would never show them being dropped.
 2. **Rebuild only from its cited transcripts** (raw re-grounding — the one rewrite the anti-drift rule allows; never from other wiki pages), collapsing accreted bullets into a current synthesis.
-    - `status: superseded`/`superseded_by` frontmatter is preserved verbatim.
+    - Supersession (`status: deprecated` + `superseded_by`/`superseded_at`) and `verified` frontmatter are preserved verbatim; `sources` keeps one entry per remaining footnote label.
 3. **Engine-verified no-loss gate (hard)**: `llmwiki distill-verify <snapshot> <page>` must pass.
     - It deterministically checks that the **citation set did not shrink** — every `[^sN]` source on the snapshot is still cited. Merging true duplicate footnotes is fine (set semantics), but say so in the report.
     - It checks that every **`> [conflict]` callout survived verbatim**.

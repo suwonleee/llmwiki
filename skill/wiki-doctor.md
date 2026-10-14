@@ -25,7 +25,7 @@ $ARGUMENTS
 - Human judgment is required only for direction shifts and genuinely unresolved contradictions.
   Ordinary lint repair, source lookup, cross-linking, and filing are the agent's work.
 - Custom conventions: if `llmwiki config <repo>` shows a non-default source, run
-  `llmwiki conventions <repo>` FIRST and follow ITS category table (dirs · domains · review
+  `llmwiki conventions <repo>` FIRST and follow ITS category table (dirs · types · review
   gates) over any category names written in this workflow. The queue (`0_review/`) and quiz
   (`6_quiz/`) folders are fixed structure — those names never change.
 - Structural migration is gated: `llmwiki migrate <repo>` (dry-run) is free detection — always
@@ -100,6 +100,10 @@ $ARGUMENTS
    Continue even when it exits 1: that means deterministic repair completed but one or more
    evidence-bearing problems still need this agent's judgment. Read the entire report.
 
+   Its `okf` line says whether `docs/wiki/` is an OKF v0.2 bundle. A bundle is kept conformant by
+   the fix itself; a legacy wiki is reported, never converted here — conversion is the human's
+   call (`llmwiki okf <repo>` dry-run, then `--commit` only with their OK).
+
    Then run `llmwiki migrate <repo>` (dry-run) as the structure-drift check. If it plans
    renames, surface the plan and resolve it per the Safety boundary's migration gate BEFORE
    the lint repair passes below — page repairs on a drifted structure file into folders a
@@ -114,12 +118,14 @@ $ARGUMENTS
      claim merely to silence lint.
    - missing/duplicate footnote definitions: repair the definition mechanically while preserving
      the claim-to-source relation.
-   - dangling links: point to the intended existing page only when the relationship is evident;
-     otherwise remove the broken navigation token without inventing a relationship.
+   - dangling links: point to the intended existing page (relative markdown link, never
+     `[[wikilinks]]`) only when the relationship is evident; otherwise remove the broken
+     navigation token without inventing a relationship.
    - missing or invalid frontmatter: derive fields from the page body and active
-     `llmwiki conventions <repo>` output. Do not invent a decision, status, or date.
-   - invalid supersession: find the actual newer page and repair `superseded_by`; never fabricate a
-     target.
+     `llmwiki conventions <repo>` output (`type` from the folder; `status` stable|draft|deprecated).
+     Do not invent a decision, status, or date.
+   - invalid supersession: find the actual newer page and repair `superseded_by` (with
+     `status: deprecated`); never fabricate a target.
 
    Validate each edited page immediately:
 

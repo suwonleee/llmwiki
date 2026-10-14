@@ -225,6 +225,14 @@ cp llmwiki.config.example.toml llmwiki.config.toml   # 英文，注释齐全
 - **零检索成本**
     - 摘录不进搜索索引、不占主题页预算 — 添加证据既不损检索质量，也不占正文篇幅
 
+### Open Knowledge Format (OKF v0.2)
+
+`docs/wiki/` 是一个 [OKF v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format) bundle —— 任何 OKF 阅读器都能直接打开，llmwiki 也能读取任意 OKF bundle。
+
+- 每个页面都带 `type`（`Decision` · `Topic` · `Current State` …）· `status`（`stable` · `draft` · `deprecated`）· `generated: { by, at }`，每个脚注对应一条 `sources`；链接使用相对 markdown 链接，而非 `[[wikilink]]`
+- 每个文件夹有生成的 `index.md`；`log.md` 按日期分组、最新在前（由 `llmwiki log-append` 写入）
+- 现有 wiki 只需转换一次，由人决定：`llmwiki okf <repo>`（dry-run）→ `--commit`；用 `llmwiki okf --bundle docs/wiki` 检查一致性
+
 ### 自愈流程（人只负责填）
 
 wiki 自己报告缺了什么，人只提供补上它的判断。
@@ -437,7 +445,7 @@ cd llmwiki
 
 - **脚手架安全装置**
     - 自动播种 `.gitignore` — `.llmwiki/`（派生索引）永不入库
-    - 自动播种 `.gitattributes` — `docs/wiki/log.md merge=union`，并发 append 无冲突合并
+    - 自动播种 `.gitattributes` — `docs/wiki/log.md`、`docs/wiki/**/index.md` `merge=union`，并发 append 无冲突合并（列表由 `llmwiki index` 重新生成）
 - **署名**
     - 作者信息不写入frontmatter的 `author:`，而是从考虑 `.mailmap` 的git历史中计算
     - `0_review` 的问题记录 `owner: <GitHub login>` — 冷启动显示为 `[→ login]`，队友可跳过不属于自己的问题
@@ -460,7 +468,7 @@ cd llmwiki
 ```toml
 [[category]]
 dir = "1_goal"     # docs/wiki 下的文件夹名
-domain = "goal"    # 路由到此文件夹的 frontmatter domain
+domain = "goal"    # 类别 slug —— 此文件夹的页面为 `type: Goal`
 review = "human"   # human → 0_review 队列 · model → 强模型裁决
 guide = "季度目标。变更须人工确认。"
 ```

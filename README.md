@@ -298,6 +298,14 @@ A citation like `[^s1]: <session>.jsonl` points at a transcript that lives on **
 - **Zero retrieval cost**
     - excerpts are excluded from the search index and the topic-page budget — evidence costs neither retrieval quality nor prose room
 
+### Open Knowledge Format (OKF v0.2)
+
+`docs/wiki/` is an [OKF v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format) bundle — any OKF reader can open it, and llmwiki reads any OKF bundle.
+
+- every page carries `type` (`Decision` · `Topic` · `Current State` …), `status` (`stable` · `draft` · `deprecated`), `generated: { by, at }`, and one `sources` entry per footnote; links are relative markdown, not `[[wikilinks]]`
+- each folder gets a generated `index.md`; `log.md` holds dated groups, newest first (written by `llmwiki log-append`)
+- an existing wiki converts once, on your call: `llmwiki okf <repo>` (dry-run) → `--commit`; `llmwiki okf --bundle docs/wiki` checks conformance
+
 ### Self-healing flow (the human only fills in)
 
 The wiki reports what's missing on its own; the human supplies only the judgment that fills it.
@@ -548,7 +556,7 @@ Solo is the default and needs none of this — everything below is additive and 
 
 - **Scaffold safety**
     - `.gitignore` seeded — `.llmwiki/` stays listed so an index written by an older engine can never be committed
-    - `.gitattributes` seeded — `docs/wiki/log.md merge=union`, so concurrent appends merge instead of conflicting
+    - `.gitattributes` seeded — `docs/wiki/log.md` and `docs/wiki/**/index.md` `merge=union`, so concurrent appends merge instead of conflicting (`llmwiki index` regenerates the listings anyway)
 - **Attribution**
     - authorship is derived from git history (`.mailmap`-aware); pages never stamp `author:` into frontmatter
     - a `0_review` question carries `owner: <GitHub login>` — cold-start shows it as `[→ login]`, so teammates skip questions that aren't theirs
@@ -571,7 +579,7 @@ The stock category structure (`0_review · 1_direction · 2_milestone · 3_decis
 ```toml
 [[category]]
 dir = "1_goal"     # folder under docs/wiki
-domain = "goal"    # frontmatter domain routed here
+domain = "goal"    # category slug — pages here get `type: Goal`
 review = "human"   # human → 0_review queue · model → strong-model adjudication
 guide = "Quarterly goals; changes need human sign-off."
 ```

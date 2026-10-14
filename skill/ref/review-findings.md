@@ -17,7 +17,7 @@ Use this when `llmwiki review` output reaches the session (a backgrounded `/wiki
     - A `semantic-review-*.md` report is deleted only after its gaps have been folded into the queue.
     - A gap auto-closes once review stops re-flagging it for 2 runs (review is bounded + cached).
 - Filling a gap:
-    - a `next-question` cross-link gap → add the wikilinks with explicit relation words;
+    - a `next-question` cross-link gap → add relative markdown links (never `[[wikilinks]]`), each with an explicit relation word;
     - a contradiction gap → the `> [conflict]` callout;
     - a `missing-concept` gap → create-or-update the `5_topic/` page by `llmwiki conventions <repo> --section consolidate` (re-ground from transcripts/raw evidence — never re-summarize other wiki pages).
 - Near-duplicate gaps are filled ONCE. Leave open only what genuinely needs human judgment (contradictory measurements, direction calls) — announce those.

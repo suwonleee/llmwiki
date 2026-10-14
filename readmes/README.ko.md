@@ -233,6 +233,14 @@ MCP 서버·Docker·외부 데이터베이스·벡터 DB·클라우드 서비스
 - **검색 비용 0**
     - 발췌는 검색 인덱스·주제 페이지 예산에서 제외 — 근거를 붙여도 검색 품질·본문 분량 무손실
 
+### Open Knowledge Format (OKF v0.2)
+
+`docs/wiki/` 는 [OKF v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format) 번들입니다 — OKF 리더라면 그대로 열 수 있고, llmwiki 도 임의의 OKF 번들을 읽습니다.
+
+- 모든 페이지에 `type`(`Decision` · `Topic` · `Current State` …) · `status`(`stable` · `draft` · `deprecated`) · `generated: { by, at }` · 각주마다 `sources` 항목 하나; 링크는 `[[wikilink]]` 가 아닌 상대 markdown 링크
+- 폴더마다 생성되는 `index.md`; `log.md` 는 날짜 그룹·최신순(`llmwiki log-append` 가 기록)
+- 기존 위키 전환은 한 번, 사람이 결정: `llmwiki okf <repo>`(dry-run) → `--commit`; 적합성 확인은 `llmwiki okf --bundle docs/wiki`
+
 ### 자가치유 흐름 (사람은 채우기만)
 
 위키가 무엇이 빠졌는지 스스로 보고하고, 사람은 채우는 판단만 합니다.
@@ -467,7 +475,7 @@ cd llmwiki
 
 - **스캐폴드 안전장치**
     - `.gitignore` 자동 시딩 — `.llmwiki/`(파생 인덱스)는 커밋되지 않음
-    - `.gitattributes` 자동 시딩 — `docs/wiki/log.md merge=union`, 동시 append가 충돌 없이 병합
+    - `.gitattributes` 자동 시딩 — `docs/wiki/log.md`·`docs/wiki/**/index.md` `merge=union`, 동시 append가 충돌 없이 병합 (목록은 `llmwiki index` 가 재생성)
 - **귀속**
     - 작성자 정보는 frontmatter의 `author:`에 저장하지 않고 `.mailmap`을 반영한 git 이력에서 계산
     - `0_review` 질문에는 `owner: <GitHub login>`을 기록 — cold-start가 `[→ login]`으로 표시, 자기 것 아닌 질문은 건너뜀
@@ -490,7 +498,7 @@ cd llmwiki
 ```toml
 [[category]]
 dir = "1_goal"     # docs/wiki 아래 폴더명
-domain = "goal"    # 이 폴더로 라우팅되는 frontmatter domain
+domain = "goal"    # 카테고리 슬러그 — 이 폴더 페이지는 `type: Goal`
 review = "human"   # human → 0_review 큐 · model → 강모델 확정
 guide = "분기 목표. 변경은 사람이 확정."
 ```

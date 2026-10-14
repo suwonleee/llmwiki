@@ -37,7 +37,7 @@ the main worktree's enrollment and can opt out individually with `llmwiki disabl
 | CLI discovery and parsing | `src/commands/catalog.ts`, `src/cli-args.ts` | Every registered command has side-effect-free help; unknown flags fail before dispatch. |
 | CLI dispatch | `src/cli.ts`, `src/commands/maintenance.ts` | Handlers preserve documented output, exit codes, enrollment, and dry-run defaults. |
 | Repository I/O | `src/engine/repo-write.ts` | Canonical containment, ancestor and leaf symlink refusal, atomic writes. |
-| Durable project content | `<project>/docs/wiki/` | Plain Git Markdown is the source of truth. |
+| Durable project content | `<project>/docs/wiki/`, `src/engine/okf.ts`, `src/engine/okf-bundle.ts` | Plain Git Markdown is the source of truth, laid out as an OKF v0.2 bundle (typed YAML frontmatter, relative links, generated `index.md`, dated `log.md`). |
 | Derived project state | `src/engine/project-state.ts`, `src/engine/db.ts` | Machine-local indexes can be rebuilt; an unindexed linked worktree can read the main wiki index, filtering out pages absent from its checkout. |
 | Capture ledger | `src/engine/capture.ts`, `src/daemon/watch.ts` | Records routing and watermarks without owning harness transcripts; one logical transcript is one row even when a harness hardlinks or copies it into several homes. |
 | Harness readers | `src/engine/sources/` | Read external stores defensively and never write into them. |

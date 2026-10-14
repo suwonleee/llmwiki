@@ -31,5 +31,5 @@ Everything episodic stays in the log only. When unsure, leave it in the log. Don
 
 ## 4. Cross-link and conflicts
 
-- Add wikilinks from the topic page to the relevant `3_decision`/`2_milestone` pages using an explicit relation word: `grounds`, `extends`, `contradicts`, `exemplifies`, `enables`.
+- Link the topic page to the relevant `3_decision`/`2_milestone` pages with relative markdown links (`[Title](../3_decision/<page>.md)`, never `[[wikilinks]]`), each followed by an explicit relation word: `grounds`, `extends`, `contradicts`, `exemplifies`, `enables`.
 - A new fact that **contradicts** an existing line is never overwritten — add a `> [conflict]` callout on the page, and route the resolution to `0_review` if it is a direction-level conflict (item format and `owner:` stamp: `llmwiki conventions <repo> --section review-item`).

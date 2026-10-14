@@ -4,7 +4,7 @@ description: Ask this repo's wiki (docs/wiki), then file a good answer back into
 
 # /wiki-ask — Compounding Loop query loop (local engine v2)
 
-- **Custom conventions**: if a team `llmwiki.config.toml` (or a per-repo `configs/*.toml`) is active (check: `llmwiki config <repo>` shows a non-default source), run `llmwiki conventions <repo>` FIRST and follow ITS category table (dirs · domains · review gates) over any category names written below.
+- **Custom conventions**: if a team `llmwiki.config.toml` (or a per-repo `configs/*.toml`) is active (check: `llmwiki config <repo>` shows a non-default source), run `llmwiki conventions <repo>` FIRST and follow ITS category table (dirs · types · review gates) over any category names written below.
 
 **Ask** this repo's (`$CLAUDE_PROJECT_DIR`) accumulated wiki (`docs/wiki/`), synthesize an answer with citations,
 then **file it back as a new wiki page** if it has value ("explorations should compound"). Engine = `~/llmwiki` (local).
@@ -19,7 +19,7 @@ then **file it back as a new wiki page** if it has value ("explorations should c
 Use exactly these folders under `docs/wiki/`. (Removed: flat `milestones/insights/decisions/directions`, `synthesis/`, `next/`, `concepts/`, `entities/` — don't create or reference.)
 
 - **`1_direction/`** — big direction/strategy shift. Rare. (status: draft)
-- **`2_milestone/`** — execution/measurement facts + remaining TODOs. (status: ready)
+- **`2_milestone/`** — execution/measurement facts + remaining TODOs. (status: stable)
 - **`3_decision/`** — a decision the human made (ADR). (status: draft)
 - **`4_insight/`** — a realization/gotcha/learning the human expressed. (status: draft)
 - **`0_review/`** — if classification is ambiguous or judgment is needed, don't assert; leave a question file here (deleted after the human handles it).
@@ -40,7 +40,7 @@ $ARGUMENTS
    - If `docs/wiki/` is missing → tell the user "this repo has no wiki yet; build it first with `/wiki-save`" and stop.
    - If cwd is home (`~`, = `_home`) → tell the user "run inside a project folder" and stop (questions are repo-scoped).
 
-2. **Search**: `llmwiki index <repo>` (incremental) → `llmwiki search <repo> "<keywords>" --kind wiki`.
+2. **Search**: `llmwiki index <repo>` (incremental) → `llmwiki search <repo> "<keywords>" --kind wiki`. To orient first, skim `docs/wiki/index.md` (the generated per-folder listing).
    - If 0 matches → honestly report there's no basis to answer (no guessing). Retry with different keywords, but if nothing, say so.
 
 3. **Read + raw tracing**: Read the top candidate pages. For each page's footnote citation (`[^n]: <transcript/code>`), **directly Read the raw file** it points to and verify the facts (don't assert from the wiki alone).
@@ -52,19 +52,19 @@ $ARGUMENTS
 
 5. **Propose file-back (human confirm)**: if the answer has reuse value, ask the user "save this to the wiki?" and on approval:
    - Location (category only from the folders above):
-     - organizing/re-synthesizing existing facts → `docs/wiki/2_milestone/<slug>.md` (`status: ready` allowed)
+     - organizing/re-synthesizing existing facts → `docs/wiki/2_milestone/<slug>.md` (`status: stable` allowed)
      - a realization the human expressed at this question → `docs/wiki/4_insight/<slug>.md` (`status: draft`, human confirm)
      - a decision the human made at this question (ADR) → `docs/wiki/3_decision/<slug>.md` (`status: draft`, human confirm)
      - direction/strategy shift (rare) → `docs/wiki/1_direction/<slug>.md` (`status: draft`, human confirm)
-   - frontmatter: `title` `description` `date` `tags`(≥2) `status` `source: query` (put the original question in description or at the top of the body).
-   - body: answer + footnote citations + related-page markdown cross-links, following `/wiki-save`'s structure contract: numbered sections (`## 1. <label>`, split as `### 1-1.`) once the answer has more than one group, one concrete point per `-` with details under `    -` and deeper details under `        -`, noun-phrase/telegraphic endings where natural, and no `·`-joined pile-up in a single line.
+   - frontmatter (OKF v0.2): `type` (the folder's: `Milestone`·`Insight`·`Decision`·`Direction`) `title` `description` `date` `tags`(≥2) `status` `generated: { by: <harness>/<model id> }` (the engine stamps `at`) `sources` (one `{ id, resource }` per footnote label); never `author:`/`domain:`/`source:`/`updated:` (put the original question in description or at the top of the body).
+   - body: answer + footnote citations + relative markdown cross-links (`[Label](../5_topic/x.md)`, never `[[wikilinks]]`), following `/wiki-save`'s structure contract: numbered sections (`## 1. <label>`, split as `### 1-1.`) once the answer has more than one group, one concrete point per `-` with details under `    -` and deeper details under `        -`, noun-phrase/telegraphic endings where natural, and no `·`-joined pile-up in a single line.
 
 6. **Bookkeeping** (only if filed back):
-   - Append to `docs/wiki/log.md`: `## [YYYY-MM-DD] query | <question>` + `- Finding: <one line>` + `- Filed: <path>`.
+   - `llmwiki log-append <repo> query "<question>" "Finding: <one line>" "Filed: <path>"` (engine-formatted; never hand-edit `log.md`).
    - Don't touch `current-state`·`overview` (the read-injection hook auto-indexes recent pages).
 
 7. **Close out (only if filed back, deterministic)**:
-   - `llmwiki index <repo>` → `llmwiki refs <repo>` → `llmwiki lint <repo>`. Fix until lint **0 errors**, report warnings as backlog.
+   - `llmwiki okf <repo> --commit --if-okf` (fills missing `sources`/`generated`; a not-yet-OKF wiki only gets a hint) → `llmwiki index <repo>` → `llmwiki refs <repo>` → `llmwiki lint <repo>`. Fix until lint **0 errors**, report warnings as backlog.
 
 8. **Report** (1–2 lines): "question → answer gist / basis (N citations) / file-back: <category/path or none> / lint".
 

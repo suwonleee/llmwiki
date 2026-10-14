@@ -230,6 +230,14 @@ MCPサーバー、Docker、外部データベース、ベクトルDB、クラウ
 - **検索コストゼロ**
     - 抜粋は検索インデックスとトピックページ予算から除外 — 根拠を付けても検索品質も本文の分量も損なわない
 
+### Open Knowledge Format (OKF v0.2)
+
+`docs/wiki/` は [OKF v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format) バンドルです — OKF リーダーならそのまま開け、llmwiki も任意の OKF バンドルを読めます。
+
+- 全ページに `type`（`Decision` · `Topic` · `Current State` …）· `status`（`stable` · `draft` · `deprecated`）· `generated: { by, at }` · 脚注ごとに `sources` 項目一つ。リンクは `[[wikilink]]` ではなく相対 markdown リンク
+- フォルダごとに生成される `index.md`。`log.md` は日付グループ・新しい順（`llmwiki log-append` が記録）
+- 既存 wiki の変換は一度だけ、人が判断: `llmwiki okf <repo>`（dry-run）→ `--commit`。適合性の確認は `llmwiki okf --bundle docs/wiki`
+
 ### 自己治癒フロー（人間は埋めるだけ）
 
 wikiが何が欠けているかを自分で報告し、人間は埋める判断だけを行います。
@@ -446,7 +454,7 @@ cd llmwiki
 
 - **スキャフォールドの安全装置**
     - `.gitignore` を自動シード — `.llmwiki/`（派生インデックス）はコミットされない
-    - `.gitattributes` を自動シード — `docs/wiki/log.md merge=union`、同時appendが衝突せずマージ
+    - `.gitattributes` を自動シード — `docs/wiki/log.md`・`docs/wiki/**/index.md` `merge=union`、同時appendが衝突せずマージ（一覧は `llmwiki index` が再生成）
 - **帰属**
     - 著者情報はfrontmatterの `author:` に保存せず、`.mailmap` を反映したgit履歴から算出
     - `0_review` の質問には `owner: <GitHub login>` を記録 — コールドスタートが `[→ login]` と表示、自分宛でない質問はスキップ
@@ -469,7 +477,7 @@ cd llmwiki
 ```toml
 [[category]]
 dir = "1_goal"     # docs/wiki 配下のフォルダ名
-domain = "goal"    # このフォルダへルーティングされる frontmatter domain
+domain = "goal"    # カテゴリのスラッグ — このフォルダのページは `type: Goal`
 review = "human"   # human → 0_review キュー · model → 強モデルによる確定
 guide = "四半期目標。変更は人間が確定。"
 ```

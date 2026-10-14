@@ -6,12 +6,19 @@ Use this when writing a page's footnotes and evidence lines, and whenever lint f
 
 - Every fact/judgment claim needs a footnote `[^1]: <transcript filename or bare code path>`.
     - A `:line` suffix is tolerated — the engine absorbs it — but the bare path is canonical: line numbers rot as code moves, and the verbatim grounding lives on the v3 evidence line.
-- Required frontmatter: `title` `description` `date` `tags`(≥2) `status`(ready|draft) `domain`(direction|milestone|decision|insight|topic) `source`. Cross-link related pages.
-- **Never add `author:`** — authorship is read from git, never cached in frontmatter (decision 2026-07-10).
+- Frontmatter (OKF v0.2):
+    - `type` — the folder's: `Direction` · `Milestone` · `Decision` · `Insight`; `5_topic` → `Topic`; L0 → `Current State`; `0_review` item → `Review Item` (custom config: `llmwiki conventions <repo>`).
+    - `title` · `description` (one sentence) · `date` (YYYY-MM-DD) · `tags` (≥2) · `status` (`stable` | `draft` | `deprecated`).
+    - `generated: { by: <harness>/<model id> }` — name only; `llmwiki okf` stamps `at`.
+    - `sources:` — one `{ id, resource }` per footnote label, `id` == label: `- { id: s1, resource: <transcript>.jsonl }`.
+    - `verified: { by: human:<owner login>, at: <ISO> }` only for a human's `0_review` direction answer — never your own confirmation.
+- No `domain:`, `source:`, or `updated:` on new pages. The close-out's `llmwiki okf` fills missing `sources`/`generated`.
+- Links: relative markdown `[Label](../5_topic/x.md)`, never `[[wikilinks]]`. Cross-link related pages.
+- **Never add `author:`** — authorship is read from git, never cached in frontmatter.
     - A stamped author goes stale the moment a teammate edits the page, and git already knows.
     - `llmwiki digest` renders contributors from git history (mailmap-aware; `ensureSkeleton` seeds a `.mailmap` so one person's several git identities count once).
     - Legacy pages that still carry `author:` are left as-is — historical records, not a format to continue.
-- `0_review` items additionally stamp `owner:` — see `llmwiki conventions <repo> --section review-item`.
+- `0_review` items also stamp `owner:`: `llmwiki conventions <repo> --section review-item`.
 
 ## 2. Evidence excerpts (page format v3)
 
