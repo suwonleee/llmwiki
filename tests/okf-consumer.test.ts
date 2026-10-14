@@ -11,6 +11,7 @@ import { Linter, type LintIssue } from "../src/engine/lint.ts";
 import { getConfig, _resetForTests } from "../src/engine/config.ts";
 import { hrefCandidates, parseWikiLinks, rebuildReferenceGraph, wikiPageDir } from "../src/engine/refs.ts";
 import { buildTurnContext, currencyMark, pageCurrency } from "../src/engine/turncontext.ts";
+import { searchWiki } from "../src/engine/page-rank.ts";
 import { formatWikiDoctorReport, runWikiDoctor } from "../src/engine/wiki-doctor.ts";
 
 const OKF_ROOT_INDEX = '---\nokf_version: "0.2"\n---\n';
@@ -231,13 +232,14 @@ describe("superseded pointer (OKF lifecycle)", () => {
   });
 });
 
-describe("turn-context marks retired and stale knowledge", () => {
+describe("turn-context never injects retired knowledge; marks stale", () => {
   let root: string;
+  const body = "Tokenizer migration notes for the trigram chunker index rebuild. ".repeat(10);
   beforeEach(() => {
     root = tempRoot("llmwiki-okf-tc-");
-    const body = "Tokenizer migration notes for the trigram chunker index rebuild. ".repeat(10);
+    write(root, "index.md", OKF_ROOT_INDEX); // an OKF bundle: lifecycle is spelled `deprecated`
     write(root, "3_decision/tokenizer-old.md", page({ title: "Trigram tokenizer chunker plan", status: "deprecated", superseded_by: "tokenizer-new.md" }, body));
-    // The current page lacks one prompt word ("notes"), so the retired one leads by a point.
+    // The current page lacks one prompt word ("notes"), so every retired one out-scores it.
     write(root, "3_decision/tokenizer-new.md", page({ title: "Trigram tokenizer chunker plan v2", status: "stable" }, body.replaceAll("notes ", "")));
     write(root, "4_insight/tokenizer-stale.md", page({ title: "Trigram tokenizer chunker caveat", stale_after: "2020-01-01T00:00:00+00:00" }, body));
     new WikiIndex(root).indexAll();
@@ -252,18 +254,76 @@ describe("turn-context marks retired and stale knowledge", () => {
     expect(currencyMark({ deprecated: false, stale: true })).toBe(" (stale)");
   });
 
-  test("pointers carry the mark, and the retired page drops below a current peer one point behind", () => {
+  // Every retirement spelling the OKF converter maps to `deprecated` (okfStatus), the legacy
+  // `superseded`, and a page that only records its successor.
+  test("pageCurrency: every retirement spelling and a bare `superseded_by` read as deprecated", () => {
+    write(root, "3_decision/a.md", page({ title: "a", status: "archived" }, body));
+    write(root, "3_decision/b.md", page({ title: "b", status: "superseded" }, body));
+    write(root, "3_decision/c.md", page({ title: "c", superseded_by: "tokenizer-new.md" }, body));
+    write(root, "3_decision/d.md", page({ title: "d", status: "Deprecated" }, body));
+    for (const rel of ["a", "b", "c", "d"]) expect(pageCurrency(root, `docs/wiki/3_decision/${rel}.md`).deprecated).toBe(true);
+  });
+
+  test("a retired page is never a pointer, whatever its spelling or score; stale ones carry the mark", () => {
+    write(root, "3_decision/tokenizer-legacy.md", page({ title: "Trigram tokenizer chunker plan legacy", status: "superseded", superseded_by: "tokenizer-new.md" }, body));
+    write(root, "3_decision/tokenizer-archived.md", page({ title: "Trigram tokenizer chunker plan archive", status: "archived" }, body));
+    write(root, "3_decision/tokenizer-replaced.md", page({ title: "Trigram tokenizer chunker plan draft", superseded_by: "tokenizer-new.md" }, body));
     const out = buildTurnContext(root, "trigram tokenizer chunker plan notes", "", { affinity: null });
-    const lines = out.split("\n").slice(1);
-    const oldLine = lines.findIndex((l) => l.includes("tokenizer-old.md"));
-    const newLine = lines.findIndex((l) => l.includes("tokenizer-new.md"));
-    expect(oldLine).toBeGreaterThan(-1);
-    expect(newLine).toBeGreaterThan(-1);
-    expect(lines[oldLine]).toContain("(deprecated)  →");
-    expect(lines[newLine]).not.toContain("(deprecated)");
-    expect(newLine).toBeLessThan(oldLine);
-    const staleLine = lines.find((l) => l.includes("tokenizer-stale.md"));
-    if (staleLine) expect(staleLine).toContain("(stale)  →");
+    expect(out).toContain("tokenizer-new.md");
+    for (const gone of ["tokenizer-old.md", "tokenizer-legacy.md", "tokenizer-archived.md", "tokenizer-replaced.md"]) {
+      expect(out).not.toContain(gone);
+    }
+    expect(out).not.toContain("(deprecated)");
+    const staleLine = out.split("\n").find((l) => l.includes("tokenizer-stale.md"));
+    expect(staleLine).toContain("(stale)  →");
+  });
+
+  test("an explicit search still finds the retired page — history stays reachable, marked", () => {
+    const hits = searchWiki(root, "trigram tokenizer chunker plan notes", 5).map((h) => `docs/wiki/${h.page.rel}`);
+    expect(hits).toContain("docs/wiki/3_decision/tokenizer-old.md");
+    expect(currencyMark(pageCurrency(root, "docs/wiki/3_decision/tokenizer-old.md"))).toBe(" (deprecated)");
+  });
+});
+
+describe("lint: an L0 Active rules line must not teach a retired rule", () => {
+  test("links to retired pages warn `l0-rule-deprecated` and name the successor; live links and other sections pass", () => {
+    const root = tempRoot("llmwiki-okf-l0rule-");
+    const savedLang = process.env.LLMWIKI_LANG;
+    process.env.LLMWIKI_LANG = "en";
+    try {
+      write(root, "3_decision/ua-old.md", page({ title: "UA old", status: "deprecated", superseded_by: "ua-new.md" }, filler("old")));
+      write(root, "3_decision/retry-old.md", page({ title: "retry old", status: "superseded", superseded_by: "[[retry-new]]" }, filler("r")));
+      write(root, "3_decision/ua-new.md", page({ title: "UA new", status: "stable" }, filler("new")));
+      write(root, "3_decision/elsewhere.md", page({ title: "elsewhere", status: "deprecated" }, filler("e")));
+      write(
+        root,
+        "current-state.md",
+        page({ title: "Current state" }, [
+          "## Direction (human-confirmed)",
+          "",
+          "- direction [elsewhere](3_decision/elsewhere.md)",
+          "",
+          "## Active rules (human-confirmed)",
+          "",
+          "- Outbound requests carry a User-Agent — [UA](3_decision/ua-old.md)",
+          "- Retry thrice — [[retry-old]]",
+          "- Current — [UA new](3_decision/ua-new.md)",
+          "",
+          "## Now (TL;DR)",
+          "",
+          "- see [elsewhere](3_decision/elsewhere.md)",
+        ].join("\n")),
+      );
+      const hits = lint(root).filter((i) => i.code === "l0-rule-deprecated");
+      expect(hits.map((h) => h.severity)).toEqual(["warn", "warn"]);
+      expect(hits[0]!.message).toContain("3_decision/ua-old.md");
+      expect(hits[0]!.message).toContain("successor `ua-new.md`");
+      expect(hits[1]!.message).toContain("3_decision/retry-old.md");
+      expect(hits.some((h) => h.message.includes("elsewhere"))).toBe(false); // outside Active rules
+    } finally {
+      if (savedLang === undefined) delete process.env.LLMWIKI_LANG;
+      else process.env.LLMWIKI_LANG = savedLang;
+    }
   });
 });
 

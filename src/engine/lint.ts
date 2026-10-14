@@ -14,9 +14,11 @@ import {
   lookupKey,
   parseCitationFilename,
   parseWikiLinkTargets,
+  resolveMarkdownLink,
   resolveWikiLink,
   stripCode,
   stripEvidence,
+  wikiPageDir,
   type LinkIndex,
 } from "./refs.ts";
 import { parseExcerpts, verifyExcerpt } from "./excerpt.ts";
@@ -24,7 +26,7 @@ import { hasSecret } from "./screen.ts";
 import { L0_BUDGET, L0_LINT_BUDGET } from "./budgets.ts";
 import { effectiveKo, getConfig, type WikiConfig } from "./config.ts";
 import { parseFrontmatter as parseFrontmatterBoundary, type Frontmatter } from "./frontmatter.ts";
-import { checkConcept, checkIndex, checkLog, linkTextOnly, okfStatus, parseYamlBlock, splitFrontmatter, type OkfIssue } from "./okf.ts";
+import { checkConcept, checkIndex, checkLog, isRetired, linkTextOnly, parseYamlBlock, splitFrontmatter, type OkfIssue } from "./okf.ts";
 import { EDIT_RULE_KEY, editRuleProblems } from "./edit-rules.ts";
 
 export { linkTextOnly };
@@ -92,6 +94,8 @@ const FOOTNOTE_DEF = /^\[\^([^\]]+)\]:\s*(.+)$/gm;
 const FOOTNOTE_USE = /\[\^([^\]]+)\](?!:)/g;
 // Link text may carry escaped brackets (`[\[TRUST\] ECS](x.md)` — a page title with brackets,
 // as `llmwiki okf` writes it); `[^\]]*` alone stops at the escaped `\]` and loses the edge.
+// The L0 section that holds standing rules (update.ts template, every language it renders).
+const L0_RULES_HEADING = /^##[ \t]+(active rules|유효 규칙|有効なルール|有效规则)/i;
 const RAW_LINK_RE = /(?<!!)\[(?:[^\]\\]|\\.)*\]\(([^)]+)\)/g;
 
 const SRC_EXT = /\.(pdf|docx?|pptx?|xlsx?|csv|html?|md|txt|jsonl)$/i;
@@ -285,7 +289,47 @@ export class Linter {
     issues.push(...this._oversizedTopic(doc, content));
     issues.push(...this._bodyStructure(doc, content));
     issues.push(...this._editRule(doc, content));
+    issues.push(...this._l0RuleCurrency(doc, content, linkIndex));
     return issues;
+  }
+
+  /**
+   * An L0 "Active rules" line that links a retired decision (okf.ts isRetired). L0 rides every
+   * session whole, so the line keeps teaching the retired rule as current while every push channel
+   * already withholds its page. Names the successor when the page records one.
+   */
+  _l0RuleCurrency(doc: WikiDoc, content: string, linkIndex: LinkIndex): LintIssue[] {
+    if ((doc.filename || "") !== this.cfg.files.l0) return [];
+    const lines = content.split(/\r?\n/);
+    const start = lines.findIndex((l) => L0_RULES_HEADING.test(l));
+    if (start < 0) return [];
+    const end = lines.findIndex((l, i) => i > start && /^#{1,2}[ \t]/.test(l));
+    const section = lines.slice(start + 1, end < 0 ? undefined : end).join("\n");
+    const dir = wikiPageDir(doc as unknown as Record<string, unknown>);
+    const targets = [
+      ...[...stripCode(section).matchAll(RAW_LINK_RE)].map((m) => resolveMarkdownLink(decodeHref(m[1]!.trim()), dir, linkIndex)),
+      ...parseWikiLinkTargets(section).map((t) => resolveWikiLink(t, linkIndex)),
+    ];
+    const path = this._p(doc);
+    const out: LintIssue[] = [];
+    const seen = new Set<string>();
+    for (const t of targets) {
+      if (!t || seen.has(String(t.relative_path))) continue;
+      seen.add(String(t.relative_path));
+      const data = parseFrontmatterBoundary(String(t.content ?? "")).data;
+      if (!isRetired(data)) continue;
+      const rel = String(t.relative_path).replace(/^docs\/wiki\//, "");
+      const next = String(data.superseded_by ?? "").trim();
+      out.push({
+        severity: "warn",
+        code: "l0-rule-deprecated",
+        path,
+        message: this.ko
+          ? `유효 규칙 줄이 폐기된 페이지 \`${rel}\` 를 가리킴 — ${next ? `대체 페이지 \`${next}\` 의 규칙으로 바꾸거나` : "대체 결정으로 바꾸거나"} 줄을 지울 것 (폐기 페이지는 어디에도 주입되지 않는데 L0 는 매 세션 현행 규칙으로 실어 나른다)`
+          : `an Active rules line links the retired page \`${rel}\` — ${next ? `restate it from its successor \`${next}\`` : "restate it from the replacing decision"} or drop the line (retired pages are injected nowhere, but L0 carries this line as a current rule every session)`,
+      });
+    }
+    return out;
   }
 
   /**
@@ -309,7 +353,7 @@ export class Linter {
         ? `\`${EDIT_RULE_KEY}\` 편집 규칙 형식 문제 — ${problem} (형식이 틀린 규칙은 주입되지 않는다)`
         : `\`${EDIT_RULE_KEY}\` edit rule: ${problem} (a malformed rule is not injected)`,
     }));
-    if (okfStatus(data.status) === "deprecated") {
+    if (isRetired(data)) {
       out.push({
         severity: "warn",
         code: "edit-rule-deprecated",

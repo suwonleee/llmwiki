@@ -39,3 +39,18 @@ test("slim points at index.md instead of listing recent pages", () => {
   expect(slim).toContain('llmwiki search . "<question>" --kind wiki');
   expect(slim).not.toContain("recent pages in this repo's wiki");
 });
+
+test("full cold start never lists a retired page, under any retirement spelling", () => {
+  const repo = okfRepo();
+  const dir = join(repo, "docs", "wiki", "3_decision");
+  writeFileSync(join(dir, "old.md"), "---\ntype: Decision\ntitle: Old decision\nstatus: deprecated\nsuperseded_by: new.md\n---\n\n- x\n");
+  writeFileSync(join(dir, "older.md"), "---\ntype: Decision\ntitle: Older decision\nstatus: superseded\n---\n\n- x\n");
+  writeFileSync(join(dir, "moved.md"), "---\ntype: Decision\ntitle: Moved decision\nsuperseded_by: new.md\n---\n\n- x\n");
+  writeFileSync(join(dir, "new.md"), "---\ntype: Decision\ntitle: New decision\nstatus: stable\n---\n\n- x\n");
+  process.env.LLMWIKI_COLDSTART = "full";
+  const full = buildContext(repo);
+  expect(full).toContain("New decision");
+  expect(full).not.toContain("Old decision");
+  expect(full).not.toContain("Older decision");
+  expect(full).not.toContain("Moved decision");
+});

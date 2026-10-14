@@ -13,6 +13,7 @@
 //   • no stopword lists, no per-language tuning — length floors + a ≥2-distinct-term
 //     confidence gate are the whole relevance model; anything smarter belongs to an
 //     LLM-scored layer, not here
+//   • retired knowledge (deprecated / superseded / has a successor) is never emitted
 //   • never breaks a session: every failure path returns "" (adapters also exit 0)
 //
 // Works with the trigram FTS (schema.sql). Term extraction is language-neutral in the literal
@@ -34,15 +35,13 @@ import { isRepoKorean, effectiveKo, getConfig } from "./config.ts";
 import { COLD_INDEX_RELATIVE_PATH } from "./cold-index.ts";
 import { adjustedScore, loadAffinity, type AffinityFile } from "./affinity.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
+import { isRetired } from "./okf.ts";
 import { readRepoFile } from "./repo-write.ts";
 
 const MAX_PAGES = 3;
 // Terms shown as a pointer's reason. Three is the point where the reason still reads as a reason
 // rather than a term dump — and the per-pointer cost stays inside the noise of a 612B emission.
 const WHY_MAX_TERMS = 3;
-// A deprecated page loses ties and one-point leads to a current one; a clearly better match
-// (≥ 2 points) still ranks first — retired knowledge can be the answer, it is just not the default.
-const DEPRECATED_FACTOR = 0.5;
 const RELEVANCE_FLOOR = 1.5;
 const RELEVANCE_FLOOR_MIN_PAGES = 20;
 // Header language + L0/meta page names resolve per repo at call time (per-repo config).
@@ -75,15 +74,16 @@ export type PageCurrency = { readonly deprecated: boolean; readonly stale: boole
 
 /**
  * Is this page still current? An OKF consumer must not present `deprecated` (llmwiki's
- * `superseded`) knowledge, or knowledge past its `stale_after`, as current. Read from the file —
- * the index stores no `stale_after`, and a pointer costs one small read per shown page.
+ * `superseded`, or any spelling `isRetired` accepts) knowledge, or knowledge past its
+ * `stale_after`, as current. Read from the file — the index stores no `stale_after`. Used by the
+ * explicit lookups (`llmwiki search`), which keep retired pages but mark them.
  */
 export function pageCurrency(root: string, rel: string): PageCurrency {
   try {
     const text = readRepoFile(root, rel);
     if (text === null) return { deprecated: false, stale: false };
     const fm = parseFrontmatter(text);
-    return { deprecated: fm.status === "superseded", stale: fm.stale };
+    return { deprecated: isRetired(fm.data), stale: fm.stale };
   } catch {
     return { deprecated: false, stale: false };
   }
@@ -295,7 +295,10 @@ export function buildTurnContext(
     const scoreTerms = [...queryTerms, ...subFloor];
     const curSet = new Set([...terms, ...subFloor].map((t) => t.toLowerCase()));
     const wikiPages = loadWikiPages(root, cfg, l0Basenames);
-    const ranked0 = rankPages(wikiPages, scoreTerms);
+    // Retired knowledge is never pushed (okf.ts isRetired). Withheld, not demoted: a `deprecated`
+    // mark still let 27% of runs follow the stale page (okf-skills, measured). It still counts
+    // toward rarity below — it is part of the wiki, just not an answer.
+    const ranked0 = rankPages(wikiPages, scoreTerms).filter((r) => !r.page.retired);
     // Relevance floor, scaled to the wiki's size (idf grows with ln N). The coverage gate alone let
     // everyday words that run through a focused wiki (테스트 · 커밋 · 로그) qualify a page; measured
     // on 4 project wikis: filler prompts fired 19/80 before, 8/80 with this floor, while 119/120
@@ -305,6 +308,7 @@ export function buildTurnContext(
       ranked0.map((r) => [
         `docs/wiki/${r.page.rel}`,
         {
+          page: r.page,
           title: r.page.title,
           terms: new Set(r.terms),
           idTerms: new Set(r.idTerms),
@@ -324,14 +328,10 @@ export function buildTurnContext(
     // near-ties among pages that already earned a place on relevance, never admit one that did not.
     let pages = [...byPage.entries()].filter(([, e]) => e.cur >= 1 && e.coverage >= 2 && e.relevance >= floor);
     const affinity = pages.length < 2 ? null : opts.affinity !== undefined ? opts.affinity : loadAffinity(repo);
-    const currency = new Map(pages.map(([rel]) => [rel, pageCurrency(root, rel)]));
     const top = pages.reduce((m, [, e]) => Math.max(m, e.relevance), 0) || 1;
-    // Relevance is rescaled so the best page scores 10: affinity's bounded shift and the
-    // deprecated penalty keep the magnitude they were tuned on (a gap of ~2 points never flips).
-    // A retired page keeps half its relevance: it still surfaces when nothing current answers,
-    // but a current peer of comparable relevance always leads it (OKF §5.4 `deprecated`).
-    const ranked = (rel: string, e: { relevance: number }) =>
-      adjustedScore((10 * e.relevance * (currency.get(rel)?.deprecated ? DEPRECATED_FACTOR : 1)) / top, affinity, rel);
+    // Relevance is rescaled so the best page scores 10: affinity's bounded shift keeps the
+    // magnitude it was tuned on (a gap of ~2 points never flips).
+    const ranked = (rel: string, e: { relevance: number }) => adjustedScore((10 * e.relevance) / top, affinity, rel);
     pages.sort((a, b) => ranked(b[0], b[1]) - ranked(a[0], a[1]) || (a[0] < b[0] ? -1 : 1));
     if (!pages.length) return "";
 
@@ -371,7 +371,7 @@ export function buildTurnContext(
     };
     const L = [head];
     for (const [rel, e] of pages) {
-      const mark = currencyMark(currency.get(rel) ?? { deprecated: false, stale: false });
+      const mark = currencyMark({ deprecated: false, stale: e.page.stale });
       L.push(`  • ${e.title}${mark}  →  ${rel}${why(e)}`);
     }
     return L.join("\n");

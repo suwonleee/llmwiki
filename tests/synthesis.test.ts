@@ -63,6 +63,17 @@ describe("deterministic synthesis", () => {
     expect(spine.length).toBeLessThanOrEqual(5); // max 4 hubs + 1 summary line
   });
 
+  test("a retired hub is never a spine center (OKF `deprecated` or a recorded successor)", () => {
+    const retire = (fm: string) => {
+      writeFileSync(join(wiki, "2_milestone", "hub.md"), page("Hub Page").replace("status: ready\n", fm));
+      new WikiIndex(root).indexAll();
+      return buildSpine(root).join("\n");
+    };
+    expect(retire("status: deprecated\nsuperseded_by: 4_insight/a.md\n")).not.toContain("hub.md");
+    expect(retire("superseded_by: 4_insight/a.md\n")).not.toContain("hub.md");
+    expect(retire("status: ready\n")).toContain("hub.md");
+  });
+
   test("0_review items surface in digest and spine summary", () => {
     writeFileSync(join(wiki, "0_review", "2026-06-20-some-direction.md"), "Q. confirm?\n");
     // an OKF bundle's generated listing is not an open item

@@ -106,6 +106,8 @@ describe("loading", () => {
     page(root, "3_decision/2026-10-01-live.md", ruleFm(["src/**"], "live rule"));
     page(root, "3_decision/2026-09-01-old.md", ruleFm(["src/**"], "old rule", "status: deprecated"));
     page(root, "3_decision/2026-08-01-older.md", ruleFm(["src/**"], "older rule", "status: superseded"));
+    page(root, "3_decision/2026-07-01-archived.md", ruleFm(["src/**"], "archived rule", "status: archived"));
+    page(root, "3_decision/2026-06-01-replaced.md", ruleFm(["src/**"], "replaced rule", "superseded_by: 2026-10-01-live.md"));
     page(root, "0_review/q.md", ruleFm(["src/**"], "unconfirmed rule"));
     page(root, "3_decision/2026-10-02-bad.md", "title: bad\nx-llmwiki: { applies_to: [], rule: x }");
     page(root, "3_decision/2026-10-03-nokey.md", "title: plain page");

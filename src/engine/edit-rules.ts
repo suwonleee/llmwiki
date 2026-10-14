@@ -59,7 +59,9 @@ export const MAX_RULES_PER_EDIT = 3;
 /** Whole injected block, header included. */
 export const MAX_EDIT_RULES_CHARS = 1200;
 
-const CACHE_VERSION = 1;
+// 2: retirement widened to every okfStatus spelling and a bare `superseded_by` (okf.ts isRetired);
+// the bump drops caches built under the narrower test.
+const CACHE_VERSION = 2;
 const CACHE_MAX_BYTES = 1024 * 1024;
 
 // The file-editing tools whose `tool_input` names the target path, plus Bash (whose command is
@@ -304,7 +306,7 @@ function scanWiki(root: string): WikiScan | null {
 }
 
 async function parseRules(root: string, pages: readonly string[]): Promise<EditRule[]> {
-  const [{ getConfig }, { okfStatus, parseYamlBlock, splitFrontmatter }] = await Promise.all([
+  const [{ getConfig }, { isRetired, parseYamlBlock, splitFrontmatter }] = await Promise.all([
     import("./config.ts"),
     import("./okf.ts"),
   ]);
@@ -327,7 +329,7 @@ async function parseRules(root: string, pages: readonly string[]): Promise<EditR
     const { block } = splitFrontmatter(text);
     if (block === null || !block.includes(EDIT_RULE_KEY)) continue;
     const { data } = parseYamlBlock(block);
-    if (okfStatus(data.status) === "deprecated") continue; // retired knowledge is never pushed
+    if (isRetired(data)) continue; // retired knowledge is never pushed
     const rule = ruleOf(`docs/wiki/${rel}`, data);
     if (rule) out.push(rule);
   }

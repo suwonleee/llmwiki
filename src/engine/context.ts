@@ -7,7 +7,7 @@
 //
 // Language: LLMWIKI_LANG=ko switches the operating-rules/headers to Korean (default: en).
 import { isOkfBundle } from "./okf-bundle.ts";
-import { linkTextOnly } from "./okf.ts";
+import { isRetired, linkTextOnly } from "./okf.ts";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -137,6 +137,12 @@ function frontmatterField(root: string, rel: string, field: "title" | "owner"): 
   // frontmatter is body text, not this file's fields.
   const value = parseFrontmatter(body).fields[field];
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+// Retired pages (okf.ts isRetired) are never listed: a cold-start line reads as current knowledge.
+function retired(root: string, rel: string): boolean {
+  const body = readRepoFile(root, rel);
+  return body !== null && isRetired(parseFrontmatter(body).data);
 }
 
 function title(root: string, rel: string): string {
@@ -336,7 +342,8 @@ export function buildContext(repo: string, opts: { affinity?: AffinityFile | nul
 
   // (B2) lightweight on-the-fly page index — recent 6 titles (filesystem-derived, never stale).
   if (hasWiki && !slim) {
-    const pages = rerankByAffinity(categoryPages(proj, catDirs), 6, affinity, (p) => p, RECENT_POLICY);
+    const live = categoryPages(proj, catDirs).filter((p) => !retired(proj, p));
+    const pages = rerankByAffinity(live, 6, affinity, (p) => p, RECENT_POLICY);
     if (pages.length) {
       L.push(T.indexHead);
       for (const p of pages) L.push(`  • ${title(proj, p)}  →  ${p}`);

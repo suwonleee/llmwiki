@@ -351,6 +351,17 @@ export function okfStatus(raw: unknown): OkfStatus | null {
   return null;
 }
 
+/**
+ * Retired knowledge: any status spelling that means `deprecated` (OKF's word, llmwiki's legacy
+ * `superseded`, the converter's synonyms, any case), or a recorded successor. The one test every
+ * PUSH channel (turn-context, cold-start lists, edit rules) applies before injecting a page —
+ * measured: a `deprecated` mark still let 27% of runs follow the stale doc, so retired pages are
+ * withheld, not labelled. Explicit lookups (`llmwiki search`) still return them, marked.
+ */
+export function isRetired(data: YamlMap): boolean {
+  return okfStatus(data.status) === "deprecated" || String(data.superseded_by ?? "").trim() !== "";
+}
+
 const ISO_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
 
 export function isIsoDateTime(value: unknown): boolean {

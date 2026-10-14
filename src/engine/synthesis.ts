@@ -21,6 +21,7 @@ import { WikiIndex } from "./db.ts";
 import { effectiveKo, getConfig, logDirs, type WikiConfig } from "./config.ts";
 import { readRepoDir } from "./repo-write.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
+import { isRetired } from "./okf.ts";
 import { rerankByAffinity, SPINE_POLICY, type AffinityFile } from "./affinity.ts";
 
 // User-facing output adapts to LLMWIKI_LANG (default English, Korean when set) — same policy as
@@ -119,7 +120,8 @@ export function buildSpine(repo: string, max = 4, affinity: AffinityFile | null 
   const hubs = rerankByAffinity(
     a.pages
       .map((d) => ({ d, n: a.indeg.get(String(d.id)) ?? 0 }))
-      .filter((x) => x.n >= 2)
+      // A retired page can stay heavily linked (its successors cite it); it is history, not a center.
+      .filter((x) => x.n >= 2 && !isRetired(parseFrontmatter(String(x.d.content ?? "")).data))
       .sort((x, y) => y.n - x.n),
     max,
     affinity,

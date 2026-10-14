@@ -15,7 +15,7 @@
 // description). Deterministic, no index, no model.
 import { posix } from "node:path";
 import { getConfig, type WikiConfig } from "./config.ts";
-import { parseYamlBlock, splitFrontmatter } from "./okf.ts";
+import { isRetired, isStale, parseYamlBlock, splitFrontmatter } from "./okf.ts";
 import { readRepoDir, readRepoFile } from "./repo-write.ts";
 import { extractTerms, termWeight } from "./query-terms.ts";
 
@@ -31,6 +31,8 @@ export type WikiPage = {
   readonly description: string;
   readonly status: string;
   readonly identity: string; // lower-cased title · filename · description, plus a despaced copy
+  readonly retired: boolean; // deprecated / superseded / has a successor (okf.ts isRetired)
+  readonly stale: boolean; // OKF stale_after has passed
   readonly body: string; // lower-cased body without evidence-excerpt lines
 };
 
@@ -81,6 +83,8 @@ export function loadWikiPages(root: string, cfg: WikiConfig = getConfig(root), s
         description,
         status: String(fm.status ?? ""),
         identity: `${id} ${id.replace(/[\s-]+/g, "")}`,
+        retired: isRetired(fm),
+        stale: isStale(fm),
         body: cold ? "" : body.replace(EVIDENCE_LINE, "").toLowerCase(),
       });
     }

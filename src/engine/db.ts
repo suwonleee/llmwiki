@@ -1028,13 +1028,15 @@ export class WikiIndex {
   // Frontmatter-only for real: the page must open with `---\n`, have a closing `\n---` (scanned
   // within the first 2000 chars), and the phrase must sit BEFORE that closing fence — a body that
   // merely mentions the phrase is not demoted. Query-time, migration-free, deterministic;
-  // superseded pages stay findable (demoted, never filtered).
+  // superseded pages stay findable (demoted, never filtered). An OKF bundle spells the same state
+  // `status: deprecated` (the converter maps superseded → deprecated), so both spellings demote.
   static _orderBy(rank: string): string {
     const fmEnd = "instr(substr(d.content,5,2000), char(10)||'---')";
+    const fm = `substr(d.content, 1, ${fmEnd} + 4)`;
     return (
       "ORDER BY (CASE WHEN d.source_kind='wiki' AND substr(d.content,1,4) = '---'||char(10) " +
       `AND ${fmEnd} > 0 ` +
-      `AND instr(substr(d.content, 1, ${fmEnd} + 4), 'status: superseded') > 0 ` +
+      `AND (instr(${fm}, 'status: superseded') > 0 OR instr(${fm}, 'status: deprecated') > 0) ` +
       `THEN 1 ELSE 0 END), ${rank} LIMIT ?`
     );
   }

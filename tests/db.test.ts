@@ -622,6 +622,17 @@ describe("search relaxation + superseded down-rank", () => {
     conn.close();
   });
 
+  // An OKF bundle spells retirement `deprecated` — the same demotion, even for the stronger match.
+  test("OKF `status: deprecated` pages rank after live pages too", () => {
+    writeFileSync(join(root, "docs", "wiki", "okf-old.md"), `---\ntitle: t\nstatus: deprecated\n---\n\n` + "폐기규칙 상세 ".repeat(40));
+    writeFileSync(join(root, "docs", "wiki", "okf-live.md"), `---\ntitle: t\nstatus: stable\n---\n\n폐기규칙 한 번. ` + "무관한 채움 문장 ".repeat(30));
+    const conn = idx.connect();
+    idx.indexAll(conn);
+    const rows = idx.search(conn, "폐기규칙");
+    expect(rows.map((r: any) => r.relative_path)).toEqual(["docs/wiki/okf-live.md", "docs/wiki/okf-old.md"]);
+    conn.close();
+  });
+
   test("body mentioning the phrase is NOT demoted (frontmatter-only check)", () => {
     // explainer is status:ready but its BODY mentions the phrase early (within the first
     // 400 chars) — under a naive prefix-LIKE it would be falsely demoted below weaker.md.
