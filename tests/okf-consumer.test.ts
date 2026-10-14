@@ -309,3 +309,12 @@ test("a link whose text carries escaped brackets is still a link (titles like `[
     "3_decision/y.md",
   ]);
 });
+
+test("OKF rules cover the repository's own docs/wiki only, not a nested sub-project wiki", () => {
+  const linter = new Linter(null, null, getConfig());
+  (linter as any).okf = true;
+  const nested = { id: "n", path: "/src/sub/docs/wiki/2_milestone/", filename: "a.md", relative_path: "src/sub/docs/wiki/2_milestone/a.md", content: "---\ntitle: legacy\n---\nx" };
+  const own = { ...nested, id: "o", relative_path: "docs/wiki/2_milestone/a.md" };
+  expect(linter._okfPage(nested as any, nested.content)).toEqual([]);
+  expect(linter._okfPage(own as any, own.content).map((i) => i.code)).toContain("okf-type-missing");
+});

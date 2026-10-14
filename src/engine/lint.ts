@@ -803,6 +803,9 @@ export class Linter {
 
   _okfPage(doc: WikiDoc, content: string): LintIssue[] {
     if (!this.okf) return [];
+    // The bundle is the repository's own docs/wiki. A wiki nested deeper (a vendored or sub-project
+    // `src/x/docs/wiki/`) is a separate bundle with its own format and is not converted with this one.
+    if (!(doc.relative_path || "").startsWith(`${WIKI_REL}/`)) return [];
     const path = this._p(doc);
     // A cold-tier row stores no body; conformance is about the file, so read it.
     const text = doc.content ?? (this.index ? readRepoFile(this.index.root, doc.relative_path) : null) ?? content;
