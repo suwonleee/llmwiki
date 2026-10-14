@@ -146,6 +146,18 @@ function commandConflicts(profs: readonly string[]): string[] {
   return conflicts.sort();
 }
 
+// A profile that shares another profile's commands/ through a symlink is refused (writes never
+// follow a link), and "move or rename" alone did not say what to do with a link: measured
+// 2026-10-06 with ~/.claude-bedrock/commands → ~/.claude-suwonlee/commands blocking every profile.
+function symlinkNote(path: string): string {
+  try {
+    if (!lstatSync(path).isSymbolicLink()) return "";
+    return ` → ${readlinkSync(path)} (symlink — replace it with a real directory: rm '${path}' && mkdir '${path}')`;
+  } catch {
+    return "";
+  }
+}
+
 function apply(dryRun = false): number {
   const profs = profiles();
   if (!profs.length) {
@@ -168,7 +180,7 @@ function apply(dryRun = false): number {
   const conflicts = commandConflicts(profs);
   if (conflicts.length) {
     console.error("🔴 Claude command conflict(s); setup left every profile untouched:");
-    for (const path of conflicts) console.error(`    ${path}`);
+    for (const path of conflicts) console.error(`    ${path}${symlinkNote(path)}`);
     console.error("   Move or rename those user-owned files, then re-run setup.");
     return 1;
   }
