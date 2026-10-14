@@ -100,7 +100,7 @@ describe("repository writes never follow a symlink", () => {
 
     expectReplaced(log, victim);
     const written = readFileSync(log, "utf8");
-    expect(written).toContain("## [2026-07-25] review | a session");
+    expect(written).toContain("## 2026-07-25\n\n* **Review**: a session"); // OKF log form (§9)
     expect(written).not.toContain("PRIVATE-CONTENT"); // the victim's body never enters the repo
   });
 

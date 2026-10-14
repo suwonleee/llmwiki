@@ -13,14 +13,15 @@ test("stock conventions are detected", () => {
 
 test("schemaText renders the canonical stock prompt", () => {
   expect(schemaText(defaults())).toBe(`Wiki page rules (strict):
-- Begin the file with a YAML frontmatter block containing: title, description (one sentence), date (YYYY-MM-DD), tags ([2+ entries]), status (ready|draft), domain, source.
-- Choose ONE domain for this page and set the \`domain:\` field to it:
-  - direction — the project's big direction/strategy, OR a shift in it this session (from what → to what, and why). Rare.
-  - milestone — work progress + what's next: what was built / changed / measured this session, plus any remaining TODOs the human stated.
-  - decision — an ADR: a problem the HUMAN faced this (or a past) session, the alternatives weighed, and the choice made (context / decision / alternatives / consequences).
-  - insight — a realization or lesson surfaced while working with the human (a gotcha, a non-obvious learning, what made the result better) that helps future work.
-- Every factual claim must carry a footnote citation \`[^1]\`, and the file must end with \`[^1]: <TRANSCRIPT_FILENAME>\`.
-- Grounding rule: write only what is grounded in the transcript. For milestone, record stated facts. For insight / decision / direction, summarize what the HUMAN actually realized or decided — never invent judgments, opinions, or decisions the human did not make. When unsure, omit.
+- Begin the file with a YAML frontmatter block (Open Knowledge Format) containing: type, title, description (one sentence), date (YYYY-MM-DD), tags ([2+ entries]), status (stable|draft), sources.
+- Choose ONE type for this page and set the \`type:\` field to it:
+  - Direction — the project's big direction/strategy, OR a shift in it this session (from what → to what, and why). Rare.
+  - Milestone — work progress + what's next: what was built / changed / measured this session, plus any remaining TODOs the human stated.
+  - Decision — an ADR: a problem the HUMAN faced this (or a past) session, the alternatives weighed, and the choice made (context / decision / alternatives / consequences).
+  - Insight — a realization or lesson surfaced while working with the human (a gotcha, a non-obvious learning, what made the result better) that helps future work.
+- Every factual claim must carry a footnote citation \`[^s1]\`, and the file must end with \`[^s1]: <TRANSCRIPT_FILENAME>\`. Each footnote label has a matching \`sources:\` entry: \`- { id: s1, resource: <TRANSCRIPT_FILENAME> }\`.
+- Link other wiki pages with relative markdown links (\`[Title](../5_topic/page.md)\`), never \`[[wikilinks]]\`. Do not write \`domain:\`, \`source:\`, \`updated:\`, \`generated:\` or \`verified:\` — the engine stamps provenance.
+- Grounding rule: write only what is grounded in the transcript. For Milestone, record stated facts. For Insight / Decision / Direction, summarize what the HUMAN actually realized or decided — never invent judgments, opinions, or decisions the human did not make. When unsure, omit.
 - Usefulness rule: everything written must help the NEXT work session. No filler, no restating the obvious.
 - Body style: numbered sections holding a bullet hierarchy a person can scan.
     - Sections \`## 1. <label>\`, \`## 2. <label>\` … in reading order; split one as \`### 1-1. <label>\` only when it has parts. Sections start once a page holds 6+ top-level bullets; a shorter one stays a bare list under the TL;DR.
@@ -50,9 +51,10 @@ test("body style contract carries the exact shape and stays cheap enough to repe
   expect(rule.length).toBeLessThan(900);
 });
 
-test("writePromptTemplate keeps the historical domain-pick phrase and terminology line (stock)", () => {
+test("writePromptTemplate asks for the OKF type by name and keeps the terminology line (stock)", () => {
   const wp = writePromptTemplate(defaults());
-  expect(wp).toContain("(direction, milestone, decision, or insight) and set the `domain:` frontmatter field.");
+  expect(wp).toContain("(Direction, Milestone, Decision, or Insight) and set the `type:` frontmatter field.");
+  expect(wp).toContain("The footnote `[^s1]:` must contain ONLY the bare filename");
   expect(wp).toContain("- Terminology (lint-enforced, advisory): avoid jargon a person wouldn't say — e.g. when writing Korean prefer `방향성` (not 진북/북극성/north-star) and `업데이트`/`update` (not distill).");
 });
 
@@ -72,9 +74,9 @@ test("custom conventions take the generic branch with the config's own words", (
     { dir: "2_lesson", domain: "lesson", review: "model", guide: "교훈" },
   ];
   expect(isStockConventions(c)).toBe(false);
-  expect(renderDomainBullets(c)).toBe("  - goal — 분기 목표\n  - lesson — 교훈");
-  expect(renderDomainList(c)).toBe("goal, or lesson");
-  expect(renderGroundingRule(c)).toContain("For lesson, record stated facts. For goal,");
+  expect(renderDomainBullets(c)).toBe("  - Goal — 분기 목표\n  - Lesson — 교훈");
+  expect(renderDomainList(c)).toBe("Goal, or Lesson");
+  expect(renderGroundingRule(c)).toContain("For Lesson, record stated facts. For Goal,");
   expect(renderRuleCategories("ko", c)).toContain("1_goal (분기 목표) / 2_lesson (교훈)");
   expect(renderRuleHumanQueue("en", c)).toContain("(1_goal)");
   c.bannedTerms = [["foo", "bar"]];

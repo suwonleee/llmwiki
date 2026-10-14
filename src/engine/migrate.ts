@@ -21,6 +21,8 @@ import { WikiIndex } from "./db.ts";
 import { updateReferences, autoRegisterCitedTranscripts } from "./refs.ts";
 import { Linter, type WikiIndexLike } from "./lint.ts";
 import { readRepoDir, readRepoFile, removeEmptyRepoDir, renameRepoPath, repoDirExists, repoFileExists, repoRelative, writeRepoFile } from "./repo-write.ts";
+import { renderYaml, splitFrontmatter, typeNameFor } from "./okf.ts";
+import { bundleFiles, isOkfBundle } from "./okf-bundle.ts";
 
 export const SCHEMA_VERSION_FILE = ".schema-version";
 
@@ -168,10 +170,17 @@ export function migrate(
         touched = true;
       }
     }
-    // frontmatter domain update — only pages living inside a renamed category dir
+    // frontmatter category update — only pages living inside a renamed category dir. An OKF page
+    // names its category by `type`; a legacy page by `domain`. Line edits, so the rest of the
+    // page stays byte-identical.
     const owner = pairs.find((pair) => rel.startsWith(`docs/wiki/${pair.from}/`));
     if (owner?.domain) {
-      const next = content.replace(/^domain:\s*\S+$/m, `domain: ${owner.domain}`);
+      const { block } = splitFrontmatter(content);
+      const typeLine = renderYaml({ type: typeNameFor(owner.domain) });
+      const domainLine = `domain: ${owner.domain}`;
+      const edited = block?.replace(/^type:[ \t]*\S.*$/m, () => typeLine).replace(/^domain:\s*\S+$/m, () => domainLine);
+      // The block opens the file, so its first occurrence is the frontmatter itself.
+      const next = block && edited !== block ? content.replace(block, () => edited!) : content;
       if (next !== content) {
         content = next;
         domains += 1;
@@ -288,6 +297,11 @@ export function detectConfigDrift(ws: string, cfg: WikiConfig = getConfig(ws)): 
     } catch {
       /* unreadable snapshot → stay silent */
     }
+  }
+  // Not drift in the config sense, but the same kind of one-line nudge: a wiki with pages that
+  // predates OKF. Conversion is explicit (a teammate's wiki is never rewritten behind their back).
+  if (!isOkfBundle(root) && bundleFiles(root).some((rel) => !/(^|\/)(index|log)\.md$/.test(rel))) {
+    return "wiki not in OKF v0.2 yet — run `llmwiki okf <repo>` (dry-run) then `--commit`";
   }
   return null;
 }

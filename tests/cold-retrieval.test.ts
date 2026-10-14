@@ -229,3 +229,16 @@ describe("cold wiki retrieval", () => {
     }
   });
 });
+
+describe("cold discovery labels", () => {
+  test("standard markdown link texts count as link labels alongside [[wikilinks]]", async () => {
+    const { coldDiscoveryChunk } = await import("../src/engine/cold-index.ts");
+    const { parseFrontmatter } = await import("../src/engine/frontmatter.ts");
+    const source =
+      "---\ntype: Topic\ntitle: T\n---\n\nSee [Cache invalidation](../5_topic/cache.md) and [[3_decision/adr|the ADR]].\n" +
+      "Not a page: [docs](https://example.com), ![img](a.png), a footnote [^s1].\n\n[^s1]: x.jsonl\n";
+    const [chunk] = coldDiscoveryChunk({ relativePath: "docs/wiki/5_topic/t.md", title: "T", metadata: parseFrontmatter(source), sourceContent: source });
+    const line = chunk!.content.split("\n").find((l) => l.startsWith("wikilinks: "))!;
+    expect(line).toBe("wikilinks: Cache invalidation, 3_decision/adr, the ADR");
+  });
+});

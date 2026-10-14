@@ -10,6 +10,7 @@ import { spawnSync } from "node:child_process";
 import { repoFileExists, repoRelative } from "./repo-write.ts";
 import {
   buildLinkIndex,
+  decodeHref,
   lookupKey,
   parseCitationFilename,
   parseWikiLinkTargets,
@@ -22,8 +23,14 @@ import { parseExcerpts, verifyExcerpt } from "./excerpt.ts";
 import { hasSecret } from "./screen.ts";
 import { L0_BUDGET, L0_LINT_BUDGET } from "./budgets.ts";
 import { effectiveKo, getConfig, type WikiConfig } from "./config.ts";
-import { parseFrontmatter as parseFrontmatterBoundary } from "./frontmatter.ts";
+import { parseFrontmatter as parseFrontmatterBoundary, type Frontmatter } from "./frontmatter.ts";
+import { checkConcept, checkIndex, checkLog, linkTextOnly, splitFrontmatter, type OkfIssue } from "./okf.ts";
 
+export { linkTextOnly };
+import { bundleFiles, domainForType, isOkfBundle, WIKI_REL } from "./okf-bundle.ts";
+import { readRepoFile } from "./repo-write.ts";
+
+// Flat-record view of the one frontmatter reader (frontmatter.ts) for callers written against it.
 export function parseFrontmatter(content: string): Record<string, string | string[]> {
   const legacy: Record<string, string | string[]> = {};
   for (const [key, value] of Object.entries(parseFrontmatterBoundary(content).fields)) {
@@ -82,7 +89,9 @@ export interface LintIssue {
 
 const FOOTNOTE_DEF = /^\[\^([^\]]+)\]:\s*(.+)$/gm;
 const FOOTNOTE_USE = /\[\^([^\]]+)\](?!:)/g;
-const RAW_LINK_RE = /(?<!!)\[(?:[^\]]*)\]\(([^)]+)\)/g;
+// Link text may carry escaped brackets (`[\[TRUST\] ECS](x.md)` — a page title with brackets,
+// as `llmwiki okf` writes it); `[^\]]*` alone stops at the escaped `\]` and loses the edge.
+const RAW_LINK_RE = /(?<!!)\[(?:[^\]\\]|\\.)*\]\(([^)]+)\)/g;
 
 const SRC_EXT = /\.(pdf|docx?|pptx?|xlsx?|csv|html?|md|txt|jsonl)$/i;
 const IMG_EXT = /\.(png|jpe?g|gif|webp|svg)$/i;
@@ -178,6 +187,8 @@ export class Linter {
   l0Pages: Set<string>;
   rootPages: Set<string>;
   ledgerPages: Set<string>;
+  // Set per run: docs/wiki is an OKF bundle (its root index.md declares okf_version).
+  okf = false;
 
   constructor(index: WikiIndexLike | null, conn: Database | null, cfg: WikiConfig = getConfig()) {
     this.index = index;
@@ -215,6 +226,7 @@ export class Linter {
     const wikiPages = allDocs.filter((d) => this._isWiki(d));
     const sourceLookup = this._sourceLookup(allDocs);
     const wikiLookup = this._wikiLookup(allDocs);
+    this.okf = this._isOkf();
 
     let docs = allDocs;
     if (scope === "wiki") {
@@ -235,6 +247,7 @@ export class Linter {
     }
     if (scope === "all" || scope === "wiki") {
       for (const i of this._stale()) if (this._match(i.path, path)) issues.push(i);
+      for (const i of this._okfBundle(wikiPages.length)) if (this._match(i.path, path)) issues.push(i);
     }
     return [issues, docs.length];
   }
@@ -248,12 +261,17 @@ export class Linter {
     wikiCount: number,
   ): LintIssue[] {
     const path = this._p(doc);
+    // OKF reserves `index.md` at every level for the generated listing — navigation, not a page.
+    // A pre-OKF wiki's hand-written index.md is a page (the indexer stores it), so it is checked.
+    if (this.okf && lookupKey(doc.filename || "") === "index.md") return [];
     const content = doc.content || "";
     const issues: LintIssue[] = [];
     if (!this._isLedger(doc)) {
-      issues.push(...this._frontmatter(doc, parseFrontmatterBoundary(content).fields));
+      const fm = parseFrontmatterBoundary(content);
+      issues.push(...this._frontmatter(doc, fm.fields, fm));
       issues.push(...this._footnotes(path, content));
     }
+    issues.push(...this._okfPage(doc, content));
     issues.push(...this._banned(path, content));
     issues.push(...this._citations(path, content, sourceLookup));
     issues.push(...this._excerpts(doc, content, sourceLookup));
@@ -283,7 +301,7 @@ export class Linter {
     if (this._isLedger(doc) || this.l0Pages.has(name) || name === this.cfg.files.log) return [];
     if (path.includes(`/${this.cfg.quizDir}/`)) return [];
 
-    const body = content.replace(/^---\n[\s\S]*?\n---\n/, "");
+    const body = splitFrontmatter(content).body;
     const lines = body.split("\n");
     const topLevel = lines.filter((line) => /^- \S/.test(line)).length;
     const hasNumberedSection = lines.some((line) => /^#{2,3} \d+(-\d+)*\. \S/.test(line));
@@ -300,8 +318,9 @@ export class Linter {
       });
     }
 
-    for (const line of lines) {
-      if (!/^\s*- \S/.test(line)) continue;
+    for (const raw of lines) {
+      if (!/^\s*- \S/.test(raw)) continue;
+      const line = linkTextOnly(raw);
       const separators = (line.match(/·/g) ?? []).length;
       const crammed = separators >= DENSE_BULLET_SEPARATORS && line.length >= DENSE_BULLET_MIN_CHARS;
       if (!crammed && line.length <= DENSE_BULLET_CHARS) continue;
@@ -330,7 +349,9 @@ export class Linter {
     // is compressing prose while keeping every citation — so counting v3 excerpts would fire it on
     // pages whose prose is fine, and make "cite less" the cheapest way to get under budget. In a
     // system whose entire value is provenance, that incentive points the wrong way.
-    const prose = stripEvidence(content);
+    // Body only: OKF `sources` grows one frontmatter line per footnote, and a well-cited page
+    // must not read as oversized because of its provenance metadata.
+    const prose = linkTextOnly(stripEvidence(splitFrontmatter(content).body));
     if (prose.length <= TOPIC_BUDGET) return [];
     return [
       {
@@ -366,20 +387,21 @@ export class Linter {
     // itself: the injection never cuts (2026-07-12 no-cut principle) — an over-standard page
     // already rides whole with a per-session notice, so lint piles on only when meaningfully
     // bloated. This stops char-by-char trimming of a human-owned page (signal sacrificed to a number).
-    if (content.length <= L0_LINT_BUDGET) return [];
+    const chars = linkTextOnly(content).length; // measured as read, links as their text
+    if (chars <= L0_LINT_BUDGET) return [];
     return [
       {
         severity: "warn",
         code: "oversized-l0",
         path,
         message: this.ko
-          ? `${name} 가 기준(${L0_BUDGET}자)을 25% 이상 초과 (${content.length}자) — 주입은 자르지 않으므로(전량+초과 통지) 이 크기가 매 세션 비용. detail 페이지로 1회 구조 트림 권장 (글자 단위 추격 불필요)`
-          : `${name} is >25% over the ${L0_BUDGET}-char standard at ${content.length} — injection never cuts (whole page + notice rides every cold-start), so this size is a per-session cost. Do ONE structural trim (move detail out); no char-by-char chasing`,
+          ? `${name} 가 기준(${L0_BUDGET}자)을 25% 이상 초과 (${chars}자) — 주입은 자르지 않으므로(전량+초과 통지) 이 크기가 매 세션 비용. detail 페이지로 1회 구조 트림 권장 (글자 단위 추격 불필요)`
+          : `${name} is >25% over the ${L0_BUDGET}-char standard at ${chars} — injection never cuts (whole page + notice rides every cold-start), so this size is a per-session cost. Do ONE structural trim (move detail out); no char-by-char chasing`,
       },
     ];
   }
 
-  _frontmatter(doc: WikiDoc, meta: Readonly<Record<string, string | readonly string[]>>): LintIssue[] {
+  _frontmatter(doc: WikiDoc, meta: Readonly<Record<string, string | readonly string[]>>, fm?: Frontmatter): LintIssue[] {
     const path = this._p(doc);
     if (!meta || Object.keys(meta).length === 0) {
       return [
@@ -400,13 +422,14 @@ export class Linter {
         message: "frontmatter missing `description`",
       });
     }
+    // An OKF page may carry its time only in `generated.at`; parseFrontmatter reads that too.
     const dateRaw = meta["date"] ?? meta["updated"] ?? "";
-    if (!String(dateRaw).trim()) {
+    if (!String(dateRaw).trim() && !fm?.date) {
       out.push({
         severity: "warn",
         code: "missing-date",
         path,
-        message: "frontmatter missing `date`/`updated`",
+        message: "frontmatter missing `date`/`updated`/`generated.at`",
       });
     }
     const tags = meta["tags"];
@@ -423,7 +446,12 @@ export class Linter {
     // Honesty rules (P0-4, after pm-llm-wiki SCHEMA + semantica transaction-time):
     // a retired page must point at what replaced it — supersession without a pointer
     // silently orphans the successor and breaks "current belief = superseded_by absent".
-    if (String(meta["status"] ?? "").trim() === "superseded" && !String(meta["superseded_by"] ?? "").trim()) {
+    // OKF spells retirement `deprecated`, which alone is a lifecycle state (an obsolete page need
+    // not have a successor); it claims supersession only once it records `superseded_at`.
+    const rawStatus = String(meta["status"] ?? "").trim();
+    const claimsSuccessor =
+      rawStatus === "superseded" || (rawStatus === "deprecated" && !!String(meta["superseded_at"] ?? "").trim());
+    if (claimsSuccessor && !String(meta["superseded_by"] ?? "").trim()) {
       out.push({
         severity: "error",
         code: "superseded-missing-pointer",
@@ -669,7 +697,9 @@ export class Linter {
     // Judgment pages assert what a human decided and why; that is the class a teammate cannot
     // re-derive from code, so it is where portable evidence pays. Canonical domains only — a
     // custom config's domains simply don't trigger this, which is the safe direction to fail.
-    const domain = String(parseFrontmatterBoundary(content).fields["domain"] ?? "");
+    // An OKF page names its kind by `type` (no `domain:`), a pre-OKF page by `domain`.
+    const fm = parseFrontmatterBoundary(content);
+    const domain = fm.domain ?? domainForType(fm.type, this.cfg) ?? "";
     if (domain === "direction" || domain === "decision") {
       for (const fid of footnotes) {
         if (withExcerpt.has(fid) || !localTranscript.has(fid)) continue;
@@ -707,7 +737,13 @@ export class Linter {
         continue;
       }
       if (IMG_EXT.test(href)) continue;
-      const bare = href.split("#")[0]!;
+      const bare = decodeHref(href);
+      if (bare.startsWith("/")) {
+        // Bundle-absolute (OKF): relative to docs/wiki, never the filesystem root.
+        if (repoFileExists(root, `${WIKI_REL}${bare}`) || this._resolveLink(bare.slice(1), wikiLookup)) continue;
+        out.push({ severity: "error", code: "dangling-link", path, message: `wiki link \`${href}\` does not resolve` });
+        continue;
+      }
       const target = pathResolve(pageDir, bare);
       if (target.startsWith(root)) {
         try {
@@ -736,10 +772,77 @@ export class Linter {
         severity: "warn",
         code: "dangling-wikilink",
         path,
-        message: this.ko
-          ? `\`[[${target}]]\` 가 아무 페이지도 가리키지 않는다 — 대상을 만들거나 링크를 고칠 것 (아직 쓰지 않은 페이지를 가리키는 것이면 그대로 둬도 된다)`
-          : `\`[[${target}]]\` points at no page — create the target or fix the link (leave it if it names a page you have yet to write)`,
+        message: this.okf
+          ? this.ko
+            ? `\`[[${target}]]\` 가 아무 페이지도 가리키지 않는다 — 게다가 \`[[...]]\`는 OKF 이전 링크 형식이다(OKF 소비자는 표준 상대 링크 \`[제목](../5_topic/x.md)\`만 읽는다): 대상이 생기면 표준 링크로 쓸 것`
+            : `\`[[${target}]]\` points at no page — and \`[[...]]\` is the pre-OKF link form (OKF consumers only read standard relative links like \`[Title](../5_topic/x.md)\`): write a standard link once the target exists`
+          : this.ko
+            ? `\`[[${target}]]\` 가 아무 페이지도 가리키지 않는다 — 대상을 만들거나 링크를 고칠 것 (아직 쓰지 않은 페이지를 가리키는 것이면 그대로 둬도 된다)`
+            : `\`[[${target}]]\` points at no page — create the target or fix the link (leave it if it names a page you have yet to write)`,
       });
+    }
+    return out;
+  }
+
+  // ---- OKF (Open Knowledge Format) conformance ----
+  //
+  // Only on a wiki that IS an OKF bundle. A legacy wiki gets one advisory instead of a per-page
+  // error each: a close-out told to reach 0 errors must never start hand-rewriting a thousand
+  // pages — conversion is one deterministic `llmwiki okf --commit` a person chooses to run.
+  _isOkf(): boolean {
+    try {
+      return this.index ? isOkfBundle(this.index.root) : false;
+    } catch {
+      return false;
+    }
+  }
+
+  _okfIssue(path: string, i: OkfIssue): LintIssue {
+    return { severity: i.severity, code: i.rule, path, message: i.message };
+  }
+
+  _okfPage(doc: WikiDoc, content: string): LintIssue[] {
+    if (!this.okf) return [];
+    const path = this._p(doc);
+    // A cold-tier row stores no body; conformance is about the file, so read it.
+    const text = doc.content ?? (this.index ? readRepoFile(this.index.root, doc.relative_path) : null) ?? content;
+    if (this._isLedger(doc)) return checkLog(path, text).map((i) => this._okfIssue(path, i));
+    // A page with no frontmatter at all already carries `missing-frontmatter`; one error per fault.
+    return checkConcept(path, text)
+      .filter((i) => i.rule !== "okf-frontmatter-missing")
+      .map((i) => this._okfIssue(path, i));
+  }
+
+  /** Wiki-wide OKF findings: the generated listings on a bundle, the one advisory on a legacy wiki. */
+  _okfBundle(wikiCount: number): LintIssue[] {
+    if (!this.index || wikiCount === 0) return [];
+    const root = this.index.root;
+    if (!this.okf) {
+      return [
+        {
+          severity: "warn",
+          code: "okf-not-converted",
+          path: `/${WIKI_REL}/index.md`,
+          message: this.ko
+            ? "이 위키는 아직 OKF(Open Knowledge Format) 번들이 아니다 — 페이지를 손으로 고치지 말고 `llmwiki okf <repo>`로 미리 본 뒤 `--commit`으로 한 번에 변환할 것"
+            : "this wiki is not an OKF (Open Knowledge Format) bundle yet — do not hand-edit pages; run `llmwiki okf <repo>` to preview, then `--commit` to convert in one pass",
+        },
+      ];
+    }
+    const hidden = new Set([this.cfg.quizDir, ...this.cfg.privateDirs]);
+    const out: LintIssue[] = [];
+    let files: string[] = [];
+    try {
+      files = bundleFiles(root);
+    } catch {
+      return [];
+    }
+    for (const rel of files) {
+      if (lookupKey(rel.split("/").pop() || "") !== "index.md" || hidden.has(rel.split("/")[0]!)) continue;
+      const text = readRepoFile(root, `${WIKI_REL}/${rel}`);
+      if (text === null) continue;
+      const path = `/${WIKI_REL}/${rel}`;
+      out.push(...checkIndex(path, text, rel === "index.md").map((i) => this._okfIssue(path, i)));
     }
     return out;
   }

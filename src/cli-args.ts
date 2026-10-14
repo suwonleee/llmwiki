@@ -10,6 +10,7 @@ const VALUE_FLAG_NAMES = [
   "--repo", "--max-pages", "--prompt", "--corpus", "--label",
   "--page", "--result", "--question", "--harness", "--older-than", "--review",
   "--hook-event", "--transcript", "--out", "--repeats", "--sessions", "--section",
+  "--bundle", "--actor",
 ] as const;
 
 const VALUE_FLAGS = new Set<string>(VALUE_FLAG_NAMES);
@@ -18,7 +19,7 @@ const BOOLEAN_FLAG_NAMES = [
   "--check", "--commit", "--confirm", "--downstream-read", "--ensure", "--errors-only",
   "--fix", "--force", "--forget", "--help", "--if-due", "--keep", "--list", "--notice",
   "--normalize", "--report", "--sealed", "--skipped", "--topic", "--tune-only",
-  "--installation-only", "--orphans", "--refresh-affinity",
+  "--installation-only", "--orphans", "--refresh-affinity", "--if-okf", "--json",
 ] as const;
 
 const BOOLEAN_FLAGS = new Set<string>(BOOLEAN_FLAG_NAMES);

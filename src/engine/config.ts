@@ -20,6 +20,7 @@ import { homedir } from "node:os";
 import { CLONE_ROOT } from "./paths.ts";
 import { resolveModels } from "./models.ts";
 import { detectSessionLang } from "./session-lang.ts";
+import { typeNameFor } from "./okf.ts";
 
 export interface CategoryDef {
   dir: string; // folder under docs/wiki (ordered = numbered = reading order)
@@ -461,25 +462,31 @@ export function isStockConventions(cfg: WikiConfig = getConfig()): boolean {
   );
 }
 
-// WRITE-prompt domain bullet list (one line per category).
+// A page names its category by OKF `type` (the category's domain as a type name, `decision` →
+// `Decision`); the engine routes on it. Same derivation as okf-bundle's categoryType, which this
+// module cannot import (okf-bundle reads the config).
+const catType = (c: CategoryDef): string => typeNameFor(c.domain);
+
+// WRITE-prompt type bullet list (one line per category).
 export function renderDomainBullets(cfg: WikiConfig = getConfig()): string {
-  return cfg.categories.map((c) => `  - ${c.domain} — ${c.prompt ?? c.guide}`).join("\n");
+  return cfg.categories.map((c) => `  - ${catType(c)} — ${c.prompt ?? c.guide}`).join("\n");
 }
 
-// "(direction, milestone, decision, or insight)" — the domain-pick phrase.
+// "(Direction, Milestone, Decision, or Insight)" — the type-pick phrase.
 export function renderDomainList(cfg: WikiConfig = getConfig()): string {
-  const ds = cfg.categories.map((c) => c.domain);
+  const ds = cfg.categories.map(catType);
   return ds.length > 1 ? `${ds.slice(0, -1).join(", ")}, or ${ds[ds.length - 1]}` : (ds[0] ?? "");
 }
 
-// Grounding sentence: fact-recording domains vs judgment-bearing domains. The default render
-// reproduces the historical sentence exactly ("For milestone, record stated facts. For
-// insight / decision / direction, …") — hence the reversed order of the non-fallback domains.
+// Grounding sentence: fact-recording types vs judgment-bearing types. The default render keeps
+// the historical sentence ("For Milestone, record stated facts. For Insight / Decision /
+// Direction, …") in the type names the page declares — hence the reversed order of the
+// non-fallback categories.
 export function renderGroundingRule(cfg: WikiConfig = getConfig()): string {
   const fallback = cfg.categories.find((c) => c.review === "model")!;
-  const judgment = cfg.categories.filter((c) => c !== fallback).map((c) => c.domain).reverse();
+  const judgment = cfg.categories.filter((c) => c !== fallback).map(catType).reverse();
   return (
-    `- Grounding rule: write only what is grounded in the transcript. For ${fallback.domain}, record stated facts. ` +
+    `- Grounding rule: write only what is grounded in the transcript. For ${catType(fallback)}, record stated facts. ` +
     `For ${judgment.join(" / ")}, summarize what the HUMAN actually realized or decided — never invent judgments, ` +
     `opinions, or decisions the human did not make. When unsure, omit.`
   );
@@ -556,8 +563,8 @@ export function renderRuleCategories(lang: "ko" | "en", cfg: WikiConfig = getCon
 export function renderRuleAuthoringBrief(lang: "ko" | "en", cfg: WikiConfig = getConfig()): string {
   const q = cfg.queueDir;
   return lang === "ko"
-    ? `2) 저작은 마감에서 — 작업 중에는 위키 페이지를 만들거나 고치지 않는다(예외: 사람이 '지금 적어두라'고 하거나 /wiki-* 를 부른 경우). 실질 작업이 있었으면 /wiki-save 로 닫고, 주기 딥패스는 /wiki-deep. 카테고리·${q}(사람 판단)·근거·frontmatter 규칙은 그 스킬이 싣는다 — 스킬이 없으면 \`llmwiki conventions\`.`
-    : `2) Authoring happens at close-out — do NOT create or edit wiki pages mid-session (exception: the human says to record now, or calls any /wiki-* command). If there was real work, close with /wiki-save; the periodic deep pass is /wiki-deep. The category · ${q} (human judgment) · grounding · frontmatter rules ride with that skill — without a skill layer, \`llmwiki conventions\`.`;
+    ? `2) 저작은 마감에서 — 작업 중에는 위키 페이지를 만들거나 고치지 않는다(예외: 사람이 '지금 적어두라'고 하거나 /wiki-* 를 부른 경우). 실질 작업이 있었으면 /wiki-save 로 닫고, 주기 딥패스는 /wiki-deep. 카테고리·${q}(사람 판단)·근거·frontmatter 규칙은 그 스킬이 싣는다(페이지는 OKF: \`type:\`·상대 마크다운 링크) — 스킬이 없으면 \`llmwiki conventions\`.`
+    : `2) Authoring happens at close-out — do NOT create or edit wiki pages mid-session (exception: the human says to record now, or calls any /wiki-* command). If there was real work, close with /wiki-save; the periodic deep pass is /wiki-deep. The category · ${q} (human judgment) · grounding · frontmatter rules ride with that skill (pages are OKF: \`type:\`, relative markdown links) — without a skill layer, \`llmwiki conventions\`.`;
 }
 
 export function renderRuleHumanQueue(lang: "ko" | "en", cfg: WikiConfig = getConfig()): string {

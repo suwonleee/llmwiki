@@ -24,6 +24,7 @@ import {
   repoRelative,
 } from "./repo-write.ts";
 import { parseFrontmatter, resolveDocumentTitle } from "./frontmatter.ts";
+import { isOkfBundle, writeIndexes } from "./okf-bundle.ts";
 import {
   COLD_INDEX_RELATIVE_PATH,
   coldDiscoveryChunk,
@@ -499,12 +500,17 @@ export class WikiIndex {
     // one-directional wiki→human contract — see quiz.ts). The prune loop below also
     // self-heals rows indexed before this guard existed.
     const quizPrefix = WIKI_DIR + "/" + getConfig(this.root).quizDir + "/";
+    // Only an OKF bundle reserves index.md; a pre-OKF wiki's hand-written index is a page.
+    const okfBundle = isOkfBundle(this.root);
 
     for (const relativeNative of walkFiles(this.root, walkRoot)) {
       // posix-normalize the stored relative_path so downstream `docs/wiki/` matching
       // (sourceKind, lint, cold-start) holds on Windows, where relpath yields backslashes.
       const relative = relativeNative.replace(/\\/g, "/");
       if (relative === COLD_INDEX_RELATIVE_PATH) continue;
+      // OKF reserves `index.md` at every level for the generated listing: it is navigation, not
+      // knowledge, and searching it would rank a list of titles above the pages it lists.
+      if (okfBundle && relative.startsWith(WIKI_DIR + "/") && /(^|\/)index\.md$/i.test(relative)) continue;
       if (relative.startsWith(quizPrefix)) continue;
       if (!relative.startsWith(WIKI_DIR + "/")) {
         if (sourceCount >= WikiIndex.SOURCE_FILE_CAP) {
@@ -743,6 +749,12 @@ export class WikiIndex {
   }
 
   private writeColdIndex(db: Database): void {
+    // An OKF bundle lists every page in per-folder `index.md` files (cold pages included), which
+    // supersedes the cold-only listing. A wiki not yet converted keeps its cold-index.md.
+    if (isOkfBundle(this.root)) {
+      writeIndexes(this.root, getConfig(this.root));
+      return;
+    }
     const rows = db
       .query<
         {

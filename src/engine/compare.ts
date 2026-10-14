@@ -88,7 +88,9 @@ export function scoreArm(root: string, label: string, buildStats: { corpus: numb
     lintConn.close();
   }
   const errors = issues.filter((i) => i.severity === "error").length;
-  const warns = issues.filter((i) => i.severity === "warn").length;
+  // `okf-not-converted` is one wiki-wide format notice, not a page-quality signal: counting it
+  // would score two arms differently only because one corpus predates the OKF conversion.
+  const warns = issues.filter((i) => i.severity === "warn" && i.code !== "okf-not-converted").length;
   dangling = issues.filter((i) => i.code === "dangling-link").length;
 
   let bench: BenchReport | null = null;

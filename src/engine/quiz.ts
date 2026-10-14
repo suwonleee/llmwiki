@@ -30,7 +30,9 @@
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { resolveWikiLang, getConfig, isHumanReviewDir, logDirs, resolveLang, type LangCatalog, type WikiConfig, type WikiLang } from "./config.ts";
-import { parseFrontmatter } from "./lint.ts";
+import { parseFrontmatter, type Frontmatter } from "./frontmatter.ts";
+import { isoLocal, renderYaml } from "./okf.ts";
+import { domainForType, engineActor } from "./okf-bundle.ts";
 import { WikiIndex } from "./db.ts";
 import { ensureRepoDir, readRepoDir, readRepoFile, renameRepoPath, repoFileExists, repoRelative, writeRepoFile } from "./repo-write.ts";
 import { addDays, today } from "./today.ts";
@@ -232,10 +234,17 @@ export function renderLedger(entries: QuizEntry[], date: string, lang: WikiLang)
     `- ${e.page} — box ${e.box} · due ${e.due} · ${e.correct}/${e.asked} · last ${e.last} ${e.lastResult}` +
     `  <!-- quiz:${JSON.stringify(e)} -->`;
   const pick = <T,>(catalog: LangCatalog<T>): T => catalog[lang] ?? catalog.en;
-  const fm =
-    `---\ntitle: Quiz ledger\n` +
-    `description: ${pick(LEDGER_DESCRIPTION)}\n` +
-    `date: ${date}\nupdated: ${date}\ntags: [quiz, meta]\nstatus: ready\ndomain: meta\nsource: quiz-engine\n---\n`;
+  // OKF concept (type Quiz Ledger); the rows below are the machine-managed part parseLedger reads.
+  const fm = `---\n${renderYaml({
+    type: "Quiz Ledger",
+    title: "Quiz ledger",
+    description: pick(LEDGER_DESCRIPTION),
+    date,
+    tags: ["quiz", "meta"],
+    status: "stable",
+    generated: { by: engineActor(), at: isoLocal() },
+    sources: [{ resource: "quiz-engine" }],
+  })}\n---\n`;
   const note = `\n${pick(LEDGER_NOTE)(INTERVALS.join("·"))}\n`;
   return fm + note + `## Items (${sorted.length})\n\n` + (sorted.length ? sorted.map(row).join("\n") : "(none)") + "\n";
 }
@@ -309,6 +318,15 @@ function inboundCounts(root: string): Map<string, number> {
   return out;
 }
 
+// When the page last changed: legacy `updated:`, else OKF `generated.at`, else its creation date.
+function lastChanged(meta: Frontmatter): string {
+  const updated = meta.fields.updated;
+  if (typeof updated === "string" && updated.trim()) return updated.trim();
+  const g = meta.data.generated as { at?: unknown } | null | undefined;
+  const at = g && typeof g === "object" && typeof g.at === "string" ? g.at.slice(0, 10) : "";
+  return at || meta.date || "";
+}
+
 // Scan the log layer + topic encyclopedia for quizzable pages. legacyDirs are deliberately
 // NOT scanned (pre-loop flat content; the memory loop covers the current-format wiki), and
 // neither is the queue (0_review is a queue, not knowledge). Category folders are flat by
@@ -324,7 +342,7 @@ export function scanCandidates(ws: string): QuizCandidate[] {
     const files = readRepoDir(root, relDir).filter((entry) => entry.isFile && entry.name.endsWith(".md"));
     for (const entry of files) {
       const f = entry.name;
-      let meta: Record<string, string | string[]>;
+      let meta: Frontmatter;
       try {
         const content = readRepoFile(root, join(relDir, f));
         if (content === null) continue;
@@ -332,17 +350,17 @@ export function scanCandidates(ws: string): QuizCandidate[] {
       } catch {
         continue;
       }
-      const status = String(meta.status ?? "ready");
-      if (status === "superseded" || status === "draft") continue;
-      const domain = String(meta.domain ?? "");
+      // Lifecycle as the engine reads it: OKF `deprecated` is `superseded`, `stable` is `ready`.
+      if (meta.status === "superseded" || meta.status === "draft") continue;
+      const domain = meta.domain ?? domainForType(meta.type, cfg) ?? "";
       const page = `${dir}/${f}`;
       const refs = refsByPage.get(page) ?? 0;
       out.push({
         page,
         dir,
         domain,
-        title: String(meta.title ?? f.replace(/\.md$/, "")),
-        date: String(meta.updated ?? meta.date ?? ""),
+        title: meta.title ?? f.replace(/\.md$/, ""),
+        date: lastChanged(meta),
         weight: weightFor(dir, domain, cfg),
         refs,
         hub: refs >= HUB_MIN_REFS,
@@ -358,7 +376,7 @@ function statusLive(root: string, page: string): boolean {
   try {
     const content = readRepoFile(root, join("docs", "wiki", page));
     if (content === null) return false;
-    const status = String(parseFrontmatter(content).status ?? "ready");
+    const status = parseFrontmatter(content).status;
     return status !== "superseded" && status !== "draft";
   } catch {
     return false;

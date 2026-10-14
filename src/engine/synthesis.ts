@@ -20,6 +20,7 @@ import { join, resolve } from "node:path";
 import { WikiIndex } from "./db.ts";
 import { effectiveKo, getConfig, logDirs, type WikiConfig } from "./config.ts";
 import { readRepoDir } from "./repo-write.ts";
+import { parseFrontmatter } from "./frontmatter.ts";
 import { rerankByAffinity, SPINE_POLICY, type AffinityFile } from "./affinity.ts";
 
 // User-facing output adapts to LLMWIKI_LANG (default English, Korean when set) — same policy as
@@ -72,10 +73,11 @@ function titleOf(d: any): string {
 // docs/wiki/0_review/*.md titles (the human-judgment queue) read straight from disk —
 // these never become content pages, so they aren't in the category lists above.
 // gap-queue.md / semantic-review-*.md are the LLM's own managed backlog (fact bookkeeping,
-// filled at /wiki-deep), not human questions — excluded so the count matches cold-start's.
+// filled at /wiki-deep), not human questions — excluded so the count matches cold-start's, as is
+// an OKF bundle's generated index.md listing.
 function openReviewItems(repo: string): string[] {
   return readRepoDir(repo, join("docs", "wiki", getConfig(repo).queueDir))
-    .filter((entry) => entry.isFile && entry.name.endsWith(".md") && entry.name !== "gap-queue.md" && !/^semantic-review-/.test(entry.name))
+    .filter((entry) => entry.isFile && entry.name.endsWith(".md") && entry.name !== "gap-queue.md" && entry.name !== "index.md" && !/^semantic-review-/.test(entry.name))
     .map((entry) => entry.name.replace(/\.md$/, ""));
 }
 
@@ -281,35 +283,10 @@ const _STOP_TAGS = new Set([
 
 // Parse `tags` straight from a page's YAML frontmatter. The index stores tags as '[]'
 // (db.ts doesn't extract frontmatter), so cluster the topic view on the page body itself —
-// markdown is the source of truth anyway. Handles both inline (`tags: [a, b]`) and block
-// (`tags:\n  - a\n  - b`) forms; only looks inside the leading `---` frontmatter block.
+// markdown is the source of truth anyway. The shared frontmatter reader handles inline
+// (`tags: [a, b]`) and block (`tags:\n  - a\n  - b`) forms and only looks at the leading block.
 function parseTags(content: string): string[] {
-  if (!content.startsWith("---")) return [];
-  const end = content.indexOf("\n---", 3);
-  const fm = end === -1 ? content : content.slice(0, end);
-  const lines = fm.split("\n");
-  const out: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i]!.match(/^tags:\s*(.*)$/);
-    if (!m) continue;
-    const inline = m[1]!.trim();
-    if (inline.startsWith("[")) {
-      for (const t of inline.replace(/^\[|\]$/g, "").split(",")) {
-        const v = t.trim().replace(/^['"]|['"]$/g, "");
-        if (v) out.push(v);
-      }
-    } else {
-      // block form: subsequent `  - value` lines
-      for (let j = i + 1; j < lines.length; j++) {
-        const bm = lines[j]!.match(/^\s*-\s*(.+)$/);
-        if (!bm) break;
-        const v = bm[1]!.trim().replace(/^['"]|['"]$/g, "");
-        if (v) out.push(v);
-      }
-    }
-    break;
-  }
-  return out;
+  return [...parseFrontmatter(content).tags];
 }
 
 export interface TopicViewOptions {

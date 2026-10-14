@@ -43,9 +43,15 @@ function structuralLabels(content: string): { readonly headings: readonly string
     if (headings.length >= MAX_STRUCTURAL_LABELS) break;
     headings.push(match[1]!);
   }
-  for (const match of structured.matchAll(/\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g)) {
-    wikilinks.push(match[1]!);
-    if (match[2] !== undefined && wikilinks.length < MAX_STRUCTURAL_LABELS) wikilinks.push(match[2]);
+  // `[[target|alias]]` contributes target and alias; a standard `[text](page.md)` link (the OKF
+  // form) contributes its text. One pass, so labels keep document order.
+  for (const match of structured.matchAll(/\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]|(?<!!)\[([^\]\n^][^\]\n]*)\]\([^)\s]+\.md(?:#[^)\s]*)?\)/g)) {
+    if (match[3] !== undefined) {
+      wikilinks.push(match[3]);
+    } else {
+      wikilinks.push(match[1]!);
+      if (match[2] !== undefined && wikilinks.length < MAX_STRUCTURAL_LABELS) wikilinks.push(match[2]);
+    }
     if (wikilinks.length >= MAX_STRUCTURAL_LABELS) break;
   }
   return { headings, wikilinks };

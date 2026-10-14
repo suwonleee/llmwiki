@@ -6,6 +6,8 @@ import { WikiIndex } from "./db.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import { classifyTier, type AmbiguousReason, type AutoReason, type ProtectionReason } from "./tiering.ts";
 import { ensureRepoDir, readRepoDir, readRepoFile, removeRepoFile, repoFileExists, repoRelative, writeRepoFile } from "./repo-write.ts";
+import { isoLocal, renderYaml } from "./okf.ts";
+import { domainForType, engineActor } from "./okf-bundle.ts";
 
 type TierAction = "hot" | "warm" | "cold";
 type AutomaticCandidate = { readonly id: string; readonly path: string; readonly action: TierAction; readonly reason: AutoReason; readonly pageHash: string; readonly bytes: number };
@@ -70,16 +72,22 @@ function candidateLine(candidate: AmbiguousCandidate): string {
 }
 
 function reviewText(candidates: readonly AmbiguousCandidate[], date: string): string {
+  // An OKF Review Item: draft until the human answers; its source is this cleanup pass.
+  const frontmatter = renderYaml({
+    type: "Review Item",
+    title: "Wiki cleanup review",
+    description: "Human approval for ambiguous reversible lifecycle tier changes.",
+    date,
+    tags: ["cleanup", "review", "maintenance"],
+    status: "draft",
+    kind: "cleanup",
+    owner: "human",
+    generated: { by: engineActor(), at: isoLocal() },
+    sources: [{ resource: "wiki-clean" }],
+  });
   return [
     "---",
-    "title: Wiki cleanup review",
-    "description: Human approval for ambiguous reversible lifecycle tier changes.",
-    `date: ${date}`,
-    "tags: [cleanup, review, maintenance]",
-    "status: draft",
-    "kind: cleanup",
-    "owner: human",
-    "source: wiki-clean",
+    frontmatter,
     "---",
     "",
     "# Wiki cleanup review",
@@ -110,8 +118,14 @@ function ambiguousReason(value: string): AmbiguousReason | null {
 }
 
 function parseReview(content: string): readonly AmbiguousCandidate[] {
-  const metadata = parseFrontmatter(content).fields;
-  if (metadata["kind"] !== "cleanup" || metadata["owner"] === undefined || metadata["source"] !== "wiki-clean") {
+  const parsed = parseFrontmatter(content);
+  const metadata = parsed.fields;
+  // `sources: [{ resource: wiki-clean }]` (OKF) or the legacy `source: wiki-clean`.
+  const sources = Array.isArray(parsed.data["sources"]) ? (parsed.data["sources"] as unknown[]) : [];
+  const fromCleanup =
+    metadata["source"] === "wiki-clean" ||
+    sources.some((s) => typeof s === "object" && s !== null && (s as { resource?: unknown }).resource === "wiki-clean");
+  if (metadata["kind"] !== "cleanup" || metadata["owner"] === undefined || !fromCleanup) {
     throw new WikiCleanReviewError("malformed", "cleanup review frontmatter is malformed");
   }
   const pattern = /^- candidate: ([0-9a-f]{12}) \| path: (docs\/wiki\/[^|\s]+) \| hash: ([0-9a-f]{64}) \| action: (warm) \| reason: ([a-z-]+) \| risk: reversible-tier-only$/gm;
@@ -150,7 +164,8 @@ export function planWikiClean(root: string, options: { readonly today?: string }
     const pagePath = discoveredPath.replace(/\\/g, "/");
     const path = join(root, pagePath);
     const localPath = relative(join("docs", "wiki"), pagePath).replace(/\\/g, "/");
-    if (localPath === "cold-index.md" || ignored.has(localPath.split("/")[0] ?? "")) continue;
+    // Generated listings (legacy cold-index.md, OKF index.md at any level) are not pages.
+    if (localPath === "cold-index.md" || localPath.split("/").pop() === "index.md" || ignored.has(localPath.split("/")[0] ?? "")) continue;
     const content = readRepoFile(root, pagePath);
     if (content === null) continue;
     const metadata = parseFrontmatter(content);
@@ -160,7 +175,8 @@ export function planWikiClean(root: string, options: { readonly today?: string }
         status: metadata.status,
         tier: metadata.tier,
         date: metadata.date,
-        domain: typeof metadata.fields["domain"] === "string" ? metadata.fields["domain"] : null,
+        domain: metadata.domain ?? domainForType(metadata.type, cfg),
+        type: metadata.type,
         supersededBy: typeof metadata.fields["superseded_by"] === "string" ? metadata.fields["superseded_by"] : null,
         hasUnresolvedConflict: false,
         dirtyWorktree: isDirty(root, path),

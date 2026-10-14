@@ -444,4 +444,28 @@ describe("quiz", () => {
     const pages = scanCandidates(root).map((c) => c.page);
     expect(pages.some((p) => p.startsWith("6_quiz/") || p.startsWith("0_review/"))).toBe(false);
   });
+
+  // OKF pages spell the lifecycle `stable` / `deprecated` and name the category by `type`.
+  test("OKF pages: deprecated leaves rotation, stable stays, type stands in for domain", () => {
+    put("3_decision/okf-old.md", { type: "Decision", title: "폐기됨", date: "2026-07-11", status: "deprecated", superseded_by: "3_decision/dec-b.md" });
+    put("4_insight/okf-live.md", { type: "Insight", title: "살아있음", date: "2026-07-11", status: "stable" });
+    put("7_notes/okf-note.md", { type: "Decision", title: "기타", date: "2026-07-11", status: "stable" });
+    const cands = scanCandidates(root);
+    const pages = cands.map((c) => c.page);
+    expect(pages).not.toContain("3_decision/okf-old.md");
+    expect(cands.find((c) => c.page === "4_insight/okf-live.md")?.domain).toBe("insight");
+    // a deprecated ledger entry is not live either
+    recordResult(root, { page: "4_insight/okf-live.md", result: "correct", date: D0 });
+    put("4_insight/okf-live.md", { type: "Insight", title: "살아있음", date: "2026-07-11", status: "deprecated" });
+    expect(selectNext(root, { limit: 10, date: "2026-12-31" }).picks.map((p) => p.page)).not.toContain("4_insight/okf-live.md");
+  });
+
+  test("the ledger page itself is an OKF Quiz Ledger", () => {
+    const md = renderLedger([], D0, "en");
+    expect(md).toContain("type: Quiz Ledger");
+    expect(md).toContain("status: stable");
+    expect(md).toMatch(/generated: \{ by: llmwiki\/[^,]+, at: \d{4}-\d{2}-\d{2}T/);
+    expect(md).toContain("- { resource: quiz-engine }");
+    expect(md).not.toMatch(/^(domain|source|updated):/m);
+  });
 });

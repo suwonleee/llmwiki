@@ -30,12 +30,17 @@ import { UNSPACED_ONLY_RE, UNSPACED_RUN_RE, unspacedWindows } from "./segment.ts
 import { isRepoKorean, effectiveKo, getConfig } from "./config.ts";
 import { COLD_INDEX_RELATIVE_PATH } from "./cold-index.ts";
 import { adjustedScore, loadAffinity, type AffinityFile } from "./affinity.ts";
+import { parseFrontmatter } from "./frontmatter.ts";
+import { readRepoFile } from "./repo-write.ts";
 
 const MAX_TERMS = 12;
 const MAX_PAGES = 3;
 // Terms shown as a pointer's reason. Three is the point where the reason still reads as a reason
 // rather than a term dump — and the per-pointer cost stays inside the noise of a 612B emission.
 const WHY_MAX_TERMS = 3;
+// A deprecated page loses ties and one-point leads to a current one; a clearly better match
+// (≥ 2 points) still ranks first — retired knowledge can be the answer, it is just not the default.
+const DEPRECATED_PENALTY = 1.5;
 // Header language + L0/meta page names resolve per repo at call time (per-repo config).
 // The banner names the clone it is speaking for, because the pointer lines under it are
 // REPO-RELATIVE and a session does not always stay in the repository it started in: in hook mode
@@ -58,6 +63,31 @@ export function displayRoot(root: string): string {
   if (!home) return r;
   if (r === home) return "~";
   return r.startsWith(`${home}/`) ? `~${r.slice(home.length)}` : r;
+}
+
+// ---- currency (OKF consumer duty) ---------------------------------------------
+
+export type PageCurrency = { readonly deprecated: boolean; readonly stale: boolean };
+
+/**
+ * Is this page still current? An OKF consumer must not present `deprecated` (llmwiki's
+ * `superseded`) knowledge, or knowledge past its `stale_after`, as current. Read from the file —
+ * the index stores no `stale_after`, and a pointer costs one small read per shown page.
+ */
+export function pageCurrency(root: string, rel: string): PageCurrency {
+  try {
+    const text = readRepoFile(root, rel);
+    if (text === null) return { deprecated: false, stale: false };
+    const fm = parseFrontmatter(text);
+    return { deprecated: fm.status === "superseded", stale: fm.stale };
+  } catch {
+    return { deprecated: false, stale: false };
+  }
+}
+
+/** ` (deprecated)` / ` (stale)` — the suffix a pointer carries so it is never read as current. */
+export function currencyMark(c: PageCurrency): string {
+  return c.deprecated ? " (deprecated)" : c.stale ? " (stale)" : "";
 }
 
 // ---- term extraction (deterministic, language-neutral) ------------------------
@@ -455,8 +485,9 @@ export function buildTurnContext(
     // Read only when there is something to order: a lone (or no) candidate costs no file read.
     let pages = [...byPage.entries()].filter(([, e]) => e.cur >= 1 && score(e) >= 2); // current witness + (two weak / one specific)
     const affinity = pages.length < 2 ? null : opts.affinity !== undefined ? opts.affinity : loadAffinity(repo);
+    const currency = new Map(pages.map(([rel]) => [rel, pageCurrency(root, rel)]));
     const ranked = (rel: string, e: { terms: Set<string>; idTerms: Set<string> }) =>
-      adjustedScore(score(e), affinity, rel);
+      adjustedScore(score(e), affinity, rel) - (currency.get(rel)?.deprecated ? DEPRECATED_PENALTY : 0);
     pages.sort((a, b) => ranked(b[0], b[1]) - ranked(a[0], a[1]) || b[1].hits - a[1].hits);
     if (!pages.length) return "";
 
@@ -495,7 +526,10 @@ export function buildTurnContext(
       return shown.length ? `  (${koRepo ? "제목" : "titled"}: ${shown.join("·")})` : "";
     };
     const L = [head];
-    for (const [rel, e] of pages) L.push(`  • ${e.title}  →  ${rel}${why(e)}`);
+    for (const [rel, e] of pages) {
+      const mark = currencyMark(currency.get(rel) ?? { deprecated: false, stale: false });
+      L.push(`  • ${e.title}${mark}  →  ${rel}${why(e)}`);
+    }
     return L.join("\n");
   } catch {
     return ""; // fail-safe: a turn-context failure must never surface into the session

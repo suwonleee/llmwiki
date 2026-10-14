@@ -31,6 +31,7 @@ import { rebuildReferenceGraph } from "./refs.ts";
 import { citedTranscripts, reconcileReflected } from "./reconcile.ts";
 import { inspectReviewHealth, type ReviewHealth } from "./review.ts";
 import { ensureSkeleton } from "./update.ts";
+import { checkBundle, isOkfBundle, okfApply } from "./okf-bundle.ts";
 
 export type WikiDoctorSeverity = "error" | "warn" | "info";
 export type WikiDoctorRepairOwner = "automatic" | "agent" | "human";
@@ -65,6 +66,14 @@ export interface WikiDoctorContinuityHealth {
   readonly reconcilable: number;
 }
 
+export interface WikiDoctorOkfHealth {
+  /** docs/wiki is an OKF bundle (root index.md declares okf_version). */
+  readonly bundle: boolean;
+  readonly concepts: number;
+  readonly conformant: number;
+  readonly errors: number;
+}
+
 export interface WikiDoctorAction {
   readonly code: string;
   readonly message: string;
@@ -84,6 +93,7 @@ export interface WikiDoctorReport {
   readonly continuity: WikiDoctorContinuityHealth;
   readonly gaps: WikiDoctorGapHealth;
   readonly review: ReviewHealth;
+  readonly okf: WikiDoctorOkfHealth;
   readonly findings: readonly WikiDoctorFinding[];
   readonly actions: readonly WikiDoctorAction[];
   readonly blockingErrors: number;
@@ -107,6 +117,7 @@ function hashFile(root: string, path: string): string | null {
 function walkKnowledgeFiles(root: string, cfg: WikiConfig): Map<string, string | null> {
   const quizRoot = join(WIKI_RELATIVE, cfg.quizDir) + sep;
   const files = new Map<string, string | null>();
+  const okfBundle = isOkfBundle(root);
 
   function walk(dir: string): void {
     const entries = readRepoDir(root, dir);
@@ -119,6 +130,9 @@ function walkKnowledgeFiles(root: string, cfg: WikiConfig): Map<string, string |
       } else if (entry.isFile) {
         const relativePath = full.replaceAll("\\", "/");
         if (relativePath === COLD_INDEX_RELATIVE_PATH) continue;
+        // OKF `index.md` listings are generated navigation the index never stores (db.ts); counting
+        // them here would call every bundle's index stale forever.
+        if (okfBundle && /(^|\/)index\.md$/i.test(relativePath)) continue;
         files.set(relativePath, hashFile(root, relativePath));
       }
     }
@@ -242,6 +256,23 @@ function inspectGapHealth(root: string, cfg: WikiConfig): WikiDoctorGapHealth {
   }
 }
 
+function inspectOkf(root: string, cfg: WikiConfig): WikiDoctorOkfHealth {
+  const none = { bundle: false, concepts: 0, conformant: 0, errors: 0 };
+  try {
+    if (!repoDirExists(root, WIKI_RELATIVE) || !isOkfBundle(root)) return none;
+    // The quiz layer is a human-only ledger outside the published bundle.
+    const report = checkBundle(join(root, WIKI_RELATIVE), { exclude: [cfg.quizDir], logName: cfg.files.log });
+    return {
+      bundle: true,
+      concepts: report.concepts,
+      conformant: report.conformant,
+      errors: report.issues.filter((issue) => issue.severity === "error").length,
+    };
+  } catch {
+    return none;
+  }
+}
+
 function inspectContinuity(root: string): WikiDoctorContinuityHealth {
   const cited = citedTranscripts(root);
   const pending = capture.inspectPendingReadOnly(root);
@@ -301,6 +332,10 @@ function rebuildQuarantinedIndex(root: string, index: WikiIndex, actions: WikiDo
 }
 
 function repairDerivedState(root: string, cfg: WikiConfig, actions: WikiDoctorAction[]): void {
+  // Decided BEFORE the skeleton is restored: a scaffold may add the root index.md, and a legacy
+  // wiki must never be converted as a side effect of a repair — that is a person's
+  // `llmwiki okf --commit`.
+  const wasOkf = isOkfBundle(root);
   if (!cfg.error) {
     const before = requiredStructure(root, cfg);
     ensureSkeleton(root, cfg);
@@ -315,6 +350,18 @@ function repairDerivedState(root: string, cfg: WikiConfig, actions: WikiDoctorAc
       code: "overview-normalized",
       message: `normalized overview Recent Updates (${overview.before}B → ${overview.after}B)`,
     });
+  }
+
+  if (wasOkf) {
+    // Keeps a bundle conformant (types, sources, stamps, links, listings); deterministic and
+    // byte-stable on a page that already conforms, so a healthy bundle sees no diff.
+    const okf = okfApply(root, { commit: true, ifOkf: true });
+    if (okf.verdict === "applied") {
+      actions.push({
+        code: "okf-normalized",
+        message: `OKF bundle normalized (${okf.pagesChanged} page(s), ${okf.indexesWritten} listing(s))`,
+      });
+    }
   }
 
   // Generated Markdown must settle before the final index pass. Indexing first would leave the
@@ -407,6 +454,7 @@ export function runWikiDoctor(
     : { capture: "absent" as const, captureError: null, backlog: 0, citedTails: 0, reconcilable: 0 };
   const gaps = workspaceDirectory ? inspectGapHealth(root, cfg) : { exists: false, wellFormed: true, open: 0, resolved: 0 };
   const review = inspectReviewHealth(root, today);
+  const okf = workspaceDirectory ? inspectOkf(root, cfg) : { bundle: false, concepts: 0, conformant: 0, errors: 0 };
   const findings: WikiDoctorFinding[] = [];
 
   if (!workspaceDirectory) {
@@ -589,6 +637,25 @@ export function runWikiDoctor(
     });
   }
 
+  // Advisory either way: the per-page OKF errors already count once, as lint errors.
+  if (okf.bundle && okf.errors) {
+    pushFinding(findings, {
+      code: "okf-nonconformant",
+      severity: "warn",
+      message: `${okf.concepts - okf.conformant} of ${okf.concepts} OKF concept(s) not conformant (${okf.errors} error(s))`,
+      repairOwner: "automatic",
+      command: `llmwiki wiki-doctor ${root} --fix`,
+    });
+  } else if (!okf.bundle && workspaceDirectory && repoDirExists(root, WIKI_RELATIVE)) {
+    pushFinding(findings, {
+      code: "okf-not-converted",
+      severity: "info",
+      message: "wiki is not an OKF bundle yet; conversion is a one-time, reviewed step (preview, then --commit)",
+      repairOwner: "human",
+      command: `llmwiki okf ${root}`,
+    });
+  }
+
   const blockingErrors = findings.filter((finding) => finding.severity === "error").length;
   return {
     workspace: root,
@@ -601,6 +668,7 @@ export function runWikiDoctor(
     continuity,
     gaps,
     review,
+    okf,
     findings,
     actions,
     blockingErrors,
@@ -632,6 +700,11 @@ export function formatWikiDoctorReport(report: WikiDoctorReport): string {
     `  continuity: capture ${report.continuity.capture} · backlog ${report.continuity.backlog} · ` +
       `cited-tail ${report.continuity.citedTails} · reconcilable ${report.continuity.reconcilable}`,
     `  gaps      : ${report.gaps.wellFormed ? `${report.gaps.open} open · ${report.gaps.resolved} resolved` : "malformed"}`,
+    `  okf       : ${
+      report.okf.bundle
+        ? `bundle · ${report.okf.conformant}/${report.okf.concepts} conformant · ${report.okf.errors} error`
+        : "legacy (not converted) — preview with `llmwiki okf <repo>`, apply with --commit"
+    }`,
     `  review    : ${report.review.incompleteLaunch ? "incomplete launch" : report.review.due ? "due" : `current (${report.review.lastCompletedDate})`}`,
   ];
   if (report.database) {

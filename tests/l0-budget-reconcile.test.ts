@@ -266,3 +266,16 @@ test("citedTranscripts matches case-insensitively (.JSONL)", () => {
   );
   expect(citedTranscripts(repo).has("sess-up.jsonl")).toBe(true);
 });
+
+test("citedTranscripts reads OKF `sources[].resource` (a page with no footnote line naming it)", () => {
+  const repo = enrolledRepo("llmwiki-okf-src-repo-");
+  mkdirSync(join(repo, "docs", "wiki", "5_topic"), { recursive: true });
+  writeFileSync(
+    join(repo, "docs", "wiki", "5_topic", "t.md"),
+    "---\ntype: Topic\ntitle: T\nsources:\n  - { id: s1, resource: okf-sess.jsonl }\n  - { resource: semantic-lint }\n---\n\nbody\n",
+    "utf-8",
+  );
+  const cited = citedTranscripts(repo);
+  expect(cited.has("okf-sess.jsonl")).toBe(true);
+  expect(cited.has("semantic-lint")).toBe(false);
+});

@@ -1,7 +1,7 @@
 // P1-B2: overview normalizer keeps the entry point bounded (Recent Updates → log pointer),
 // deterministically and idempotently, preserving curated sections. LLM-0.
 import { test, expect } from "bun:test";
-import { normalizeOverviewText, RECENT_POINTER_KO } from "../src/engine/overview.ts";
+import { normalizeOverviewText, RECENT_POINTER, RECENT_POINTER_KO } from "../src/engine/overview.ts";
 
 const CURATED = `---
 title: Overview
@@ -53,4 +53,15 @@ test("preserves a section that comes AFTER Recent Updates", () => {
   expect(text).toContain("[[2_milestone/z]]");
   expect(text).toContain(RECENT_POINTER_KO);
   expect(text).not.toContain("ZZSESSIONPROSE"); // distinct marker (pointer text itself contains "세션")
+});
+
+test("the pointer is a standard markdown link, and the pre-OKF [[log.md]] pointer still counts as normalized", () => {
+  expect(RECENT_POINTER_KO).toContain("[Log](log.md)");
+  expect(RECENT_POINTER_KO).not.toContain("[[");
+  for (const lang of ["ko", "en"] as const) {
+    const legacy = CURATED + `\n## Recent Updates\n\n${RECENT_POINTER[lang]!.replace("[Log](log.md)", "[[log.md]]")}\n`;
+    const { text, collapsed } = normalizeOverviewText(legacy, lang);
+    expect(collapsed).toBe(false); // no churn on a legacy wiki
+    expect(text).toBe(legacy);
+  }
 });

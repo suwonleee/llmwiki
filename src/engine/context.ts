@@ -6,6 +6,7 @@
 //   manual       → run it and paste the output
 //
 // Language: LLMWIKI_LANG=ko switches the operating-rules/headers to Korean (default: en).
+import { linkTextOnly } from "./okf.ts";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -22,6 +23,7 @@ import { parseQueue } from "./gaps.ts";
 import { dueCount } from "./quiz.ts";
 import { isRepoKorean, effectiveKo, getConfig, renderRuleAuthoringBrief, scanDirs, type WikiConfig } from "./config.ts";
 import { detectConfigDrift } from "./migrate.ts";
+import { parseFrontmatter } from "./frontmatter.ts";
 
 
 // Cold-start L0 standard. The L0 page (current-state, or overview as fallback)
@@ -37,8 +39,11 @@ import { L0_BUDGET } from "./budgets.ts";
 import { CLONE_ROOT } from "./paths.ts";
 import { updateAvailable } from "./update-check.ts";
 
+// Measured as read: a markdown link counts as its text (okf.linkTextOnly), so the OKF link form
+// (`[label](path.md)`) does not push an unchanged L0 over the standard its `[[path]]` form met.
 function l0OverNotice(body: string, notice: (chars: number) => string, budget = L0_BUDGET): string {
-  return body.length <= budget ? body : body + "\n" + notice(body.length);
+  const chars = linkTextOnly(body).length;
+  return chars <= budget ? body : body + "\n" + notice(chars);
 }
 
 // Cold-start footer pointer — overview page + the first two log categories (reading order).
@@ -123,12 +128,10 @@ function base(p: string): string {
 function frontmatterField(root: string, rel: string, field: "title" | "owner"): string | null {
   const body = readRepoFile(root, rel);
   if (body === null) return null;
-  const re = new RegExp(`^${field}:\\s*(.+)$`);
-  for (const ln of body.split("\n")) {
-    const m = ln.match(re);
-    if (m) return m[1]!.trim().replace(/^"|"$/g, "");
-  }
-  return null;
+  // The page's own frontmatter only — a review item embeds its candidate draft, whose
+  // frontmatter is body text, not this file's fields.
+  const value = parseFrontmatter(body).fields[field];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function title(root: string, rel: string): string {
@@ -167,6 +170,9 @@ function categoryPages(root: string, catDirs: string[]): string[] {
     const dirRel = join("docs", "wiki", c);
     for (const e of readRepoDir(root, dirRel)) {
       if (!e.isFile || !e.name.endsWith(".md")) continue;
+      // OKF reserved files are navigation, not pages; a regenerated index.md is always the newest
+      // file in its folder and would otherwise crowd every recent page out of this list.
+      if (e.name === "index.md" || e.name === "log.md") continue;
       const rel = join(dirRel, e.name);
       const m = repoFileMtime(root, rel);
       if (m === null) continue;
@@ -227,10 +233,11 @@ export function buildContext(repo: string, opts: { affinity?: AffinityFile | nul
   // backlog/inputs (fact bookkeeping — /wiki-deep fills them). Counting them here made every
   // session open with a permanent "pending" nag, inverting the labor split (maintenance
   // is the model's job; the human only judges). The gap backlog gets one bounded line instead.
+  // An OKF bundle's generated index.md listing is not a question either.
   const reviewDirRel = join(wikiRel, cfg.queueDir);
   if (repoDirExists(proj, reviewDirRel)) {
     const files = readRepoDir(proj, reviewDirRel)
-      .filter((e) => e.isFile && e.name.endsWith(".md") && e.name !== "gap-queue.md" && !/^semantic-review-/.test(e.name))
+      .filter((e) => e.isFile && e.name.endsWith(".md") && e.name !== "gap-queue.md" && e.name !== "index.md" && !/^semantic-review-/.test(e.name))
       .map((e) => join(reviewDirRel, e.name));
     if (files.length) {
       L.push(`===== [llmwiki] ${cfg.queueDir} pending ${files.length} — docs/wiki/${cfg.queueDir}/ =====`);

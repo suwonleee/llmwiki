@@ -96,12 +96,14 @@ export function generateScaleFixture(root: string, pages: number): ScaleFixture 
     const identity = marker(index);
     const body = [
       "---",
+      "type: Topic",
       `title: Scale page ${String(index).padStart(6, "0")} ${identity}`,
       `description: Deterministic generated scale record for ${identity}`,
       "date: 2026-08-09",
       "tags: [scale, benchmark]",
-      "status: ready",
-      "domain: topic",
+      "status: stable",
+      // OKF Topic pages; the stamp is a fixed instant so the corpus bytes stay deterministic.
+      "generated: { by: llmwiki/bench-scale, at: 2026-08-09T00:00:00Z }",
       "---",
       "",
       `${identity} identifies exactly one generated page in the public scale corpus.`,

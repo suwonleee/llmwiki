@@ -179,6 +179,11 @@ describe("excerpt", () => {
     expect(parseExcerpts(out)).toHaveLength(1);
   });
 
+  test("an OKF page names its category by type: `type: Decision` prefers the human quote too", () => {
+    const draft = `---\ntype: Decision\n---\n\n- 주제층을 얹기로 했다 [^s1]\n\n[^s1]: sess.jsonl\n`;
+    expect(ensureExcerpts(draft, path)).toContain(QUOTE);
+  });
+
   test("never overwrites an excerpt a warm session already chose", () => {
     const chosen = `---\ndomain: decision\n---\n\n- x [^1]\n\n[^1]: sess.jsonl\n    > [ts user] "사람이 고른 인용"\n`;
     expect(ensureExcerpts(chosen, path)).toBe(chosen);

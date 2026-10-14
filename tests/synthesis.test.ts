@@ -65,6 +65,8 @@ describe("deterministic synthesis", () => {
 
   test("0_review items surface in digest and spine summary", () => {
     writeFileSync(join(wiki, "0_review", "2026-06-20-some-direction.md"), "Q. confirm?\n");
+    // an OKF bundle's generated listing is not an open item
+    writeFileSync(join(wiki, "0_review", "index.md"), "# Review Item\n\n* [x](2026-06-20-some-direction.md)\n");
     // language-neutral: the open item's filename + the spine's neutral summary line
     expect(buildDigest(root)).toContain("2026-06-20-some-direction");
     expect(buildSpine(root).join("\n")).toContain("0_review: 1 open");

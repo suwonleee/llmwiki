@@ -191,3 +191,22 @@ test("classifyTier classifies reversible and review-required outcomes with a fix
     expect(actual).toEqual(scenario.expected);
   }
 });
+
+test("outside a category dir, an OKF page's type stands in for the missing legacy domain", async () => {
+  const tiering = await loadPolicy();
+  // `Decision` is protected exactly like `domain: decision`; `Insight` is an eligible category.
+  const okf = (type: string) => ({ ...input({ path: "notes/x.md", domain: null, date: "2025-01-01" }).page, type });
+  expect(tiering.classifyTier({ page: okf("Decision"), policy: policy() } as TieringInput)).toEqual({
+    outcome: "protected",
+    tier: "protected",
+    reasons: ["decision"],
+  });
+  expect(tiering.classifyTier({ page: okf("Insight"), policy: policy() } as TieringInput)).toEqual({
+    outcome: "auto",
+    tier: "cold",
+    reason: "eligible-old",
+  });
+  // a declared legacy domain still wins over the type
+  const both = { ...okf("Insight"), domain: "decision" };
+  expect(tiering.classifyTier({ page: both, policy: policy() } as TieringInput).outcome).toBe("protected");
+});

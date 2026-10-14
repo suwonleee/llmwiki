@@ -73,6 +73,7 @@ const ALLOWED_READERS: Record<string, string> = {
   ...ALLOWED_MUTATORS,
   "cli.ts": "reads the optional team git-conventions doc and the skill reference sections (skill/ref/) from the engine clone",
   "engine/config.ts": "reads trusted engine-clone config templates, never repository content",
+  "engine/okf-bundle.ts": "checkBundle reads an arbitrary OKF bundle directory (`llmwiki okf --bundle`) read-only for a conformance report; nothing it reads is written into a wiki",
   "engine/db.ts": "reads the trusted engine-bundled schema.sql; repository indexing uses repo-write",
   "engine/consolidate.ts": "stats machine-local transcript files from the capture ledger",
   "engine/reconcile.ts": "stats machine-local transcript files after repository citations are read safely",

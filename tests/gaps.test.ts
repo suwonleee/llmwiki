@@ -11,6 +11,7 @@ import {
   RESOLVE_AFTER,
   type Gap,
 } from "../src/engine/gaps.ts";
+import { parseYamlBlock, splitFrontmatter } from "../src/engine/okf.ts";
 
 const tempRoots: string[] = [];
 
@@ -75,6 +76,22 @@ test("render → parse round-trips state (hash, absent, status)", () => {
   expect(back.length).toBe(2);
   expect(back.find((gap) => gap.hash === "abc123")).toMatchObject({ status: "open", absent: 0 });
   expect(back.find((gap) => gap.hash === "def456")).toMatchObject({ status: "resolved", absent: 2 });
+});
+
+test("the queue page is an OKF Gap Queue and still parses back", () => {
+  const gaps: Gap[] = [
+    { hash: "abc123", type: "missing-concept", text: "X page", status: "open", absent: 0, firstSeen: "2026-06-30", lastSeen: "2026-06-30" },
+  ];
+  const md = renderQueue(gaps, "2026-06-30", "en", "2026-06-30T10:00:00+09:00");
+  const { block } = splitFrontmatter(md);
+  const fm = parseYamlBlock(block!);
+  expect(fm.error).toBeNull();
+  expect(fm.data.type).toBe("Gap Queue");
+  expect(fm.data.status).toBe("stable");
+  expect(fm.data.sources).toEqual([{ resource: "semantic-lint" }]);
+  expect((fm.data.generated as Record<string, unknown>).at).toBe("2026-06-30T10:00:00+09:00");
+  for (const k of ["domain", "source", "updated"]) expect(fm.data[k]).toBeUndefined();
+  expect(parseQueue(md).map((g) => g.hash)).toEqual(["abc123"]);
 });
 
 test("RESOLVE_AFTER is the loop-until-dry threshold (>=2)", () => {

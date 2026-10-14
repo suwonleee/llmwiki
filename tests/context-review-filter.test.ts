@@ -58,3 +58,19 @@ test("empty/fully-resolved gap queue emits no backlog line", () => {
   expect(out).not.toMatch(/gap backlog|갭 백로그/);
   expect(out).not.toContain("0_review pending");
 });
+
+test("an OKF bundle's generated 0_review/index.md is not a pending item; titles come from the item's own frontmatter", () => {
+  const { repo, review } = mkRepo("llmwiki-gapfilter4-");
+  writeFileSync(join(review, "index.md"), "# Review Item\n\n* [Direction?](2026-07-01-direction-shift.md)\n", "utf-8");
+  // A review item embeds its candidate draft — whose own `title:` must not be read as the item's.
+  writeFileSync(
+    join(review, "2026-07-01-direction-shift.md"),
+    '---\ntype: Review Item\ntitle: "[review] Direction: local-first"\nstatus: draft\nowner: alice\n---\n\nQ. confirm?\n\nDraft:\n---\ntitle: Candidate title\n---\nbody\n',
+    "utf-8",
+  );
+
+  const out = buildContext(repo);
+  expect(out).toContain("0_review pending 1");
+  expect(out).toContain("[review] Direction: local-first  [→ alice]");
+  expect(out).not.toContain("Candidate title");
+});

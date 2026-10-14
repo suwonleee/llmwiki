@@ -1,5 +1,6 @@
 import type { WikiConfig } from "./config.ts";
 import type { KnowledgeStatus } from "./frontmatter.ts";
+import { typeKey } from "./okf.ts";
 
 export const COLD_AFTER_DAYS = 180;
 
@@ -13,6 +14,8 @@ export type TieringPage = {
   readonly tier: LifecycleTier | null;
   readonly date: string | null;
   readonly domain: string | null;
+  /** OKF `type` — the category when a page declares no legacy `domain`. */
+  readonly type?: string | null;
   readonly supersededBy: string | null;
   readonly hasUnresolvedConflict: boolean;
   readonly dirtyWorktree: boolean;
@@ -100,9 +103,15 @@ function configuredFileReason(path: string, policy: TieringPolicy): ProtectionRe
   }
 }
 
-function configuredDomain(path: string, pageDomain: string | null, policy: TieringPolicy): string {
+function configuredDomain(path: string, page: Pick<TieringPage, "domain" | "type">, policy: TieringPolicy): string {
   const [directory] = path.split("/");
-  return policy.config.categories.find((category) => category.dir === directory)?.domain ?? pageDomain ?? "";
+  const byDir = policy.config.categories.find((category) => category.dir === directory)?.domain;
+  if (byDir !== undefined) return byDir;
+  if (page.domain) return page.domain;
+  if (!page.type) return "";
+  // `Decision` → `decision`; a type no category declares compares by its key (`ADR` → `adr`).
+  const key = typeKey(page.type);
+  return policy.config.categories.find((category) => typeKey(category.domain) === key)?.domain ?? key;
 }
 
 function domainProtectionReason(domain: string): ProtectionReason | null {
@@ -205,7 +214,7 @@ function classifyEligible(value: EligibleClassificationInput): TieringResult {
         ? { outcome: "auto", tier: "cold", reason: "superseded-old" }
         : { outcome: "auto", tier: "warm", reason: "eligible-recent" };
     case "ready": {
-      const domain = configuredDomain(normalizedPath(value.input.page.path), value.input.page.domain, value.input.policy);
+      const domain = configuredDomain(normalizedPath(value.input.page.path), value.input.page, value.input.policy);
       switch (domain) {
         case "milestone":
         case "insight":
@@ -231,7 +240,7 @@ export function classifyTier(input: TieringInput): TieringResult {
   const reasons: readonly (ProtectionReason | null)[] = [
     configuredFileReason(path, input.policy),
     path === input.policy.config.queueDir || path.startsWith(`${input.policy.config.queueDir}/`) ? "queue-file" : null,
-    domainProtectionReason(configuredDomain(path, input.page.domain, input.policy)),
+    domainProtectionReason(configuredDomain(path, input.page, input.policy)),
     status.kind === "protected" ? status.reason : null,
     input.page.hasUnresolvedConflict ? "unresolved-conflict" : null,
     pageDate.kind === "invalid" ? "invalid-or-missing-date" : null,

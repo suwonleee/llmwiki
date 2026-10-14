@@ -12,7 +12,9 @@ export type WikiDocument = DocRow;
 // FOOTNOTE_DEF label charset `[^\]]+`, else lint flags citation-graph-mismatch on every
 // page whose footnotes the parser silently skipped.
 const _CITATION_RE = /\[\^[^\]]+\]:\s*(.+)$/gm;
-const _WIKI_LINK_RE = /(?<!!)\[(?:[^\]]*)\]\(([^)]+)\)/g;
+// Link text may carry escaped brackets (`[\[TRUST\] ECS](x.md)` — a page title with brackets,
+// as `llmwiki okf` writes it); `[^\]]*` alone stops at the escaped `\]` and loses the edge.
+const _WIKI_LINK_RE = /(?<!!)\[(?:[^\]\\]|\\.)*\]\(([^)]+)\)/g;
 // Obsidian-style [[target]] / [[target|alias]] / [[target#anchor]] — our pages use these, and the
 // markdown-link regex above misses them entirely (→ 0 links_to edges → graph-staleness inert).
 const _WIKILINK_BRACKET_RE = /\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/g;
@@ -114,41 +116,65 @@ export function parseCitationFilename(raw: string): [string, number | null] {
   return [raw, null];
 }
 
-export function parseWikiLinks(content: string, currentDir: string): string[] {
-  content = stripCode(content); // ignore example link syntax inside code spans/fences
-  const paths: string[] = [];
-  // Reset lastIndex defensively (global regexes carry state across calls).
-  _WIKI_LINK_RE.lastIndex = 0;
-  for (const match of content.matchAll(_WIKI_LINK_RE)) {
-    const href = match[1]!;
+// Markdown link hrefs that can name a page: external URLs, in-page anchors and images are not
+// edges. Raw (still percent-encoded); callers resolve them against the linking page's folder.
+function markdownHrefs(content: string): string[] {
+  const out: string[] = [];
+  for (const match of stripCode(content).matchAll(_WIKI_LINK_RE)) {
+    const href = match[1]!.trim();
     if (href.startsWith("http") || href.startsWith("#") || href.startsWith("mailto:") || href.startsWith("data:")) {
       continue;
     }
-    if (_IMG_EXT_RE.test(href)) {
-      continue;
-    }
-    let resolved: string;
-    if (href.startsWith("./")) {
-      resolved = currentDir ? currentDir + href.slice(2) : href.slice(2);
-    } else if (href.startsWith("../")) {
-      const parts = (currentDir.replace(/\/+$/, "") + "/" + href).split("/");
-      const rp: string[] = [];
-      for (const p of parts) {
-        if (p === "..") {
-          if (rp.length) rp.pop();
-        } else if (p && p !== ".") {
-          rp.push(p);
-        }
-      }
-      resolved = rp.join("/");
-    } else if (!href.includes("/")) {
-      resolved = currentDir ? currentDir + href : href;
-    } else {
-      resolved = href;
-    }
-    if (resolved) {
-      paths.push(resolved);
-    }
+    if (_IMG_EXT_RE.test(href.split("#")[0]!)) continue;
+    out.push(href);
+  }
+  return out;
+}
+
+/** An href's path part, percent-decoded: `a%20b.md#x` → `a b.md`, encoded Hangul → Hangul. */
+export function decodeHref(href: string): string {
+  const bare = href.split("#")[0]!.trim();
+  try {
+    return decodeURIComponent(bare);
+  } catch {
+    return bare; // a stray `%` is a literal character, not an encoding
+  }
+}
+
+// `a/./b/../c` → `a/c`; a `..` above the bundle root is dropped (the link cannot leave the wiki).
+function normalizeBundlePath(path: string): string {
+  const out: string[] = [];
+  for (const p of path.split("/")) {
+    if (p === "..") out.pop();
+    else if (p && p !== ".") out.push(p);
+  }
+  return out.join("/");
+}
+
+/**
+ * Where a markdown href points, as wiki-root-relative paths, best reading first.
+ *
+ * OKF links are relative to the LINKING PAGE'S folder (`../5_topic/x.md` from `3_decision/a.md` is
+ * `5_topic/x.md`), and a bundle-absolute `/5_topic/x.md` is relative to the wiki root. Pre-OKF
+ * pages also wrote `5_topic/x.md` from inside a category folder meaning the wiki root, so a bare
+ * nested href keeps that legacy reading as a second candidate.
+ */
+export function hrefCandidates(href: string, pageDir: string): string[] {
+  const h = decodeHref(href);
+  if (!h) return [];
+  if (h.startsWith("/")) return [normalizeBundlePath(h)].filter(Boolean);
+  const dir = normalizeBundlePath(pageDir);
+  const rel = normalizeBundlePath(dir ? `${dir}/${h}` : h);
+  const out = rel ? [rel] : [];
+  if (dir && h.includes("/") && !h.startsWith("./") && !h.startsWith("../")) out.push(normalizeBundlePath(h));
+  return out;
+}
+
+export function parseWikiLinks(content: string, currentDir: string): string[] {
+  const paths: string[] = [];
+  for (const href of markdownHrefs(content)) {
+    const best = hrefCandidates(href, currentDir)[0];
+    if (best) paths.push(best);
   }
   paths.push(...parseWikiLinkTargets(content));
   return paths;
@@ -225,6 +251,35 @@ export function resolveWikiLink(link: string, index: LinkIndex): WikiDocument | 
   return index.byRelpath[key] ?? index.byRelpath[`${key}.md`] ?? index.byName[key.split("/").pop()!];
 }
 
+/**
+ * The page a markdown link points at: by path from the linking page's folder (then the legacy
+ * root-relative reading), else by filename — the same fallback a `[[wikilink]]` gets.
+ */
+export function resolveMarkdownLink(href: string, pageDir: string, index: LinkIndex): WikiDocument | undefined {
+  const candidates = hrefCandidates(href, pageDir);
+  if (!candidates.length) return undefined;
+  for (const c of candidates) {
+    const key = lookupKey(c);
+    const hit = index.byRelpath[key] ?? index.byRelpath[`${key}.md`];
+    if (hit) return hit;
+  }
+  return index.byName[lookupKey(candidates[0]!).split("/").pop()!];
+}
+
+/** A wiki page's folder relative to docs/wiki (`3_decision`), `""` for a root page. */
+export function wikiPageDir(document: Readonly<Record<string, unknown>>): string {
+  // relative_path is the file; `path` is its folder (`/docs/wiki/3_decision/`) in the index but a
+  // caller may hand a file path there, so the folder is derived from the file whenever possible.
+  const rel = String(document.relative_path ?? "");
+  const inWiki = rel.includes("docs/wiki/") ? rel.split("docs/wiki/").pop()! : null;
+  if (inWiki !== null) return inWiki.includes("/") ? inWiki.slice(0, inWiki.lastIndexOf("/")) : "";
+  const p = String(document.path ?? "");
+  if (!p.includes("/docs/wiki/")) return "";
+  const after = p.split("/docs/wiki/").pop()!;
+  const dir = /\.md$/i.test(after) ? after.slice(0, Math.max(0, after.lastIndexOf("/"))) : after;
+  return normalizeBundlePath(dir);
+}
+
 export function updateReferences(
   index: WikiIndex,
   conn: Database,
@@ -233,12 +288,7 @@ export function updateReferences(
 ): [number, number] {
   // Rebuild this document's outgoing edges. document = object with id, path, relative_path.
   const docId = String(document.id);
-  const docDir = document.path;
-  let wikiRelDir = "";
-  // current dir relative to the wiki root, for resolving sibling links
-  if (docDir.includes("/docs/wiki/")) {
-    wikiRelDir = docDir.split("/docs/wiki/")[1] ?? "";
-  }
+  const wikiRelDir = wikiPageDir(document);
 
   const linkIndex = buildLinkIndex(index.listDocuments(conn));
 
@@ -252,7 +302,13 @@ export function updateReferences(
     }
   }
 
-  for (const link of parseWikiLinks(content, wikiRelDir)) {
+  for (const href of markdownHrefs(content)) {
+    const target = resolveMarkdownLink(href, wikiRelDir, linkIndex);
+    if (target && String(target.id) !== docId) {
+      edges.push([String(target.id), "links_to", null]);
+    }
+  }
+  for (const link of parseWikiLinkTargets(content)) {
     const target = resolveWikiLink(link, linkIndex);
     if (target && String(target.id) !== docId) {
       edges.push([String(target.id), "links_to", null]);

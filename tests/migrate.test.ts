@@ -118,11 +118,48 @@ test("commit merges into an existing target (drift-window split-brain), drops th
   expect(again.strays).toEqual([]); // no eternal ⚠ unmapped after the merge
 });
 
+// A bundle root index.md declaring okf_version is what makes a wiki OKF (okf-bundle.isOkfBundle).
+function makeOkf(repo: string): void {
+  writeFileSync(join(repo, "docs", "wiki", "index.md"), '---\nokf_version: "0.2"\n---\n', "utf-8");
+}
+
+test("OKF hint: one line for a legacy wiki with pages, never ahead of structure drift, silent on a bundle", () => {
+  const repo = stockWiki();
+  const hint = detectConfigDrift(repo, defaults());
+  expect(hint).toBe("wiki not in OKF v0.2 yet — run `llmwiki okf <repo>` (dry-run) then `--commit`");
+  expect(hint).not.toContain("\n");
+  // structure drift is the more urgent message and wins the single line
+  expect(detectConfigDrift(repo, teamCfg())).toContain("structure drift");
+  makeOkf(repo);
+  expect(detectConfigDrift(repo, defaults())).toBeNull();
+  // a legacy wiki with no pages (bare skeleton dirs) has nothing to convert
+  const empty = mkdtempSync(join(tmpdir(), "llmwiki-mig-empty-"));
+  mkdirSync(join(empty, "docs", "wiki", "2_milestone"), { recursive: true });
+  expect(detectConfigDrift(empty, defaults())).toBeNull();
+});
+
+test("a renamed category rewrites `type:` on OKF pages and `domain:` only on legacy ones", () => {
+  const repo = stockWiki();
+  const wiki = join(repo, "docs", "wiki");
+  const okfPage = "---\ntype: Insight\ntitle: I1\ndescription: d\ndate: 2026-07-07\ntags: [a, b]\nstatus: stable\n---\n\nbody\n";
+  writeFileSync(join(wiki, "4_insight", "i1.md"), okfPage, "utf-8");
+  migrate(repo, { commit: true, map: { "4_insight": "2_lesson", "5_topic": "9_topics" } }, teamCfg());
+  const moved = readFileSync(join(wiki, "2_lesson", "i1.md"), "utf-8");
+  expect(moved).toBe(okfPage.replace("type: Insight", "type: Lesson")); // nothing else touched
+  expect(moved).not.toContain("domain:");
+  const legacy = readFileSync(join(wiki, "3_adr", "adr-1.md"), "utf-8");
+  expect(legacy).toContain("domain: adr");
+  expect(legacy).not.toContain("type:");
+});
+
 test("drift detection: forward (structure vs config), clean after migrate, reverse (stale engine)", () => {
   const repo = stockWiki();
   const cfg = teamCfg();
   expect(detectConfigDrift(repo, cfg)).toContain("llmwiki migrate"); // forward drift
-  expect(detectConfigDrift(repo, defaults())).toBeNull(); // stock engine sees stock wiki: clean
+  // stock engine sees stock wiki: structurally clean — only the pre-OKF nudge remains
+  expect(detectConfigDrift(repo, defaults())).toContain("not in OKF v0.2");
+  makeOkf(repo);
+  expect(detectConfigDrift(repo, defaults())).toBeNull();
 
   migrate(repo, { commit: true, map: { "4_insight": "2_lesson", "5_topic": "9_topics" } }, cfg);
   expect(detectConfigDrift(repo, cfg)).toBeNull(); // clean after migrate

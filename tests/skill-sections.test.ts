@@ -138,7 +138,9 @@ describe("relocated rules live in their sections", () => {
 
   test("topic-page carries the 5_topic template with per-claim v3 evidence", () => {
     const t = section("topic-page");
-    expect(t).toContain("domain: topic");
+    expect(t).toContain("type: Topic"); // OKF v0.2: type replaces domain
+    expect(t).toContain("  - { id: s1, resource: <transcript-1>.jsonl }");
+    expect(t).toContain("](../3_decision/<page>.md) — grounds");
     expect(t).toContain("## 1. <first group");
     expect(t).toContain("### 2-1. <only when this group has parts>");
     expect(t).toContain("[^s1]: <transcript-1>.jsonl\n    > [2026-06-29 14:02 user]");
@@ -217,7 +219,10 @@ describe("relocated rules live in their sections", () => {
       "llmwiki review <repo> --commit --if-due",
       "cold-start rule 3 defers ALL mid-session page-writing",
       "**never `author:`**",
-      "`status: superseded` + `superseded_by: <new page path>`",
+      "`status: deprecated` + `superseded_by: <new page path>`",
+      "llmwiki okf <repo> --commit --if-okf",
+      "llmwiki log-append <repo> update",
+      "never `[[wikilinks]]`",
       "**Secrets never enter a page**",
       "Every item stamps `owner:` (`gh api user --jq .login`",
       "never translate",

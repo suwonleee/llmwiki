@@ -4,6 +4,8 @@ import { today } from "../engine/today.ts";
 import { runDoctor, type DoctorHarness } from "../engine/doctor.ts";
 import { refreshGapQueue } from "../engine/gaps.ts";
 import { migrate } from "../engine/migrate.ts";
+import { checkBundle, okfApply, WIKI_REL } from "../engine/okf-bundle.ts";
+import { appendLog } from "../engine/update.ts";
 import { normalizeOverview } from "../engine/overview.ts";
 import { compactDatabase, inspectDatabaseHealth } from "../engine/db-maintenance.ts";
 import { WikiIndex } from "../engine/db.ts";
@@ -24,6 +26,8 @@ export type MaintenanceHandlers = {
   readonly doctor: CommandHandler;
   readonly gaps: CommandHandler;
   readonly migrate: CommandHandler;
+  readonly okf: CommandHandler;
+  readonly "log-append": CommandHandler;
   readonly overview: CommandHandler;
   readonly "db-health": CommandHandler;
   readonly compact: CommandHandler;
@@ -182,6 +186,64 @@ export function createMaintenanceHandlers(dependencies: MaintenanceDependencies)
       if (result.verdict === "migrated") console.log(`  reindexed · lint errors: ${result.lintErrors}`);
       else console.log("  (dry-run — apply with --commit)");
     },
+    okf: (args) => {
+      const bundle = getFlagValue(args, "--bundle");
+      const ws = args.positionals[0];
+      if (!bundle && !ws) die("okf <workspace> [--commit] [--if-okf] | okf --bundle DIR [--json]");
+      const ko = isKorean();
+      if (bundle) {
+        // Any directory, any producer: report conformance (§11) without touching a byte.
+        const r = checkBundle(bundle);
+        if (args.flags["--json"]) return console.log(JSON.stringify(r, null, 2));
+        const errors = r.issues.filter((i) => i.severity === "error");
+        const warns = r.issues.length - errors.length;
+        console.log(
+          `okf: ${r.conformant}/${r.concepts} ${ko ? "개념 적합" : "concepts conformant"} · okf_version ${r.okfVersion ?? "-"} · ` +
+            `${ko ? "링크" : "edges"} ${r.edges} (${ko ? "깨짐" : "broken"} ${r.brokenEdges}) · ` +
+            `trust ${r.tiers["human-reviewed"]}h/${r.tiers["machine-confirmed"]}m/${r.tiers.unverified}u · stale ${r.stale} · deprecated ${r.deprecated}`,
+        );
+        const byRule = new Map<string, number>();
+        for (const i of r.issues) byRule.set(`${i.severity} ${i.rule}`, (byRule.get(`${i.severity} ${i.rule}`) ?? 0) + 1);
+        for (const [rule, n] of [...byRule].sort()) console.log(`  ${rule}: ${n}`);
+        for (const i of errors.slice(0, 10)) console.log(`  ✗ ${i.path}: ${i.message}`);
+        if (errors.length || warns) process.exitCode = errors.length ? 1 : 0;
+        return;
+      }
+      const commit = Boolean(args.flags["--commit"]);
+      const r = okfApply(ws!, { commit, ifOkf: Boolean(args.flags["--if-okf"]), actor: getFlagValue(args, "--actor") });
+      if (args.flags["--json"]) return console.log(JSON.stringify(r, null, 2));
+      if (r.verdict === "skip") return console.log(`okf: skip — ${r.reason}`);
+      if (r.verdict === "legacy-skip") {
+        return console.log(
+          ko
+            ? "okf: 아직 OKF로 전환되지 않은 위키 — 건너뜀. 전환: `llmwiki okf <repo>`(dry-run) → `--commit`"
+            : "okf: wiki not converted to OKF yet — skipped. Convert: `llmwiki okf <repo>` (dry-run) → `--commit`",
+        );
+      }
+      if (r.verdict === "conforms") return console.log(ko ? `okf: ✓ OKF v0.2 적합 (${r.pages}페이지, 변경 없음)` : `okf: ✓ OKF v0.2 conformant (${r.pages} pages, nothing to change)`);
+      const mode = r.verdict === "applied" ? "COMMIT" : "DRY-RUN";
+      console.log(`=== okf [${mode}] ${r.wasOkf ? (ko ? "정규화" : "normalize") : ko ? "OKF v0.2 전환" : "convert to OKF v0.2"} ===`);
+      const c = r.changes;
+      console.log(`  ${ko ? "페이지" : "pages"} ${r.pagesChanged}/${r.pages}: type ${c.type ?? 0} · status ${c.status ?? 0} · domain→type ${c["domain-dropped"] ?? 0} · sources ${c.sources ?? 0} · generated ${c.generated ?? 0} · verified ${c.verified ?? 0} · YAML ${ko ? "복구" : "repaired"} ${c["yaml-repaired"] ?? 0} · frontmatter ${ko ? "추가" : "added"} ${c["frontmatter-added"] ?? 0}`);
+      console.log(`  [[wikilink]] → markdown: ${r.linksConverted}${r.linksUnresolved ? ` (${ko ? "대상 없음 유지" : "unresolved, kept"} ${r.linksUnresolved})` : ""}`);
+      console.log(`  log.md: ${r.logConverted ? (ko ? `${r.logEntries}건 → 날짜별·최신순` : `${r.logEntries} entries → dated, newest first`) : ko ? "변경 없음" : "unchanged"} · index.md: ${r.indexesWritten}${r.coldIndexRemoved ? ` · cold-index.md ${ko ? "제거(index.md가 대체)" : "removed (index.md supersedes)"}` : ""}`);
+      for (const to of r.indexesPreserved) {
+        console.log(ko ? `  ⚠ 직접 쓴 index.md 보존 → ${to} (OKF가 index.md를 생성 목록으로 예약)` : `  ⚠ hand-written index.md kept as ${to} (OKF reserves index.md for the generated listing)`);
+      }
+      if (r.logKept) {
+        console.log(ko ? "  ⚠ log.md는 재작성 시 줄이 줄어들어 그대로 둠 — 손으로 확인 필요" : "  ⚠ log.md left as is: a re-render would have dropped lines — check it by hand");
+      }
+      if (r.verdict === "planned") console.log(ko ? "  (dry-run — 적용: --commit)" : "  (dry-run — apply with --commit)");
+      else console.log(ko ? `  ✓ 적용 완료 — 확인: llmwiki okf --bundle ${ws}/${WIKI_REL}` : `  ✓ applied — verify: llmwiki okf --bundle ${ws}/${WIKI_REL}`);
+    },
+    "log-append": (args) => {
+      const [workspace, kind, title, ...detail] = args.positionals;
+      if (!workspace || !kind || !title) die("log-append <workspace> <kind> <title> [detail...] [--date YYYY-MM-DD]");
+      const date = getFlagValue(args, "--date") ?? today();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) die("--date must be YYYY-MM-DD");
+      appendLog(workspace!, kind!, title!, detail, date);
+      console.log(`log: ${date} ${kind} | ${title}`);
+    },
     overview: (args) => {
       const workspace = args.positionals[0] ?? die("overview <workspace> required");
       const check = Boolean(args.flags["--check"]);
@@ -195,7 +257,7 @@ export function createMaintenanceHandlers(dependencies: MaintenanceDependencies)
         console.log(ko ? "  ✓ overview 정상 (정규화 불필요)" : "  ✓ overview already normalized");
       } else {
         const verb = check ? (ko ? "정규화 필요" : "would normalize") : ko ? "정규화함" : "normalized";
-        const target = ko ? "[[log.md]] 포인터" : "an [[log.md]] pointer";
+        const target = ko ? "[Log](log.md) 포인터" : "a [Log](log.md) pointer";
         console.log(`  ✅ ${verb}: Recent Updates → ${target} (${result.before}B → ${result.after}B)`);
       }
       if (result.oversized) {

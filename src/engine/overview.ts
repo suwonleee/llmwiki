@@ -11,11 +11,13 @@ import { readRepoFile, writeRepoFile } from "./repo-write.ts";
 // The canonical one-line body the "Recent Updates" section is collapsed to. This is PAGE CONTENT
 // committed into the user's repository, so it follows the wiki's language — and both variants
 // count as canonical, so reading a Korean wiki from an English shell never rewrites it.
+// The link is a standard relative markdown link (OKF §6.1) — overview.md and log.md share the
+// bundle root.
 export const RECENT_POINTER: LangCatalog<string> = {
-  en: "See [[log.md]] for the per-session change history (overview is the entry point — no session sections here).",
-  ko: "세션별 변경 이력은 [[log.md]] 참조 (overview는 엔트리포인트 — 세션 단락 누적 금지).",
-  ja: "セッションごとの変更履歴は [[log.md]] を参照（overview はエントリポイント — セッション段落を積まない）。",
-  zh: "每次会话的变更历史见 [[log.md]]（overview 是入口 — 不在此累积会话段落）。",
+  en: "See [Log](log.md) for the per-session change history (overview is the entry point — no session sections here).",
+  ko: "세션별 변경 이력은 [Log](log.md) 참조 (overview는 엔트리포인트 — 세션 단락 누적 금지).",
+  ja: "セッションごとの変更履歴は [Log](log.md) を参照（overview はエントリポイント — セッション段落を積まない）。",
+  zh: "每次会话的变更历史见 [Log](log.md)（overview 是入口 — 不在此累积会话段落）。",
 };
 export const RECENT_POINTER_EN = RECENT_POINTER.en;
 export const RECENT_POINTER_KO = RECENT_POINTER.ko as string;
@@ -25,7 +27,12 @@ export function recentPointer(lang: WikiLang): string {
   return RECENT_POINTER[lang] ?? RECENT_POINTER.en;
 }
 
-const CANONICAL_POINTERS = new Set(Object.values(RECENT_POINTER));
+// The pre-OKF `[[log.md]]` pointer still counts as normalized: collapsing is about a grown
+// changelog, and link form is `llmwiki okf`'s job — rewriting it here would churn every legacy wiki.
+const CANONICAL_POINTERS = new Set([
+  ...Object.values(RECENT_POINTER),
+  ...Object.values(RECENT_POINTER).map((p) => p.replace("[Log](log.md)", "[[log.md]]")),
+]);
 
 // Matches the section heading in either language we emit. Body = everything until the next `## ` or EOF.
 const RECENT_HEADING = /^##\s+(Recent Updates|최근 업데이트)\s*$/i;

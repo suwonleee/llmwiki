@@ -1,3 +1,5 @@
+import { parseYamlBlock, splitFrontmatter, isoFromDate, isStale, trustTier, type TrustTier, type YamlMap } from "./okf.ts";
+
 export const KNOWLEDGE_STATUSES = ["draft", "ready", "superseded"] as const;
 export type KnowledgeStatus = (typeof KNOWLEDGE_STATUSES)[number];
 
@@ -8,6 +10,17 @@ export type FrontmatterValue = string | readonly string[];
 
 export type Frontmatter = {
   readonly fields: Readonly<Record<string, FrontmatterValue>>;
+  /** The YAML mapping as parsed (nested values intact) — OKF `generated`, `verified`, `sources`. */
+  readonly data: Readonly<YamlMap>;
+  /** Set when the block is not valid YAML; the fields then come from the tolerant line reader. */
+  readonly yamlError: string | null;
+  /** OKF `type` as declared, or null. */
+  readonly type: string | null;
+  /** Legacy `domain:` as declared, or null (an OKF page carries `type` instead). */
+  readonly domain: string | null;
+  readonly trust: TrustTier;
+  /** OKF `stale_after` has passed. */
+  readonly stale: boolean;
   readonly title: string | null;
   readonly description: string | null;
   readonly date: string | null;
@@ -42,10 +55,6 @@ export function resolveDocumentTitle(
   return titleCase(stem.replace(/-/g, " ").replace(/_/g, " ").trim());
 }
 
-function stripQuotes(value: string): string {
-  return value.replace(/^['"]+|['"]+$/g, "");
-}
-
 function scalarField(fields: Readonly<Record<string, FrontmatterValue>>, key: string): string | null {
   const value = fields[key];
   return typeof value === "string" && value.trim() ? value : null;
@@ -64,14 +73,20 @@ function parseDate(value: string | null): string | null {
     : null;
 }
 
+// The engine's three lifecycle states. OKF spells two of them differently on disk (`stable`,
+// `deprecated`); both spellings read the same so a migrated wiki and a legacy one index alike.
 function parseKnowledgeStatus(value: string | null): KnowledgeStatus | null {
   switch (value) {
     case "draft":
     case "ready":
     case "superseded":
       return value;
+    case "stable":
+      return "ready";
+    case "deprecated":
+      return "superseded";
     default:
-      return null;
+      return null; // migration maps other spellings (okfStatus); reading never guesses
   }
 }
 
@@ -123,27 +138,28 @@ export function insertAfterFrontmatter(body: string, marker: string): string {
   return marker + body;
 }
 
-function parseFields(block: string | null): Readonly<Record<string, FrontmatterValue>> {
-  const fields: Record<string, FrontmatterValue> = {};
-  if (block === null) return Object.freeze(fields);
-  for (const line of block.split(/\r?\n/)) {
-    const colon = line.indexOf(":");
-    if (colon === -1) continue;
-    const key = line.slice(0, colon).trim();
-    const raw = line.slice(colon + 1).trim();
-    if (!key || key.startsWith("#")) continue;
-    if (raw.startsWith("[") && raw.endsWith("]")) {
-      const items = raw
-        .slice(1, -1)
-        .split(",")
-        .map((item) => stripQuotes(item.trim()))
-        .filter((item) => item.length > 0);
-      fields[key] = Object.freeze(items);
-    } else {
-      fields[key] = stripQuotes(raw);
-    }
+function flatValue(value: unknown): FrontmatterValue {
+  if (Array.isArray(value)) {
+    return Object.freeze(value.filter((v) => v !== null && v !== undefined && typeof v !== "object").map((v) => String(v)).filter((v) => v.length > 0));
   }
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+// Every key as a string or string list — the shape the engine's readers were written against.
+// Nested OKF values (`generated`, `verified`, `sources`) stay available, intact, on `data`.
+function flatFields(data: YamlMap): Readonly<Record<string, FrontmatterValue>> {
+  const fields: Record<string, FrontmatterValue> = {};
+  for (const [key, value] of Object.entries(data)) fields[key] = flatValue(value);
   return Object.freeze(fields);
+}
+
+function generatedDate(data: YamlMap): string | null {
+  const g = data.generated;
+  if (typeof g !== "object" || g === null || Array.isArray(g)) return null;
+  const at = (g as YamlMap).at;
+  return typeof at === "string" && /^\d{4}-\d{2}-\d{2}/.test(at) && isoFromDate(at) !== null ? at.slice(0, 10) : null;
 }
 
 function listField(fields: Readonly<Record<string, FrontmatterValue>>, key: string): readonly string[] {
@@ -153,12 +169,23 @@ function listField(fields: Readonly<Record<string, FrontmatterValue>>, key: stri
 }
 
 export function parseFrontmatter(content: string): Frontmatter {
-  const fields = parseFields(frontmatterBlock(content));
+  const block = frontmatterBlock(content) ?? (content.startsWith("---") ? splitFrontmatter(content).block : null);
+  const parsed = block === null ? { data: {} as YamlMap, error: null } : parseYamlBlock(block);
+  const fields = flatFields(parsed.data);
   return Object.freeze({
     fields,
+    data: Object.freeze({ ...parsed.data }),
+    yamlError: parsed.error,
+    type: scalarField(fields, "type"),
+    domain: scalarField(fields, "domain"),
+    trust: trustTier(parsed.data),
+    stale: isStale(parsed.data),
     title: scalarField(fields, "title"),
     description: scalarField(fields, "description"),
-    date: parseDate(scalarField(fields, "date")) ?? parseDate(scalarField(fields, "updated")),
+    date:
+      parseDate(scalarField(fields, "date")) ??
+      parseDate(scalarField(fields, "updated")) ??
+      parseDate(generatedDate(parsed.data)),
     tags: listField(fields, "tags"),
     keywords: listField(fields, "keywords"),
     status: parseKnowledgeStatus(scalarField(fields, "status")),

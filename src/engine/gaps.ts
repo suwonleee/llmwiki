@@ -46,6 +46,8 @@ const QUEUE_CLOSE_RULE: LangCatalog<(n: number) => string> = {
 import { LLM_CMD_ENV, llmAvailable } from "./claude.ts";
 import { gapStatePath, loadResolvedGapState, writeResolvedGapState } from "./gap-state.ts";
 import { ensureRepoDir, readRepoDir, readRepoFile, repoRelative, writeRepoFile } from "./repo-write.ts";
+import { isoLocal, renderYaml } from "./okf.ts";
+import { engineActor } from "./okf-bundle.ts";
 
 export const RESOLVE_AFTER = 2; // consecutive absent reviews before a gap is closed
 export const RECENT_RESOLVED_LIMIT = 20;
@@ -61,11 +63,14 @@ export interface Gap {
   resolvedAt?: string;
 }
 
-// normalize for stable identity across re-phrasings (lowercase, strip wikilinks/punct/space)
+// normalize for stable identity across re-phrasings (lowercase, strip links/punct/space). Both
+// link forms drop out — a gap re-emitted with markdown links after an OKF conversion, or after a
+// page is retitled, is the same gap and must keep its hash.
 function _norm(s: string): string {
   return s
     .toLowerCase()
     .replace(/\[\[[^\]]*\]\]/g, " ")
+    .replace(/(?<!!)\[(?:[^\]\\]|\\.)*\]\([^)]*\)/g, " ")
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
 }
@@ -161,7 +166,7 @@ function compareRecentResolved(a: Gap, b: Gap): number {
   return aDate === bDate ? a.hash.localeCompare(b.hash) : bDate.localeCompare(aDate);
 }
 
-export function renderQueue(gaps: Gap[], date: string, lang: WikiLang = resolveLang()): string {
+export function renderQueue(gaps: Gap[], date: string, lang: WikiLang = resolveLang(), at: string = isoLocal()): string {
   const open = gaps.filter((g) => g.status === "open").sort(compareOpen);
   const resolved = gaps.filter((g) => g.status === "resolved");
   const recentResolved = [...resolved].sort(compareRecentResolved).slice(0, RECENT_RESOLVED_LIMIT);
@@ -171,10 +176,17 @@ export function renderQueue(gaps: Gap[], date: string, lang: WikiLang = resolveL
   // Page content in the user's repository — the header follows the wiki's language. The rows and
   // the `## Open (N)` / `## Resolved (N …)` headings stay language-invariant: they are the
   // machine-managed part this file's own parser reads back.
-  const fm =
-    `---\ntitle: Gap queue\n` +
-    `description: ${pickLangValue(QUEUE_DESCRIPTION, lang)}\n` +
-    `date: ${date}\nupdated: ${date}\ntags: [gap-queue, meta]\nstatus: ready\ndomain: meta\nsource: semantic-lint\n---\n`;
+  // OKF concept: a stable, engine-generated Gap Queue whose source is the semantic-lint pass.
+  const fm = `---\n${renderYaml({
+    type: "Gap Queue",
+    title: "Gap queue",
+    description: pickLangValue(QUEUE_DESCRIPTION, lang),
+    date,
+    tags: ["gap-queue", "meta"],
+    status: "stable",
+    generated: { by: engineActor(), at },
+    sources: [{ resource: "semantic-lint" }],
+  })}\n---\n`;
   const note = `\n${pickLangValue(QUEUE_NOTE, lang)}\n> ${pickLangValue(QUEUE_CLOSE_RULE, lang)(RESOLVE_AFTER)}\n\n`;
   return (
     fm +

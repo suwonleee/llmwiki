@@ -82,8 +82,13 @@ describe("wiki clean", () => {
     const reviewPath = result.reviewPath;
     if (reviewPath === null) throw new Error("cleanup review path is missing");
     expect(reviewPath).toBe(join(root, "docs", "wiki", "0_review", "wiki-clean-2026-07-23.md"));
-    expect(readFileSync(reviewPath, "utf8")).toContain("kind: cleanup");
-    expect(readFileSync(reviewPath, "utf8")).toContain("source: wiki-clean");
+    const review = readFileSync(reviewPath, "utf8");
+    expect(review).toContain("kind: cleanup");
+    // an OKF Review Item: typed, draft, sourced to this pass, no legacy `source:`
+    expect(review).toContain("type: Review Item");
+    expect(review).toContain("status: draft");
+    expect(review).toContain("- { resource: wiki-clean }");
+    expect(review).not.toMatch(/^source:/m);
     expect(autoBefore).toContain("preserved auto body");
   });
 
@@ -128,6 +133,31 @@ describe("wiki clean", () => {
     expect(readFileSync(ambiguous, "utf8")).toContain("tier: warm");
     expect(readFileSync(ambiguous, "utf8")).toContain("preserved ambiguous body");
     expect(existsSync(reviewPath)).toBe(false);
+  });
+
+  test("a pre-OKF review batch (`source: wiki-clean`) still applies", () => {
+    const { root, ambiguous } = mkRepo();
+    const reviewPath = commitWikiClean(root, { today: TODAY }).reviewPath;
+    if (reviewPath === null) throw new Error("cleanup review path is missing");
+    const candidateId = /candidate: ([0-9a-f]{12})/.exec(readFileSync(reviewPath, "utf8"))?.[1];
+    if (candidateId === undefined) throw new Error("cleanup review candidate is missing");
+    const body = readFileSync(reviewPath, "utf8").split("\n---\n").slice(1).join("\n---\n");
+    const legacy =
+      "---\ntitle: Wiki cleanup review\ndescription: d\ndate: 2026-07-23\ntags: [cleanup, review, maintenance]\n" +
+      "status: draft\nkind: cleanup\nowner: human\nsource: wiki-clean\n---\n" + body;
+    writeFileSync(reviewPath, legacy.replace("A. accepted IDs: (none)", `A. accepted IDs: ${candidateId}`), "utf8");
+    expect(applyWikiCleanReview(root, { reviewPath }).applied).toEqual([candidateId]);
+    expect(readFileSync(ambiguous, "utf8")).toContain("tier: warm");
+  });
+
+  test("generated index.md listings of an OKF bundle are never cleanup candidates", () => {
+    const { root } = mkRepo();
+    writeFileSync(join(root, "docs", "wiki", "index.md"), '---\nokf_version: "0.2"\n---\n\n# Subdirectories\n', "utf8");
+    writeFileSync(join(root, "docs", "wiki", "4_insight", "index.md"), "# Insight\n\n* [Archive candidate](eligible.md)\n", "utf8");
+    const plan = planWikiClean(root, { today: TODAY });
+    const paths = [...plan.automatic, ...plan.ambiguous].map((c) => c.path);
+    expect(paths.some((p) => p.endsWith("index.md"))).toBe(false);
+    expect(plan.protected.some((p) => p.path.endsWith("index.md"))).toBe(false);
   });
 
   test("the default date works — every other test pins `today`, so nothing else exercises it", () => {

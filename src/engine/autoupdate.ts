@@ -61,6 +61,9 @@ import {
 import { MODEL_HEAVY, MODEL_LIGHT } from "./models.ts";
 import { generativeModel } from "./session-model.ts";
 import { ensureRepoDir, removeRepoFile, writeRepoFile } from "./repo-write.ts";
+import { parseFrontmatter } from "./frontmatter.ts";
+import { isoLocal, mergeSources, parseYamlBlock, renderDocument, splitFrontmatter, type YamlMap } from "./okf.ts";
+import { bundleFiles, categoryType, domainForType, linkResolver, normalizePage } from "./okf-bundle.ts";
 
 // WRITE = light tier (cheap, high-volume drafting). VERIFY = heavy tier — the adversarial
 // gate uses the strongest model; volume is small (one call per pending transcript), so it
@@ -77,10 +80,11 @@ export const VERIFY_MODEL = MODEL_HEAVY;
 // tests/config-render.test.ts so every writer receives intentional format changes together.
 export function schemaText(cfg: WikiConfig = getConfig()): string {
   return `Wiki page rules (strict):
-- Begin the file with a YAML frontmatter block containing: title, description (one sentence), date (YYYY-MM-DD), tags ([2+ entries]), status (ready|draft), domain, source.
-- Choose ONE domain for this page and set the \`domain:\` field to it:
+- Begin the file with a YAML frontmatter block (Open Knowledge Format) containing: type, title, description (one sentence), date (YYYY-MM-DD), tags ([2+ entries]), status (stable|draft), sources.
+- Choose ONE type for this page and set the \`type:\` field to it:
 ${renderDomainBullets(cfg)}
-- Every factual claim must carry a footnote citation \`[^1]\`, and the file must end with \`[^1]: <TRANSCRIPT_FILENAME>\`.
+- Every factual claim must carry a footnote citation \`[^s1]\`, and the file must end with \`[^s1]: <TRANSCRIPT_FILENAME>\`. Each footnote label has a matching \`sources:\` entry: \`- { id: s1, resource: <TRANSCRIPT_FILENAME> }\`.
+- Link other wiki pages with relative markdown links (\`[Title](../${cfg.topicDir}/page.md)\`), never \`[[wikilinks]]\`. Do not write \`domain:\`, \`source:\`, \`updated:\`, \`generated:\` or \`verified:\` — the engine stamps provenance.
 ${renderGroundingRule(cfg)}
 - Usefulness rule: everything written must help the NEXT work session. No filler, no restating the obvious.
 ${renderBodyStyleRule()}
@@ -104,15 +108,15 @@ function formatPrompt(template: string, vars: Record<string, string>): string {
 export function writePromptTemplate(cfg: WikiConfig = getConfig()): string {
   return `You are the update writer for an LLM Wiki. Read the session transcript extract below
 (user utterances and assistant conclusions) and produce ONE wiki page capturing the single most
-useful takeaway from this session for future work. Pick the domain that fits best
-(${renderDomainList(cfg)}) and set the \`domain:\` frontmatter field.
+useful takeaway from this session for future work. Pick the type that fits best
+(${renderDomainList(cfg)}) and set the \`type:\` frontmatter field.
 
 {schema}
 
 Output format (strict): your ENTIRE output is saved verbatim as a \`.md\` file.
 - Do not include explanation, preamble, closing remarks, or "I wrote ..." sentences. Do not use code fences (\`\`\`).
 - **The very first character MUST be \`---\`** (YAML frontmatter). Emit no text before it.
-- The footnote \`[^1]:\` must contain ONLY the bare filename \`{transcript_filename}\` — never append "(project: ...)" or any parenthetical. (For your context only, this session's project is: {repo_name}.)
+- The footnote \`[^s1]:\` must contain ONLY the bare filename \`{transcript_filename}\` — never append "(project: ...)" or any parenthetical. (For your context only, this session's project is: {repo_name}.)
 - Be concise: a TL;DR followed by key-fact bullets. Do not invent anything that is not in the transcript.
 - **Write the page body in the SAME language as the transcript / conversation** (match the source; do not translate to a fixed language). Use English if the source language is unclear.
 ${_terminologyWrite(cfg)}
@@ -132,6 +136,7 @@ and [PAGE] is a wiki document that claims to summarize it. Decide whether every 
 - If every claim is grounded in the extract, output exactly the single word \`VERIFIED\`.
 
 If the page contains judgment, interpretation, or decision sentences (which are not facts), flag those as well.
+Judge only the page body: frontmatter metadata (type, title, tags, status, sources) and footnote definitions are bookkeeping, not claims.
 
 === EXTRACT ===
 {extract}
@@ -160,15 +165,15 @@ function _extractPage(text: string): string {
 }
 
 export function _category(page: string, cfg: WikiConfig): string {
-  // Map the page's declared domain to a category folder — config-driven (llmwiki.config.toml);
-  // the default config reproduces the historical routing (fallback = 2_milestone).
-  const m = page.match(/^domain:\s*(\w+)/m);
-  return domainToDir(m ? m[1]! : "", cfg);
+  // Map the page's declared OKF `type` to a category folder — config-driven (llmwiki.config.toml).
+  // A legacy `domain:` still routes when the type names no category, and the default config
+  // reproduces the historical routing (fallback = 2_milestone).
+  const fm = parseFrontmatter(page);
+  return domainToDir(domainForType(fm.type, cfg) ?? (fm.domain || fm.type || ""), cfg);
 }
 
 function _title(page: string): string {
-  const m = page.match(/^title:\s*(.+)$/m);
-  return m ? m[1]!.trim() : "";
+  return parseFrontmatter(page).title?.trim() ?? "";
 }
 
 function _slug(page: string): string {
@@ -192,8 +197,48 @@ function _date(inc: Increment): string {
 }
 
 function _stampDate(page: string, inc: Increment): string {
-  // Python: re.sub(r"^date:\s*$", f"date: {_date(inc)}", page, flags=re.MULTILINE)
-  return page.replace(/^date:\s*$/gm, `date: ${_date(inc)}`);
+  // A blank, missing or non-calendar `date:` gets the session's own date. Read as YAML, so
+  // `date:`, `date: ""` and `date: null` are all the same blank.
+  const { block, body } = splitFrontmatter(page);
+  if (block === null) return page;
+  const { data } = parseYamlBlock(block);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(data.date ?? "").trim())) return page;
+  return renderDocument({ ...data, date: _date(inc) }, body);
+}
+
+/**
+ * An engine-written page in OKF form, deterministically — whatever the model put in the
+ * frontmatter. Provenance is the engine's to state, never the model's: `generated` is this write,
+ * `verified` only a real confirmation passed in by the caller (a model vouching for its own page
+ * would be a forged trust tier), and `sources` are rebuilt from the footnotes the body actually
+ * carries. Legacy `domain` / `source` / `updated` are dropped and `[[wikilinks]]` become relative
+ * markdown links. `set` pins fields the caller decided (the routed `type`, a carried-over
+ * `verified`, a scope-descriptor `sources`). `rel` is bundle-relative (`3_decision/x.md`).
+ */
+export function okfStamp(
+  root: string,
+  rel: string,
+  page: string,
+  cfg: WikiConfig,
+  o: { actor: string; verifiedBy?: string | null; set?: YamlMap },
+): string {
+  const { block, body } = splitFrontmatter(page);
+  const data: YamlMap = block === null ? {} : { ...parseYamlBlock(block).data };
+  for (const k of ["generated", "verified", "sources", "source", "domain", "updated"]) delete data[k];
+  Object.assign(data, o.set ?? {});
+  const at = isoLocal();
+  return normalizePage(rel, renderDocument(data, body), {
+    cfg,
+    resolve: linkResolver(root, bundleFiles(root), cfg),
+    changedAt: at,
+    actor: o.actor,
+    verifiedHint: o.verifiedBy ? { by: o.verifiedBy, at } : null,
+  }).content;
+}
+
+/** `<producer>/<model>` — the OKF actor for a generative pass (an unpinned tier reads `default`). */
+export function modelActor(producer: string, model: string | null | undefined): string {
+  return `${producer}/${model || "default"}`;
 }
 
 // Build a uniform human-review item for docs/wiki/0_review/: a plain Q./A. file the human
@@ -207,18 +252,25 @@ function _reviewWrapper(o: {
   source: string;
   question: string;
   candidate: string;
+  actor: string;
 }): string {
-  return (
-    `---\n` +
-    `title: "[review] ${o.title.replace(/"/g, "'")}"\n` +
-    `kind: ${o.kind}\n` +
-    `status: pending\n` +
-    `created: ${o.date}\n` +
-    `source: ${o.source}\n` +
-    `---\n\n` +
-    `Q. ${o.question}\n\n` +
+  const body =
+    `\nQ. ${o.question}\n\n` +
     `A. (write your decision below; on the next /wiki-save or /wiki-deep the LLM applies it and deletes this file)\n\n\n` +
-    `Draft (candidate page; moved into the chosen N_category once confirmed):\n${o.candidate}\n`
+    `Draft (candidate page; moved into the chosen N_category once confirmed):\n${o.candidate}\n`;
+  // An OKF concept like any other page (type Review Item, lifecycle draft until the human
+  // answers). `sources` already lists the candidate's footnotes, so `llmwiki okf` leaves it as is.
+  return renderDocument(
+    {
+      type: "Review Item",
+      title: `[review] ${o.title}`,
+      date: o.date,
+      status: "draft",
+      kind: o.kind,
+      generated: { by: o.actor, at: isoLocal() },
+      sources: mergeSources(undefined, body, o.source),
+    },
+    body,
   );
 }
 
@@ -367,10 +419,13 @@ export async function updateOne(
   // VERIFY pass — accepted as `ready` when grounded, otherwise rejected (omitted). Quality
   // failures never land in the human queue, which is reserved for strategic direction.
   const cat = _category(page, cfg);
+  const catDef = cfg.categories.find((c) => c.dir === cat);
+  const writeActor = modelActor("llmwiki-autoupdate", wm);
   const isDirection = isHumanReviewDir(cat, cfg); // review="human" categories route to the queue
   const titleSlug = _slug(page) || fn.slice(0, 8);
   const subdir = isDirection ? cfg.queueDir : cat;
-  const destRel = join("docs", "wiki", subdir, `${_date(inc)}-${titleSlug}.md`);
+  const destName0 = `${_date(inc)}-${titleSlug}.md`;
+  const destRel = join("docs", "wiki", subdir, destName0);
   const dest = join(root, destRel);
 
   // Grounding gate: Phase A is the MEASUREMENT phase — the grounding signal is
@@ -413,11 +468,18 @@ export async function updateOne(
   // pending so it resurfaces until the human confirms it into 1_direction/).
   if (isDirection) {
     // Prose names the category from config (stock: "direction shift … `1_direction/`", byte-identical).
-    const catDomain = cfg.categories.find((c) => c.dir === cat)?.domain ?? cat;
+    const catDomain = catDef?.domain ?? cat;
+    // The candidate is already in its destination's OKF form, so confirming it is a move, not a
+    // rewrite. No `verified` here: for a human-review category the human's confirmation is the
+    // verification, and it is stamped when it happens.
+    const candidatePage = okfStamp(root, `${cat}/${_date(inc)}-${titleSlug}.md`, page, cfg, {
+      actor: writeActor,
+      set: catDef ? { type: categoryType(catDef) } : {},
+    });
     // The direction draft is a TRACKED file like any other page, so it passes the same screening
     // gate: a candidate that screens down to nothing is not written at all (it would land a
     // mostly-«redacted» question in the human queue and still carry the remainder into git).
-    const screenedCandidate = screenOutbound({ candidate: page });
+    const screenedCandidate = screenOutbound({ candidate: candidatePage });
     if (!screenedCandidate) {
       result.verdict = "skipped-screened";
       result.reason = SCREENED_REASON;
@@ -451,6 +513,7 @@ export async function updateOne(
         source: fn,
         question: `A ${catDomain} shift (from→to) appears in this session. Confirm and promote to \`${cat}/\`, or discard?`,
         candidate: screenedCandidate.candidate!,
+        actor: writeActor,
       }),
     );
     idx.indexAll();
@@ -465,6 +528,14 @@ export async function updateOne(
   // here, and on any other clone it will not be readable at all (page format v3).
   // (Authorship is deliberately NOT stamped: git already records it — decision 2026-07-10.)
   page = ensureExcerpts(page, transcriptPath, offset);
+  // OKF frontmatter, stamped by the engine: the routed type, this write as `generated`, and —
+  // only when the independent VERIFY pass confirmed every claim — that pass as `verified`. A page
+  // that fails a later gate is removed below, so a stamp never outlives a rejection.
+  page = okfStamp(root, `${subdir}/${destName0}`, page, cfg, {
+    actor: writeActor,
+    verifiedBy: verified ? modelActor("llmwiki-verify", vm) : null,
+    set: catDef ? { type: categoryType(catDef) } : {},
+  });
   writeRepoFile(root, destRel, page + (page.endsWith("\n") ? "" : "\n"));
   idx.indexAll();
   const conn = idx.connect();

@@ -65,6 +65,8 @@ export const COMMANDS = [
   { name: "topics", group: "Maintain the wiki", usage: "topics [workspace]", summary: "Render the deterministic topic relationship view." },
   { name: "gaps", group: "Maintain the wiki", usage: "gaps <workspace> [--date YYYY-MM-DD] [--check]", summary: "Refresh or check the self-closing gap queue." },
   { name: "overview", group: "Maintain the wiki", usage: "overview <workspace> [--normalize|--check]", summary: "Normalize the bounded overview entry point." },
+  { name: "okf", group: "Maintain the wiki", usage: "okf <workspace> [--commit] [--if-okf] [--actor ACTOR] | okf --bundle DIR [--json]", summary: "Check or bring the wiki to Open Knowledge Format v0.2 (dry-run by default)." },
+  { name: "log-append", group: "Maintain the wiki", usage: "log-append <workspace> <kind> <title> [detail...] [--date YYYY-MM-DD]", summary: "Add one dated entry to the wiki log in its own format." },
   { name: "migrate", group: "Maintain the wiki", usage: "migrate <workspace> [--commit] [--map old=new,...]", summary: "Plan or apply configured wiki-structure migration." },
   { name: "db-health", group: "Maintain the wiki", usage: "db-health <workspace> [--notice]", summary: "Inspect derived database integrity and storage." },
   { name: "daemon-sync", group: "Maintain the wiki", usage: "daemon-sync", summary: "Restart the capture daemon iff it predates the code on disk (close-out hygiene; one line, always exit 0)." },

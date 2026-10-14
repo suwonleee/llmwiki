@@ -24,6 +24,8 @@
 import { collectGroundedFacts, type GroundedFact } from "./grounding.ts";
 import { sourceForKind, sourceForPath, type TranscriptSource } from "./source.ts";
 import { screenSecrets, REDACTED } from "./screen.ts";
+import { parseFrontmatter } from "./frontmatter.ts";
+import { typeKey } from "./okf.ts";
 
 // Per-excerpt character cap. Evidence is a pointer to grounding, not a second copy of the source;
 // 200 chars holds a decision sentence while keeping a fully-cited page's evidence block bounded.
@@ -144,7 +146,9 @@ export function ensureExcerpts(page: string, transcriptPath: string, startOffset
   const candidates = mintExcerpts(transcriptPath, startOffset, { limit: 4 });
   if (!candidates.length) return page;
 
-  const domain = /^domain:\s*(\S+)/m.exec(page)?.[1] ?? "";
+  // The page's category: OKF `type` (Decision, Direction), or a legacy `domain:`.
+  const fm = parseFrontmatter(page);
+  const domain = fm.type ? typeKey(fm.type) : (fm.domain ?? "");
   const judgmentPage = domain === "decision" || domain === "direction";
   const pick =
     (judgmentPage ? candidates.find((c) => c.kind === "judgment") : undefined) ??

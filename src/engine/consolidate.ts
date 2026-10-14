@@ -34,6 +34,9 @@ import { Linter, type LintIssue, type WikiIndexLike } from "./lint.ts";
 import { MODEL_HEAVY, MODEL_LIGHT } from "./models.ts";
 import { generativeModel } from "./session-model.ts";
 import { ensureRepoDir, readRepoFile, removeRepoFile, repoPathAllowed, writeRepoFile } from "./repo-write.ts";
+import { parseFrontmatter } from "./frontmatter.ts";
+import { splitFrontmatter } from "./okf.ts";
+import { modelActor, okfStamp } from "./autoupdate.ts";
 import { projectStatePath, readProjectState, writeProjectState } from "./project-state.ts";
 
 // WRITE drafts the merged page (cheap tier); VERIFY adjudicates the added claims (heavy tier,
@@ -114,7 +117,10 @@ function existingTopics(idx: WikiIndex, cfg: WikiConfig): { title: string; rel: 
 function addedClaims(oldContent: string, newPage: string): string {
   const old = new Set(oldContent.split("\n").map((l) => l.trim()));
   const added: string[] = [];
-  for (const raw of newPage.split("\n")) {
+  // Frontmatter is metadata, never a claim — and OKF frontmatter spans nested lines (`sources:`
+  // entries, `generated:`) that no line prefix list would keep up with.
+  const { block, body } = splitFrontmatter(newPage);
+  for (const raw of (block === null ? newPage : body).split("\n")) {
     const l = raw.trim();
     if (!l || old.has(l)) continue;
     // only judge body claims (bullets / prose), not frontmatter / footnote defs / headings
@@ -162,10 +168,13 @@ OUTPUT CONTRACT (strict):
 - Line 2: \`MERGE: <existing path from the list, or NONE>\`
 - Line 3: \`OVERLAP: <High|Moderate|Low> vs=<closest existing path or NONE> dims=[<matched dimension numbers>]\`
 - Then the page, whose VERY NEXT character is \`---\` (YAML frontmatter). No prose before/after, no code fences.
-- Frontmatter fields: title, description (one sentence), date (YYYY-MM-DD), updated (YYYY-MM-DD),
-  tags ([2+], include \`topic\`), status (ready|draft), domain: topic, source ({transcript_filename}).
+- Frontmatter fields (Open Knowledge Format): type: Topic, title, description (one sentence), date (YYYY-MM-DD,
+  creation — keep the existing one on a merge), tags ([2+], include \`topic\`), status (stable|draft), sources (one
+  \`- { id: sN, resource: {transcript_filename} }\` per footnote label). Do not write domain, source, updated,
+  generated or verified — the engine stamps provenance.
 - Body: a one-line TL;DR then fact bullets. EVERY new fact bullet ends with a footnote \`[^sN]\`, and the file
   ends with the matching \`[^sN]: {transcript_filename}\` definitions (keep existing ones on a merge).
+- Link other wiki pages with relative markdown links (\`[Title](../3_decision/x.md)\`), never \`[[wikilinks]]\`.
 ${renderBodyStyleRule()}
 ${renderMarkdownStyleRule()}
 - Ground every NEW claim ONLY in the extract below. Do not invent. Build the merge from the extract — never
@@ -402,6 +411,17 @@ export async function consolidateOne(
   }
 
   // accepted → write, register provenance, rebuild this page's edges, lint just this page.
+  // OKF frontmatter is the engine's, not the model's: type Topic, this write as `generated`,
+  // sources from the footnotes on top of the merged page's own, and a human `verified` the old
+  // page already carried kept as history (OKF: content may change without re-confirmation).
+  const old = merging ? parseFrontmatter(oldContent).data : {};
+  const keep: Record<string, unknown> = { type: "Topic" };
+  if (old.verified !== undefined) keep.verified = old.verified;
+  if (old.sources !== undefined) keep.sources = old.sources;
+  page = okfStamp(root, relpath(join(root, "docs", "wiki"), dest).replace(/\\/g, "/"), page, cfg, {
+    actor: modelActor("llmwiki-consolidate", wm),
+    set: keep,
+  });
   ensureRepoDir(root, join(destRel, ".."));
   // Authorship is read from git, not cached into frontmatter (decision 2026-07-10) — a stamped
   // author goes stale the moment a teammate edits the page, and git is already the truth.

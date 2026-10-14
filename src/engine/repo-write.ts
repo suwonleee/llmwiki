@@ -37,6 +37,7 @@ import {
   renameSync,
   rmdirSync,
   rmSync,
+  utimesSync,
   writeSync,
 } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -410,6 +411,17 @@ export function repoDirExists(root: string, relativePath: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Set a repository file's modification time (atime follows). For rewrites that change a page's
+ * FORM but not its content — a format conversion must not make every page look just edited to
+ * readers that rank by mtime. A symlinked path is left alone, like every other operation here.
+ */
+export function setRepoFileMtime(root: string, relativePath: string, mtimeMs: number): void {
+  if (!repoFileExists(root, relativePath)) return;
+  const at = new Date(mtimeMs);
+  utimesSync(repoPath(root, relativePath), at, at);
 }
 
 /** Modification time of a repository file, or null when it is absent or not a regular file. */

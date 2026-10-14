@@ -89,7 +89,7 @@ describe("wiki language resolution", () => {
   test("the overview pointer and the gap-queue header follow the same language", () => {
     expect(recentPointer("ja")).toMatch(/[ぁ-んァ-ヶ一-龯]/);
     expect(recentPointer("zh")).toMatch(/[一-龯]/);
-    expect(recentPointer("en")).toContain("See [[log.md]]");
+    expect(recentPointer("en")).toContain("See [Log](log.md)");
     expect(recentPointer("ko")).toContain("세션별 변경 이력");
 
     const gap = {

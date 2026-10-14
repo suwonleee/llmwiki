@@ -8,13 +8,15 @@
 // remember `update-done` is the discipline-dependent failure mode we want gone.
 //
 // This reconciles the ledger against EVIDENCE, deterministically: a session is "reflected" iff a
-// wiki page CITES its transcript (footnote `[^n]: <name>.jsonl` or frontmatter `source:`). Cited
+// wiki page CITES its transcript (footnote `[^n]: <name>.jsonl`, frontmatter `sources[].resource`,
+// or a legacy `source:`). Cited
 // pending rows are advanced to distilled; only genuinely un-cited sessions remain pending. No LLM.
 import { statSync, existsSync } from "node:fs";
 import { basename, join, sep } from "node:path";
 import * as capture from "./capture.ts";
 import { getConfig } from "./config.ts";
 import { readRepoDir, readRepoFile } from "./repo-write.ts";
+import { parseFrontmatter } from "./frontmatter.ts";
 
 function walkMarkdown(repo: string, relativeDir: string, out: string[]): void {
   for (const e of readRepoDir(repo, relativeDir)) {
@@ -43,6 +45,13 @@ export function citedTranscripts(repo: string): Set<string> {
       const t = line.trim();
       if (!/^(\[\^[^\]]+\]:|source:)/.test(t)) continue;
       const m = t.match(/([^\s/\\]+\.jsonl)\b/i); // case-insensitive, matching the rest of the engine
+      if (m) cited.add(m[1]!.toLowerCase());
+    }
+    // OKF `sources:` — a list of `{ id, resource }` (a bare mapping is one entry).
+    const sources = parseFrontmatter(text).data.sources;
+    for (const e of Array.isArray(sources) ? sources : sources ? [sources] : []) {
+      const resource = typeof e === "object" && e !== null ? (e as { resource?: unknown }).resource : e;
+      const m = typeof resource === "string" ? resource.match(/([^\s/\\]+\.jsonl)\b/i) : null;
       if (m) cited.add(m[1]!.toLowerCase());
     }
   }
