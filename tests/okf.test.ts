@@ -19,6 +19,7 @@ import {
   okfStatus,
   parseLegacyBlock,
   logContentLines,
+  logIntro,
   parseLog,
   parseYamlBlock,
   relativeHref,
@@ -198,24 +199,36 @@ describe("reserved files", () => {
     expect(entries[1]!.detail).toEqual(["- rejected — verify failed:", "- **TL;DR**: nested bold"]);
     const okf = renderLog(entries, "Log", "History.");
     expect(okf).toBe(
-      "# Log\n\nHistory.\n\n## 2026-06-20\n\n* **Autoupdate**: second\n  - rejected — verify failed:\n  - **TL;DR**: nested bold\n\n" +
+      "---\ntype: Log\ntitle: Log\ndescription: History.\n---\n\n# Log\n\n## 2026-06-20\n\n* **Autoupdate**: second\n  - rejected — verify failed:\n  - **TL;DR**: nested bold\n\n" +
         "## 2026-06-18\n\n* **Update**: third\n* **Update**: first\n  - a\n",
     );
     expect(checkLog("log.md", okf)).toEqual([]);
     expect(parseLog(okf).map((e) => e.title)).toEqual(["second", "third", "first"]);
-    expect(checkLog("log.md", legacy).map((i) => i.rule)).toEqual(["okf-log-heading"]);
+    expect(checkLog("log.md", legacy).map((i) => i.rule)).toEqual(["okf-log-content"]);
   });
 
   test("an entry lands under today's group, or opens a new group on top", () => {
-    const base = "# Log\n\nHistory.\n\n## 2026-10-12\n\n* **Update**: old\n";
+    const H = "---\ntype: Log\ntitle: Log\ndescription: History.\n---\n\n# Log\n\n";
+    const base = H + "## 2026-10-12\n\n* **Update**: old\n";
     const same = insertLogEntry(base.replace("2026-10-12", "2026-10-13"), { date: "2026-10-13", kind: "update", title: "new", detail: ["- d"] }, "Log", "History.");
-    expect(same).toBe("# Log\n\nHistory.\n\n## 2026-10-13\n\n* **Update**: new\n  - d\n* **Update**: old\n");
+    expect(same).toBe(H + "## 2026-10-13\n\n* **Update**: new\n  - d\n* **Update**: old\n");
     const next = insertLogEntry(base, { date: "2026-10-13", kind: "quiz", title: "q", detail: [] }, "Log", "History.");
-    expect(next).toBe("# Log\n\nHistory.\n\n## 2026-10-13\n\n* **Quiz**: q\n\n## 2026-10-12\n\n* **Update**: old\n");
+    expect(next).toBe(H + "## 2026-10-13\n\n* **Quiz**: q\n\n## 2026-10-12\n\n* **Update**: old\n");
     expect(checkLog("log.md", next)).toEqual([]);
-    const fresh = insertLogEntry("# Log\n\nHistory.\n", { date: "2026-10-13", kind: "update", title: "t", detail: [] }, "Log", "History.");
-    expect(fresh).toBe("# Log\n\nHistory.\n\n## 2026-10-13\n\n* **Update**: t\n");
-  });
+    const fresh = insertLogEntry(H, { date: "2026-10-13", kind: "update", title: "t", detail: [] }, "Log", "History.");
+    expect(fresh).toBe(H + "## 2026-10-13\n\n* **Update**: t\n");
+    });
+
+  test("an intro in the body is not §9; it moves to frontmatter description", () => {
+    const old = "# Log\n\nHistory.\n\n## 2026-10-12\n\n* **Update**: old\n";
+    expect(checkLog("log.md", old).map((i) => i.rule)).toEqual(["okf-log-content"]);
+    expect(logIntro(old)).toBe("History.");
+    const okf = renderLog(parseLog(old), "Log", logIntro(old));
+    expect(okf).toBe("---\ntype: Log\ntitle: Log\ndescription: History.\n---\n\n# Log\n\n## 2026-10-12\n\n* **Update**: old\n");
+    expect(checkLog("log.md", okf)).toEqual([]);
+    expect(logIntro(okf)).toBe("History.");
+    expect(renderLog(parseLog(okf), "Log", logIntro(okf))).toBe(okf);
+});
 });
 
 describe("concept conformance", () => {

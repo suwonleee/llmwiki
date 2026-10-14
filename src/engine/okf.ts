@@ -694,7 +694,12 @@ function renderEntry(e: LogEntry): string[] {
   return lines;
 }
 
-/** A log rendered per §9: one `## YYYY-MM-DD` group per date, newest date and entry first. */
+/**
+ * A log rendered per §9: one `## YYYY-MM-DD` group per date, newest date and entry first. The
+ * intro rides in frontmatter (`type: Log`, as Google's sample bundle does): §9 allows only the
+ * title and dated groups in the body, and a frontmatter-less log reads as an `Unknown` concept in
+ * the reference viewer.
+ */
 export function renderLog(entries: LogEntry[], heading: string, intro: string): string {
   const order = entries.map((e, i) => ({ e, i, legacy: isLegacyEntry(e) }));
   // Newest date first. Within a day: a legacy log was appended oldest-first, so its entries
@@ -706,13 +711,25 @@ export function renderLog(entries: LogEntry[], heading: string, intro: string): 
     if (a.legacy !== b.legacy) return a.legacy ? -1 : 1;
     return a.i - b.i;
   });
-  const parts = [`# ${heading}`, "", intro.trim(), ""];
+  const parts = [`# ${heading}`, ""];
   order.forEach(({ e }, i) => {
     if (i === 0 || order[i - 1]!.e.date !== e.date) parts.push(`## ${e.date}`, "");
     parts.push(...renderEntry(e));
     if (i === order.length - 1 || order[i + 1]!.e.date !== e.date) parts.push("");
   });
-  return parts.join("\n").replace(/\n+$/, "\n");
+  const meta: YamlMap = { type: LOG_TYPE, title: heading };
+  if (intro.trim()) meta.description = intro.trim();
+  return renderDocument(meta, parts.join("\n").replace(/\n+$/, "\n"));
+}
+
+/** The `type` a rendered log declares. */
+export const LOG_TYPE = "Log";
+
+/** A log's intro: its frontmatter `description`, else the free text above its first group. */
+export function logIntro(text: string): string {
+  const { block } = splitFrontmatter(text);
+  const d = block === null ? undefined : parseYamlBlock(block).data.description;
+  return typeof d === "string" && d.trim() ? d.trim() : logPreamble(text);
 }
 
 /**
@@ -813,8 +830,15 @@ export function checkIndex(path: string, content: string, root: boolean): OkfIss
 export function checkLog(path: string, content: string): OkfIssue[] {
   const out: OkfIssue[] = [];
   const dates: string[] = [];
+  let seenGroup = false;
   for (const line of splitFrontmatter(content).body.split(/\r?\n/)) {
+    if (!seenGroup && line.trim() && !/^#{1,2}\s/.test(line)) {
+      // §9: a log is the title and dated groups. An intro belongs in frontmatter `description`.
+      out.push({ path, rule: "okf-log-content", severity: "error", message: `log has text outside a dated group: ${line.slice(0, 60)}` });
+      return out;
+    }
     if (!/^##\s/.test(line)) continue;
+    seenGroup = true;
     const m = DATE_HEADING.exec(line);
     if (!m) {
       out.push({ path, rule: "okf-log-heading", severity: "error", message: `log heading is not \`## YYYY-MM-DD\`: ${line.slice(0, 60)}` });

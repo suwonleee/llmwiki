@@ -12,7 +12,7 @@ import { WikiIndex } from "./db.ts";
 import { sameRepository } from "./enrollment.ts";
 import { appendRepoFile, ensureRepoDir, readRepoFile, repoFileExists, writeRepoFile } from "./repo-write.ts";
 import { screenSecrets } from "./screen.ts";
-import { insertLogEntry, isLegacyLog, isoLocal } from "./okf.ts";
+import { insertLogEntry, isLegacyLog, isoLocal, renderLog } from "./okf.ts";
 import { LOG_BODY, LOG_HEADING, bundleFiles, engineActor, writeIndexes } from "./okf-bundle.ts";
 
 // Every repository path in this module is expressed relative to the repo root and resolved by
@@ -263,8 +263,8 @@ export function ensureSkeleton(ws: string, cfg: WikiConfig = getConfig(resolve(w
   }
   const log = wikiRel(cfg.files.log);
   if (!repoFileExists(root, log)) {
-    // OKF reserves log.md (§9): no frontmatter, `## YYYY-MM-DD` groups, newest first.
-    writeRepoFile(root, log, `# ${LOG_HEADING}\n\n${pickLangValue(LOG_BODY, lang)}`);
+    // OKF reserves log.md (§9): `## YYYY-MM-DD` groups, newest first; the intro rides in frontmatter.
+    writeRepoFile(root, log, renderLog([], LOG_HEADING, pickLangValue(LOG_BODY, lang)));
   }
   // Team-safety files (idempotent; harmless solo). Without these, a shared project commits the
   // SQLite index (binary merge conflicts) and concurrent log.md appends conflict on every merge.

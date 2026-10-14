@@ -24,7 +24,7 @@ import {
   mergeSources,
   okfStatus,
   logContentLines,
-  logPreamble,
+  logIntro,
   parseLog,
   parseYamlBlock,
   renderDocument,
@@ -383,7 +383,7 @@ const LEGACY_INTRO = /append-only|追記のみ|仅追加|시간순 기록/;
  */
 export function convertLog(text: string, intro: string): { content: string; entries: number; lost: boolean } {
   const entries = parseLog(text);
-  const preamble = logPreamble(text);
+  const preamble = logIntro(text);
   const keep = preamble && !LEGACY_INTRO.test(preamble) ? preamble : intro;
   const content = renderLog(entries, LOG_HEADING, keep);
   // An entry with no date has no §9 group to live in; inventing one would fabricate history.
@@ -610,8 +610,9 @@ export function okfApply(ws: string, opts: { commit?: boolean; ifOkf?: boolean; 
   if (logText !== null) {
     const converted = convertLog(logText, logIntro);
     result.logEntries = converted.entries;
+    // A log without frontmatter predates the `type: Log` header; render it once to add one.
     const hasFrontmatter = splitFrontmatter(logText).block !== null;
-    const wanted = isLegacyLog(logText) || hasFrontmatter || checkLog(logRel, logText).length > 0;
+    const wanted = isLegacyLog(logText) || !hasFrontmatter || checkLog(logRel, logText).length > 0;
     if (wanted && converted.lost) result.logKept = true; // never write a shorter log
     let next = wanted && !converted.lost ? converted.content : logText;
     // Log entries name the pages they touched; those names are links too (§9 entries are prose

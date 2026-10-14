@@ -128,7 +128,8 @@ describe("llmwiki okf on a pre-OKF wiki", () => {
 
     // Reserved files.
     const log = read(repo, "log.md");
-    expect(log.startsWith("# Log\n")).toBe(true);
+    expect(log.startsWith("---\ntype: Log\ntitle: Log\n")).toBe(true);
+    expect(log).toContain("\n# Log\n\n## ");
     expect(checkLog("log.md", log)).toEqual([]);
     expect(log.indexOf("## 2026-07-11")).toBeLessThan(log.indexOf("## 2026-07-02"));
     expect(log).toContain("  - pages: [운영 자율성](1_direction/2026-07-11-autonomy.md)");
