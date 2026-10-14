@@ -337,7 +337,7 @@ cd ~/llmwiki
 |---|---|---|
 | **Bun ≥ 1.1** | ✔ 必需 | 单一二进制 — POSIX：`curl -fsSL https://bun.sh/install \| bash`；原生 Windows：在 PowerShell 中运行 `irm bun.sh/install.ps1 \| iex`（POSIX 安装器不能在 Windows 上运行）。直接运行 `.ts`，`bun:sqlite` 连 FTS5 一并打包 — 零构建·`node_modules`。运行引擎和 `bun test` 无需安装; 仅 `bun run typecheck`（tsc）需要一次 `bun install`（仅开发用）。 |
 | **Codex · OpenCode CLI** | 仅各自的快速开始 | `codex` / `opencode` 需在 `PATH` 上。Codex 另需支持 lifecycle hook 且启用 stable `hooks` 功能。setup 在改动钩子·技能·服务之前，会先确认支持情况与既有功能设置。 |
-| **LLM CLI** | 可选，需显式开启 | 捕获·读取注入·`/wiki-*`·`ingest`（capture-only，只排队待更新）没有它也能工作，且**默认不向任何地方发送任何内容**。只有在 shell 环境中设置 `LLMWIKI_LLM_CMD` 后，`autoupdate·review` 和 `ingest` 的整合才会启动生成子进程（例如 `export LLMWIKI_LLM_CMD='claude -p {prompt} --model {model} --disallowedTools Write Edit NotebookEdit Bash'`）。未设置时这些通道报告“不可用”并跳过，确定性功能照常工作。 |
+| **LLM CLI** | 可选，需显式开启 | 捕获·读取注入·`/wiki-*`·`ingest`（capture-only，只排队待更新）没有它也能工作，且**默认不向任何地方发送任何内容**。只有在 shell 环境中设置 `LLMWIKI_LLM_CMD` 后，`autoupdate·review` 和 `ingest` 的整合才会启动生成子进程（例如 `export LLMWIKI_LLM_CMD='claude -p {prompt} --model {model} --tools= --permission-mode dontAsk --strict-mcp-config --safe-mode --no-session-persistence'`）。未设置时这些通道报告“不可用”并跳过，确定性功能照常工作。 |
 | **OS** | macOS / Linux / Windows | 正式支持契约：[`reference/support-contract.json`](../reference/support-contract.json)。macOS=launchd，Linux=systemd（`--user`），无 systemd 则回退 cron+nohup，Windows=每用户启动文件夹。守护进程细节见 [`daemon/README.md`](../daemon/README.md) |
 
 ### Harness · OS 备注（Claude Code / Codex / OpenCode / Windows）

@@ -345,7 +345,7 @@ cd ~/llmwiki
 |---|---|---|
 | **Bun ≥ 1.1** | ✔ 必須 | 単一バイナリ — POSIX: `curl -fsSL https://bun.sh/install \| bash`; ネイティブWindows: PowerShellで `irm bun.sh/install.ps1 \| iex`（POSIXインストーラーはWindowsでは動作しません）。`.ts` を直接実行、`bun:sqlite` がFTS5まで同梱 — ビルド·`node_modules` 0。エンジン実行·`bun test` はインストール不要; `bun run typecheck`（tsc）のみ一度 `bun install` が必要（dev専用）。 |
 | **Codex · OpenCode CLI** | 各クイックスタートのみ | `codex` / `opencode` が `PATH` にあること。Codexは加えてlifecycle hook対応 + stable `hooks` 機能の有効化が必要。setupはフック·スキル·サービスを変更する前に、対応状況と既存の機能設定を確認。 |
-| **LLM CLI** | 任意・オプトイン | キャプチャ·読み込み注入·`/wiki-*`·`ingest`（capture-only、保留updateをキュー）は無くても動作し、**既定では何もどこにも送りません**。`autoupdate·review` と `ingest` の統合は、シェル環境で `LLMWIKI_LLM_CMD` を設定したときだけ生成サブプロセスを起動します（例: `export LLMWIKI_LLM_CMD='claude -p {prompt} --model {model} --disallowedTools Write Edit NotebookEdit Bash'`）。未設定ならそれらのパスは「利用不可」として skip し、決定的な処理はすべて動き続けます。 |
+| **LLM CLI** | 任意・オプトイン | キャプチャ·読み込み注入·`/wiki-*`·`ingest`（capture-only、保留updateをキュー）は無くても動作し、**既定では何もどこにも送りません**。`autoupdate·review` と `ingest` の統合は、シェル環境で `LLMWIKI_LLM_CMD` を設定したときだけ生成サブプロセスを起動します（例: `export LLMWIKI_LLM_CMD='claude -p {prompt} --model {model} --tools= --permission-mode dontAsk --strict-mcp-config --safe-mode --no-session-persistence'`）。未設定ならそれらのパスは「利用不可」として skip し、決定的な処理はすべて動き続けます。 |
 | **OS** | macOS / Linux / Windows | 正式なサポート契約: [`reference/support-contract.json`](../reference/support-contract.json)。macOS=launchd、Linux=systemd（`--user`）、systemdが無ければcron+nohupへフォールバック、Windows=ユーザー別スタートアップフォルダー。デーモン詳細は [`daemon/README.md`](../daemon/README.md) |
 
 ### ハーネス · OSノート（Claude Code / Codex / OpenCode / Windows）

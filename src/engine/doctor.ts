@@ -46,6 +46,7 @@ import { missedByDaemon, readDaemonResolved } from "./daemon-resolved.ts";
 import { listProjectStates } from "./project-state.ts";
 import { summarizeProjectStore } from "./project-maintenance.ts";
 import { envValueOutsideRepoFiles } from "./env-policy.ts";
+import { LLM_CMD_ENV, RECOMMENDED_CLAUDE_CMD, claudeCommandRisk, llmTemplate } from "./claude.ts";
 
 const HOME = process.env.HOME?.trim() || homedir();
 const CORE = [
@@ -1308,6 +1309,19 @@ export function runDoctor(
         );
         issues += 1;
       }
+    }
+  }
+
+  // The generative command is machine-wide opt-in, not per-harness wiring, but it is only ever a
+  // Claude Code risk (claudeCommandRisk ignores other CLIs), so it rides with the claude target.
+  if (harness === "all" || harness === "claude") {
+    const risk = claudeCommandRisk(llmTemplate());
+    if (risk) {
+      console.log(`  [generative] ⚠️ ${LLM_CMD_ENV} ${risk}`);
+      console.log(`  [generative]    export ${LLM_CMD_ENV}='${RECOMMENDED_CLAUDE_CMD}'`);
+      // An action, not an issue: the wiring is fine, and setup/verify exit on issues — failing a
+      // reinstall for everyone who copied the old README recommendation would punish the wrong thing.
+      actions += 1;
     }
   }
 
