@@ -298,6 +298,10 @@ test("seeded close-out boundary runs deterministic tail and next-session retriev
     expect(mustRun([process.execPath, installedCli, "register-transcript", repo, transcript, "--session", sessionId])).toContain(
       "registered 1 transcript",
     );
+    // The close-out's deterministic OKF pass: a page or log line written in the pre-OKF shape is
+    // brought to the bundle's form (type, sources, generated; dated log) before index and lint.
+    expect(mustRun([process.execPath, installedCli, "okf", repo, "--commit", "--if-okf"])).toContain("okf");
+    expect(readFileSync(join(repo, decisionRel), "utf8")).toContain("type: Decision");
     expect(mustRun([process.execPath, installedCli, "index", repo])).toContain("Indexed:");
     expect(mustRun([process.execPath, installedCli, "reconcile", repo, "--commit"])).toContain("true backlog (un-cited): 0");
     expect(mustRun([process.execPath, installedCli, "lint", repo, "--errors-only"])).toContain("Lint passed");
