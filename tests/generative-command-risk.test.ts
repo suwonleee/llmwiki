@@ -70,6 +70,7 @@ describe("opencodeMajor", () => {
   test("reads the major version from either output shape", () => {
     expect(opencodeMajor("1.19.0\n")).toBe(1);
     expect(opencodeMajor("opencode 2.0.27")).toBe(2);
+    expect(opencodeMajor("opencode v2.0.27\n")).toBe(2); // measured 2.0.27 output
   });
 
   test("an upgrade notice before the version is not read as the version", () => {

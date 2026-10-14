@@ -391,11 +391,11 @@ export function inspectCodexInstall(
 }
 
 /**
- * Major version from `opencode --version` output ("1.19.0", "opencode 2.0.27"), or null.
+ * Major version from `opencode --version` output ("1.19.0", "opencode v2.0.27"), or null.
  *
  * OpenCode 1.19 offers a one-command upgrade to OpenCode 2, which keeps the binary name and config
- * folder but does not load 1.x plugins. Every file check below still passes after that upgrade,
- * so the version is the only signal that read injection has silently stopped.
+ * folder but loads only 2.x plugin entry points. A plugin installed before the 2.x port is merely
+ * stale on 1.x and silently inert on 2.x, so the version decides how doctor words it.
  */
 export function opencodeMajor(versionOutput: string): number | null {
   // The version is the last line: an upgrade notice printed before it ("2.0.3 available") must not
@@ -1285,21 +1285,19 @@ export function runDoctor(
         issues += 1;
       }
       const major = status.installed ? probeOpencodeMajor() : null;
-      // On 2.x every file below can be in place and still do nothing; say so on each ✅ line too.
-      const inert = major !== null && major >= 2 ? ` (inert on ${major}.x)` : "";
-      if (inert) {
-        console.log(
-          `  [opencode] ❌ OpenCode ${major}.x — the llmwiki plugin targets the 1.x plugin API, which ${major}.x ` +
-            "does not load: read injection and /wiki-* session ids are off. Stay on OpenCode 1.x (npm `opencode-ai`) " +
-            "until the plugin is ported.",
-        );
-        issues += 1;
-      }
       if (status.plugin === "current") {
-        console.log(`  [opencode] ✅ global read-injection plugin points to this clone${inert}`);
+        // The current plugin carries both entry points, so it is live on either major.
+        const live = major !== null ? ` (OpenCode ${major}.x)` : "";
+        console.log(`  [opencode] ✅ global read-injection plugin points to this clone${live}`);
       } else {
         const reason = status.plugin === "foreign" ? "target is unrelated" : status.plugin;
-        console.log(`  [opencode] ⚠️ plugin ${reason} — run \`${WIRE_OPENCODE_CMD}\``);
+        // A plugin installed before the 2.x port has only the 1.x entry point; 2.x loads nothing
+        // from it, so read injection and /wiki-* session ids stop without an error.
+        const why =
+          major !== null && major >= 2 && status.plugin === "stale"
+            ? ` (installs older than the OpenCode 2 port are inert on ${major}.x)`
+            : "";
+        console.log(`  [opencode] ⚠️ plugin ${reason}${why} — run \`${WIRE_OPENCODE_CMD}\``);
         issues += 1;
       }
       if (status.missingCommands.length) {
@@ -1315,7 +1313,7 @@ export function runDoctor(
         );
         issues += 1;
       } else {
-        console.log(`  [opencode] ✅ commands present: ${OPENCODE_COMMANDS.map((name) => `/${name}`).join(", ")}${inert}`);
+        console.log(`  [opencode] ✅ commands present: ${OPENCODE_COMMANDS.map((name) => `/${name}`).join(", ")}`);
       }
       if (status.staleCommands.length) {
         console.log(

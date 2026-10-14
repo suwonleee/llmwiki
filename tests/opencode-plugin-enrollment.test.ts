@@ -1,4 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const previousRoot = process.env.LLMWIKI_ROOT;
 
@@ -34,7 +37,7 @@ test("an active OpenCode plugin becomes silent immediately after llmwiki disable
     return result;
   };
   const module = await import(`../adapters/opencode/llmwiki.ts?enrollment-test=${Date.now()}`);
-  const hooks: any = await module.LlmwikiPlugin({ $: shell, directory: "/repo" } as any);
+  const hooks: any = await module.default.server({ $: shell, directory: "/repo" } as any);
 
   await hooks["chat.message"](
     { sessionID: "s1" },
@@ -84,7 +87,7 @@ test("command.execute.before injects the exact session id for wiki commands only
     return result;
   };
   const module = await import(`../adapters/opencode/llmwiki.ts?command-test=${Date.now()}`);
-  const hooks: any = await module.LlmwikiPlugin({ $: shell, directory: "/repo" } as any);
+  const hooks: any = await module.default.server({ $: shell, directory: "/repo" } as any);
 
   // a wiki command gets the id injected AND a best-effort save-current pre-run
   const parts: any[] = [{ type: "text", text: "command template body" }];
@@ -108,4 +111,132 @@ test("command.execute.before injects the exact session id for wiki commands only
   await hooks["command.execute.before"]({ command: "wiki-save", sessionID: "ses_exact" }, { parts: disabled });
   expect(disabled).toEqual([]);
   expect(calls.filter((c) => c.includes(" save-current ")).length).toBe(1);
+});
+
+// ---- OpenCode 2 entry point (`setup`) ------------------------------------------------------
+// 2.x has no `$`; the plugin spawns `bun <ROOT>/src/<script>.ts` itself. A fake engine root with
+// the two scripts keeps that real spawn path under test.
+
+function fakeEngine(): { root: string; log: string; disable(): void } {
+  const root = mkdtempSync(join(tmpdir(), "llmwiki-oc2-engine-"));
+  mkdirSync(join(root, "src"));
+  const log = join(root, "calls.log");
+  const off = join(root, "disabled");
+  writeFileSync(
+    join(root, "src", "hook-cli.ts"),
+    `import { appendFileSync, existsSync } from "node:fs";
+const [cmd, ...rest] = process.argv.slice(2);
+appendFileSync(${JSON.stringify(log)}, ["hook-cli", cmd, ...rest].join(" ") + "\\n");
+if (existsSync(${JSON.stringify(off)})) process.exit(1);
+if (cmd === "opencode-context") {
+  const prompt = rest[rest.indexOf("--prompt") + 1] ?? "";
+  console.log(JSON.stringify({ cold: rest.includes("--include-cold") ? "[llmwiki]\\ncold context" : "", turn: prompt ? "turn for " + prompt : "" }));
+}
+`,
+  );
+  writeFileSync(
+    join(root, "src", "cli.ts"),
+    `import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(log)}, ["cli", ...process.argv.slice(2)].join(" ") + "\\n");
+`,
+  );
+  return { root, log, disable: () => writeFileSync(off, "") };
+}
+
+function fakeContext(directory: string) {
+  const hooks = new Map<string, (event: any) => Promise<void>>();
+  const disposed: string[] = [];
+  return {
+    hooks,
+    disposed,
+    ctx: {
+      location: { directory },
+      session: {
+        hook: async (name: string, cb: (event: any) => Promise<void>) => {
+          hooks.set(name, cb);
+          return { dispose: async () => void disposed.push(name) };
+        },
+      },
+    },
+  };
+}
+
+test("OpenCode 2: prompt is remembered, context gets cold + turn parts, disable revokes", async () => {
+  const engine = fakeEngine();
+  try {
+    process.env.LLMWIKI_ROOT = engine.root;
+    const module = await import(`../adapters/opencode/llmwiki.ts?v2-context=${Date.now()}`);
+    const { hooks, ctx, disposed } = fakeContext("/repo");
+    const cleanup = await module.default.setup(ctx);
+    expect([...hooks.keys()].sort()).toEqual(["context", "prompt"]);
+
+    await hooks.get("prompt")!({ sessionID: "s1", prompt: { text: "remember this prompt" } });
+    const event = { sessionID: "s1", system: [{ type: "text", text: "host system" }] };
+    await hooks.get("context")!(event);
+    expect(event.system.map((p) => p.text)).toEqual(["host system", "[llmwiki]\ncold context", "turn for remember this prompt"]);
+
+    // the next request reuses the cached cold blob and the prompt is consumed
+    const again = { sessionID: "s1", system: [] as any[] };
+    await hooks.get("context")!(again);
+    expect(again.system.map((p) => p.text)).toEqual(["[llmwiki]\ncold context"]);
+    expect(readFileSync(engine.log, "utf8").split("\n").filter((l) => l.includes("--include-cold"))).toHaveLength(1);
+
+    engine.disable();
+    const disabled = { sessionID: "s1", system: [] as any[] };
+    await hooks.get("context")!(disabled);
+    expect(disabled.system).toEqual([]);
+    expect(typeof cleanup).toBe("function");
+    await cleanup();
+    expect(disposed.sort()).toEqual(["context", "prompt"]);
+  } finally {
+    rmSync(engine.root, { recursive: true, force: true });
+  }
+});
+
+test("OpenCode 2: a /wiki-* command body gets the exact session id; other prompts do not", async () => {
+  const engine = fakeEngine();
+  try {
+    process.env.LLMWIKI_ROOT = engine.root;
+    const module = await import(`../adapters/opencode/llmwiki.ts?v2-command=${Date.now()}`);
+    const { hooks, ctx } = fakeContext("/repo");
+    await module.default.setup(ctx);
+
+    const command = { sessionID: "ses_exact", prompt: { text: "<!-- llmwiki-opencode-managed root=/x source_sha256=y -->\n\n# /wiki-save" } };
+    await hooks.get("prompt")!(command);
+    expect(command.prompt.text).toContain("current OpenCode session id: ses_exact");
+    expect(command.prompt.text).toContain("save-current /repo --session ses_exact");
+    expect(readFileSync(engine.log, "utf8")).toContain("cli save-current /repo --session ses_exact");
+
+    // the template is not used as a turn-context query
+    const event = { sessionID: "ses_exact", system: [] as any[] };
+    await hooks.get("context")!(event);
+    expect(event.system.map((p) => p.text)).toEqual(["[llmwiki]\ncold context"]);
+
+    const plain = { sessionID: "ses_exact", prompt: { text: "ordinary question" } };
+    await hooks.get("prompt")!(plain);
+    expect(plain.prompt.text).toBe("ordinary question");
+
+    // a person quoting the marker mid-text is not running a command
+    const quoted = { sessionID: "ses_quote", prompt: { text: "why does <!-- llmwiki-opencode-managed root=x --> appear?" } };
+    await hooks.get("prompt")!(quoted);
+    expect(quoted.prompt.text).not.toContain("current OpenCode session id");
+    expect(readFileSync(engine.log, "utf8")).not.toContain("--session ses_quote");
+  } finally {
+    rmSync(engine.root, { recursive: true, force: true });
+  }
+});
+
+test("OpenCode 2: an unenrolled project registers no hook at all", async () => {
+  const engine = fakeEngine();
+  try {
+    engine.disable();
+    process.env.LLMWIKI_ROOT = engine.root;
+    const module = await import(`../adapters/opencode/llmwiki.ts?v2-gate=${Date.now()}`);
+    const { hooks, ctx } = fakeContext("/repo");
+    await module.default.setup(ctx);
+    expect(hooks.size).toBe(0);
+    expect(existsSync(engine.log)).toBe(true); // the gate did ask
+  } finally {
+    rmSync(engine.root, { recursive: true, force: true });
+  }
 });

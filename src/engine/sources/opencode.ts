@@ -713,12 +713,69 @@ function exportSession(
       throw new Error(`refusing to append to an unrecognized OpenCode export: ${ep}`);
     }
   }
-  const schema = sessionSchema(db, sourcePath, sessionID);
+  let schema = sessionSchema(db, sourcePath, sessionID);
   if (schema === null) return { path: ep, lines: 0 }; // nothing projected for this session yet
+  if (schema === "v1" && handOverToNext(db, sourcePath, sessionID, key, mp)) schema = "next";
   const loc = { key, ep, mp, root };
-  return schema === "v1"
-    ? exportSessionV1(db, sourcePath, sessionID, directory, title, loc)
-    : exportSessionNext(db, sourcePath, sessionID, directory, title, loc);
+  if (schema === "next") return exportSessionNext(db, sourcePath, sessionID, directory, title, loc);
+  const v1 = exportSessionV1(db, sourcePath, sessionID, directory, title, loc);
+  // A recovered v1 append blocks the handover for one pass; rows already waiting in the V2 tables
+  // must not then sit until the session changes again.
+  return handOverToNext(db, sourcePath, sessionID, key, mp)
+    ? exportSessionNext(db, sourcePath, sessionID, directory, title, loc)
+    : v1;
+}
+
+// A session exported through the 1.x cursor that continues after the OpenCode 2 upgrade gets its
+// new turns ONLY in session_message — the legacy tables are frozen at the upgrade. Switch once, and
+// only when the session has rows the legacy tables never saw: an old session nobody reopened keeps
+// its original cursor.
+//
+// The migration keeps message ids and assigns seq in time order (measured on a real 1.19 database:
+// 0 of 138 sessions out of time order). It does NOT carry compaction-summary assistants over, and
+// the 1.x cursor can rest on one, so the cursor maps by id when it can and by time otherwise.
+function handOverToNext(db: Database, sourcePath: string, sessionID: string, key: string, mp: string): boolean {
+  if (sessionTable(db) !== "session_v2") return false;
+  if (capture.getOpenCodeV1Append(sourcePath, sessionID) !== null) return false; // the v1 branch recovers it first
+  const position = capture.getOpenCodeV1Position(sourcePath, sessionID);
+  if (!position) return false;
+  try {
+    const exact = db
+      .query("SELECT seq FROM session_message WHERE session_id = ? AND id = ?")
+      .get(sessionID, position.id) as { seq: unknown } | null;
+    let seq = typeof exact?.seq === "number" ? exact.seq : null;
+    if (seq === null && position.time >= 0) {
+      const byTime = db
+        .query("SELECT MAX(seq) AS seq FROM session_message WHERE session_id = ? AND time_created <= ?")
+        .get(sessionID, position.time) as { seq: unknown } | null;
+      seq = typeof byTime?.seq === "number" ? byTime.seq : -1;
+    }
+    if (seq === null) return false; // no clock to map by — keep the cursor that already works
+    // If a later release drops the frozen legacy tables, every remaining row is post-upgrade.
+    const legacy = db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'message'").get();
+    const fresh = legacy
+      ? db
+          .query(
+            "SELECT 1 FROM session_message sm WHERE sm.session_id = ? AND sm.seq > ? " +
+              "AND NOT EXISTS (SELECT 1 FROM message m WHERE m.id = sm.id) LIMIT 1",
+          )
+          .get(sessionID, seq)
+      : true;
+    if (!fresh) return false;
+    // Cursor first, sidecar second: exportSessionNext accepts a v1-format sidecar once the seq cursor
+    // exists, so a crash between the two writes cannot wedge the session.
+    capture.advanceOpenCodeProgress(sourcePath, sessionID, seq);
+    if (existsSync(mp)) {
+      writeFileSync(
+        mp,
+        JSON.stringify({ kind: "opencode-progress", exportKey: key, sessionID, sourcePath, lastSeq: seq }),
+        { mode: 0o600 },
+      );
+    }
+    return true;
+  } catch {
+    return false; // schema drift — stay on the cursor that already works
+  }
 }
 
 // The `session_message` (event-sourced, seq-cursor) branch.
@@ -735,7 +792,14 @@ function exportSessionNext(
   let progress = progressExists ? readProgress(key) : null;
   if (progressExists) {
     const current = modernProgressMatches(progress, key, sessionID, sourcePath);
-    if (!current) {
+    // A 1.x sidecar for THIS export is expected once handOverToNext has moved the cursor but died
+    // before rewriting the sidecar; the seq cursor in the capture DB is the authority then.
+    const handedOver =
+      !current &&
+      v1ProgressMatches(readProgressV1(key), key, sessionID, sourcePath) &&
+      capture.getOpenCodeProgress(sourcePath, sessionID) !== null;
+    if (handedOver) progress = null;
+    else if (!current) {
       throw new Error(`refusing to replace an unrecognized OpenCode progress file: ${mp}`);
     }
   }
@@ -892,6 +956,19 @@ function openRO(path: string): Database | null {
   return openReadonlyDatabase(path);
 }
 
+// OpenCode 2 migrates the database in place: every session is copied into `session_v2` (message ids
+// preserved in `session_message`), new sessions are written ONLY there, and the legacy `session`,
+// `message` and `part` tables stay behind, frozen at the upgrade. So `session_v2` is the superset
+// whenever it exists (measured on a copy of a real 1.19 database opened by 2.0.27).
+function sessionTable(db: Database): "session_v2" | "session" {
+  try {
+    const row = db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_v2'").get();
+    return row ? "session_v2" : "session";
+  } catch {
+    return "session";
+  }
+}
+
 function readMeta(path: string): ExportMeta | null {
   try {
     const first = readFileSync(path, "utf-8").split("\n", 1)[0] ?? "";
@@ -913,7 +990,7 @@ export function isOpenCodeChildSession(path: string, allowedDbPaths: readonly st
   const db = openRO(meta.sourcePath);
   if (!db) return false;
   try {
-    const row = db.query("SELECT parent_id FROM session WHERE id = ?").get(meta.sessionID) as
+    const row = db.query(`SELECT parent_id FROM ${sessionTable(db)} WHERE id = ?`).get(meta.sessionID) as
       | { parent_id: unknown }
       | null;
     return typeof row?.parent_id === "string" && row.parent_id !== "";
@@ -924,6 +1001,82 @@ export function isOpenCodeChildSession(path: string, allowedDbPaths: readonly st
   }
 }
 
+// Routing rows plus the column that carries a body-free poll revision ("" → always materialize).
+function routingRows(db: Database): { sessions: any[]; revisionColumn: string } | null {
+  if (sessionTable(db) === "session_v2") {
+    try {
+      // An assistant row streams by rewriting `data` in place, which leaves session_v2's own clock
+      // behind; the row's time_updated moves with it. Body-free, like every revision here.
+      const sessions = db
+        .query(
+          "SELECT s.id, s.directory, " +
+            "printf('%s:%s:%s', s.time_updated, COALESCE(m.row_count, 0), COALESCE(m.max_updated, 0)) " +
+            "AS derived_revision FROM session_v2 s " +
+            "LEFT JOIN (SELECT session_id, COUNT(*) AS row_count, MAX(time_updated) AS max_updated " +
+            "FROM session_message GROUP BY session_id) m ON m.session_id = s.id " +
+            "WHERE s.time_archived IS NULL ORDER BY s.time_updated DESC",
+        )
+        .all() as any[];
+      return { sessions, revisionColumn: "derived_revision" };
+    } catch {
+      // Never fall back to the frozen 1.x tables on a 2.x database — sessions created after the
+      // upgrade would vanish. Stay on session_v2 and materialize every route instead.
+      for (const sql of [
+        "SELECT id, directory FROM session_v2 WHERE time_archived IS NULL",
+        "SELECT id, directory FROM session_v2",
+      ]) {
+        try {
+          return { sessions: db.query(sql).all() as any[], revisionColumn: "" };
+        } catch {
+          /* schema drift — try the narrower read */
+        }
+      }
+      return null;
+    }
+  }
+  try {
+    const sessions = db
+      .query("SELECT id, directory, time_updated FROM session WHERE time_archived IS NULL ORDER BY time_updated DESC")
+      .all() as any[];
+    return { sessions, revisionColumn: "time_updated" };
+  } catch {
+    // Some v1 projections omit session.time_updated even though their message/part tables
+    // expose reliable update clocks. Derive a body-free token there so an unchanged database
+    // does not force every enrolled session through export materialization every sweep.
+    try {
+      const sessions = db
+        .query(
+          "SELECT s.id, s.directory, " +
+            "printf('%s:%s:%s:%s:%s:%s', " +
+            "COALESCE(m.row_count, 0), COALESCE(m.max_id, ''), COALESCE(m.max_updated, 0), " +
+            "COALESCE(p.row_count, 0), COALESCE(p.max_id, ''), COALESCE(p.max_updated, 0)) AS derived_revision " +
+            "FROM session s " +
+            "LEFT JOIN (SELECT session_id, COUNT(*) AS row_count, MAX(id) AS max_id, " +
+            "MAX(COALESCE(time_updated, time_created)) AS max_updated " +
+            "FROM message GROUP BY session_id) m ON m.session_id = s.id " +
+            "LEFT JOIN (SELECT session_id, COUNT(*) AS row_count, MAX(id) AS max_id, " +
+            "MAX(COALESCE(time_updated, time_created)) AS max_updated " +
+            "FROM part GROUP BY session_id) p ON p.session_id = s.id " +
+            "WHERE s.time_archived IS NULL",
+        )
+        .all() as any[];
+      return { sessions, revisionColumn: "derived_revision" };
+    } catch {
+      // The event-sourced session_message shape can update an unsettled assistant in place
+      // without a per-row update clock. It must remain conservative to avoid losing the final
+      // text; only schemas with a reliable revision signal receive the poll optimization.
+      try {
+        return {
+          sessions: db.query("SELECT id, directory FROM session WHERE time_archived IS NULL").all() as any[],
+          revisionColumn: "",
+        };
+      } catch {
+        return null; // schema drift
+      }
+    }
+  }
+}
+
 /** Read-only routing seam for deterministic tests/benchmarks and the production registry. */
 export function discoverOpenCodeRoutes(dbPaths: readonly string[] = opencodeDbPaths()): DiscoveredRoute[] {
   const out: DiscoveredRoute[] = [];
@@ -931,46 +1084,9 @@ export function discoverOpenCodeRoutes(dbPaths: readonly string[] = opencodeDbPa
     const db = openRO(dbPath);
     if (!db) continue;
     try {
-      let sessions: any[];
-      let revisionColumn = "time_updated";
-      try {
-        sessions = db
-          .query("SELECT id, directory, time_updated FROM session WHERE time_archived IS NULL ORDER BY time_updated DESC")
-          .all() as any[];
-      } catch {
-        // Some v1 projections omit session.time_updated even though their message/part tables
-        // expose reliable update clocks. Derive a body-free token there so an unchanged database
-        // does not force every enrolled session through export materialization every sweep.
-        try {
-          sessions = db
-            .query(
-              "SELECT s.id, s.directory, " +
-                "printf('%s:%s:%s:%s:%s:%s', " +
-                "COALESCE(m.row_count, 0), COALESCE(m.max_id, ''), COALESCE(m.max_updated, 0), " +
-                "COALESCE(p.row_count, 0), COALESCE(p.max_id, ''), COALESCE(p.max_updated, 0)) AS derived_revision " +
-                "FROM session s " +
-                "LEFT JOIN (SELECT session_id, COUNT(*) AS row_count, MAX(id) AS max_id, " +
-                "MAX(COALESCE(time_updated, time_created)) AS max_updated " +
-                "FROM message GROUP BY session_id) m ON m.session_id = s.id " +
-                "LEFT JOIN (SELECT session_id, COUNT(*) AS row_count, MAX(id) AS max_id, " +
-                "MAX(COALESCE(time_updated, time_created)) AS max_updated " +
-                "FROM part GROUP BY session_id) p ON p.session_id = s.id " +
-                "WHERE s.time_archived IS NULL",
-            )
-            .all() as any[];
-          revisionColumn = "derived_revision";
-        } catch {
-          // The event-sourced session_message shape can update an unsettled assistant in place
-          // without a per-row update clock. It must remain conservative to avoid losing the final
-          // text; only schemas with a reliable revision signal receive the poll optimization.
-          revisionColumn = "";
-          try {
-            sessions = db.query("SELECT id, directory FROM session WHERE time_archived IS NULL").all() as any[];
-          } catch {
-            continue; // schema drift
-          }
-        }
-      }
+      const rows = routingRows(db);
+      if (!rows) continue;
+      const { sessions, revisionColumn } = rows;
       for (const s of sessions) {
         const id = String(s.id ?? "");
         if (!id) continue;
@@ -1029,7 +1145,7 @@ function materializeFromOpenCodeDb(
   if (!id || !route.repo) return null;
   let row: any;
   try {
-    row = db.query("SELECT id, directory, title FROM session WHERE id = ?").get(id);
+    row = db.query(`SELECT id, directory, title FROM ${sessionTable(db)} WHERE id = ?`).get(id);
   } catch {
     return null;
   }
@@ -1101,7 +1217,8 @@ export const opencodeSource: TranscriptSource = {
     return isOpenCodeChildSession(path);
   },
 
-  // Stage 1 — routing ONLY. Two columns, one table: `session.id` and `session.directory`. Not
+  // Stage 1 — routing ONLY. Two columns, one table: `id` and `directory` of `session` (`session_v2` on
+  // OpenCode 2). Not
   // `title` (harness-generated text about the conversation), never `session_message`, and no
   // export file is created. OpenCode is the harness where the difference is starkest: before
   // this split, a daemon sweep wrote a full plaintext transcript to disk for every session on
@@ -1167,8 +1284,13 @@ export const opencodeSource: TranscriptSource = {
       const t = String(o.text ?? "").split(/\s+/).filter(Boolean).join(" ").trim();
       if (!t) continue;
       const ts = String(o.ts ?? "");
-      if (o.role === "user") users.push({ ts, role: "user", text: t.slice(0, cap) });
-      else if (o.role === "assistant" && t.length >= minChars)
+      if (o.role === "user") {
+        // An installed /wiki-* command arrives as a user message holding the expanded template —
+        // harness input, like Claude's <command-…> rows and Codex's AGENTS.md message, not words
+        // a human wrote. It would otherwise be filed and quoted as the session's instruction.
+        if (t.startsWith("<!-- llmwiki-opencode-managed ")) continue;
+        users.push({ ts, role: "user", text: t.slice(0, cap) });
+      } else if (o.role === "assistant" && t.length >= minChars)
         assistants.push({ ts, role: "assistant", text: t.slice(0, cap) });
     }
     return { users, assistants, newOffset, cwd: meta?.directory ?? null, sessionId: meta?.sessionID ?? null };
