@@ -15,11 +15,12 @@ part of it — that ships only with the clone install (`git clone` + `./setup.sh
 | `skills/wiki-*` | only when the user invokes them | `wiki-save` (close out this session into the wiki), `wiki-ask`, `wiki-deep`, `wiki-quiz`, `wiki-doctor`. |
 
 Both hooks are shell scripts that run `bun <plugin>/src/cli.ts`. Every failure path exits 0 with
-empty output: a broken engine must never break a session.
+empty output: a broken engine must never break a session. A missing or unsupported Bun runtime
+instead prints a prerequisite notice at session start and skips injection.
 
 ## Prerequisite
 
-[Bun](https://bun.sh) on `PATH`. The engine is TypeScript executed directly by Bun and has **zero
+[Bun](https://bun.sh) **1.2.21 or newer** on `PATH` (required for OKF YAML). The engine is TypeScript executed directly by Bun and has **zero
 runtime dependencies** — no `npm install`, no `node_modules`, nothing fetched at install time.
 
 ## Consent gate — nothing happens in a repository you did not enroll

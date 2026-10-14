@@ -76,7 +76,11 @@ function createCore(exec: Exec, directory: string) {
     includeCold: boolean,
   ): Promise<{ cold: string; turn: string; notice: string } | null> => {
     if (!ROOT) return null;
-    const args = ["opencode-context", directory, "--prompt", prompt, "--session", session];
+    // Older Bun spawn implementations drop empty argv entries. Omit absent values so the
+    // hook cannot read the next flag as a prompt (or invent a session id).
+    const args = ["opencode-context", directory];
+    if (prompt) args.push("--prompt", prompt);
+    if (session) args.push("--session", session);
     if (includeCold) args.push("--include-cold");
     try {
       const r = await exec("hook-cli", args);

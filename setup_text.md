@@ -55,9 +55,7 @@ is a `#!/bin/sh` script for Git Bash, while Codex and OpenCode execute commands 
     - `git` — the capture loop's one hard dependency. Setup searches past PATH (Homebrew, MacPorts,
       Nix, ~/.local/bin) and now stops before mutation when it is absent; `llmwiki doctor` also
       prints the resolved `[deps]` path
-    - Bun 1.2 or newer recommended; 1.1 is the accepted floor. Below 1.2 there is no in-process
-      zstd, so Codex's compressed rollouts are skipped unless a `zstd` binary is installed —
-      doctor's `[deps]` line says which route it found
+    - Bun 1.2.21 or newer — required for the OKF YAML parser
     - Active harness CLI: `claude`, `codex`, or `opencode`
     - Missing prerequisite → stop before mutation and report the exact item
 - Run the read-only preflight

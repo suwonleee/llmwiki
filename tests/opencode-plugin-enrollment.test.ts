@@ -129,7 +129,8 @@ const [cmd, ...rest] = process.argv.slice(2);
 appendFileSync(${JSON.stringify(log)}, ["hook-cli", cmd, ...rest].join(" ") + "\\n");
 if (existsSync(${JSON.stringify(off)})) process.exit(1);
 if (cmd === "opencode-context") {
-  const prompt = rest[rest.indexOf("--prompt") + 1] ?? "";
+  const at = rest.indexOf("--prompt");
+  const prompt = at >= 0 ? rest[at + 1] ?? "" : "";
   console.log(JSON.stringify({ cold: rest.includes("--include-cold") ? "[llmwiki]\\ncold context" : "", turn: prompt ? "turn for " + prompt : "" }));
 }
 `,
@@ -179,6 +180,9 @@ test("OpenCode 2: prompt is remembered, context gets cold + turn parts, disable 
     const again = { sessionID: "s1", system: [] as any[] };
     await hooks.get("context")!(again);
     expect(again.system.map((p) => p.text)).toEqual(["[llmwiki]\ncold context"]);
+    const contextCalls = readFileSync(engine.log, "utf8").split("\n").filter((l) => l.includes("opencode-context"));
+    expect(contextCalls).toHaveLength(2);
+    expect(contextCalls[1]).not.toContain("--prompt");
     expect(readFileSync(engine.log, "utf8").split("\n").filter((l) => l.includes("--include-cold"))).toHaveLength(1);
 
     engine.disable();

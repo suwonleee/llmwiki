@@ -6,7 +6,7 @@ rebuildable machine state. Small, evidence-backed changes are preferred over bro
 
 ## Start from a clean clone
 
-Prerequisites are Git and Bun 1.1 or newer (1.2+ recommended). The engine and tests run directly
+Prerequisites are Git and Bun 1.2.21 or newer. The engine and tests run directly
 from TypeScript; there is no build step and no runtime dependency installation. Install the
 development-only TypeScript tooling once, then run the quick check:
 

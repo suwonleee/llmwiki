@@ -26,11 +26,10 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         bun: [latest]
         include:
-          # The floor the installer accepts. Kept in the matrix so a feature that silently needs a
-          # newer Bun (in-process zstd is the one that already did) fails here rather than in the
-          # field, where it presents as "Codex sessions are missing" and nothing else.
+          # The OKF YAML parser sets the supported floor. Run the full suite here so
+          # a newer runtime API cannot silently raise the minimum again.
           - os: ubuntu-latest
-            bun: "1.1.45"
+            bun: "1.2.21"
     steps:
       - uses: actions/checkout@v5
 
@@ -39,13 +38,13 @@ jobs:
           bun-version: ${{ matrix.bun }}
 
       - name: Install dependencies
-        # Bun 1.1 predates the current text lockfile format. Runtime commands and tests intentionally
-        # need no node_modules (README contract); only typecheck needs the dev dependency install.
-        if: matrix.bun != '1.1.45'
+        # The floor job proves the runtime and tests need no node_modules (README contract).
+        # Only typecheck needs the dev dependency install.
+        if: matrix.bun != '1.2.21'
         run: bun install --frozen-lockfile
 
       - name: Typecheck
-        if: matrix.bun != '1.1.45'
+        if: matrix.bun != '1.2.21'
         run: bun tsc --noEmit
 
       - name: Shell syntax

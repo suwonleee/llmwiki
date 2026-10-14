@@ -92,14 +92,20 @@ BUN_VERSION="$("$BUN" --version 2>/dev/null || true)"
 BUN_MAJOR="${BUN_VERSION%%.*}"
 BUN_REST="${BUN_VERSION#*.}"
 BUN_MINOR="${BUN_REST%%.*}"
+BUN_PATCH="${BUN_REST#*.}"
+BUN_PATCH="${BUN_PATCH%%-*}"
+BUN_PATCH="${BUN_PATCH%%+*}"
 case "$BUN_MAJOR" in
     ''|*[!0-9]*) echo "🔴 unable to determine Bun version from: ${BUN_VERSION:-<empty>}" >&2; exit 1 ;;
 esac
 case "$BUN_MINOR" in
     ''|*[!0-9]*) echo "🔴 unable to determine Bun version from: ${BUN_VERSION:-<empty>}" >&2; exit 1 ;;
 esac
-if [ "$BUN_MAJOR" -lt 1 ] || { [ "$BUN_MAJOR" -eq 1 ] && [ "$BUN_MINOR" -lt 1 ]; }; then
-    echo "🔴 Bun 1.1 or newer is required (found $BUN_VERSION) — update Bun, then re-run setup." >&2
+case "$BUN_PATCH" in
+    ''|*[!0-9]*) echo "🔴 unable to determine Bun version from: ${BUN_VERSION:-<empty>}" >&2; exit 1 ;;
+esac
+if [ "$BUN_MAJOR" -lt 1 ] || { [ "$BUN_MAJOR" -eq 1 ] && { [ "$BUN_MINOR" -lt 2 ] || { [ "$BUN_MINOR" -eq 2 ] && [ "$BUN_PATCH" -lt 21 ]; }; }; }; then
+    echo "🔴 Bun 1.2.21 or newer is required for OKF YAML (found $BUN_VERSION) — update Bun, then re-run setup." >&2
     exit 1
 fi
 printf -v BUN_Q '%q' "$BUN"

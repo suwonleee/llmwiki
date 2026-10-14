@@ -145,11 +145,11 @@ describe("setup command contract", () => {
     expect(new TextDecoder().decode(result.stderr)).toContain("Usage:");
   });
 
-  test("Bun older than 1.1 fails before any mutation", () => {
+  test.each(["1.0.35", "1.1.45", "1.2.20"])("Bun %s fails before any mutation", (version) => {
     // These tests are meant to fail BEFORE the daemon step; the inert supervisors make that a
     // property of the sandbox rather than of where the script happens to stop today.
     const bin = inertSupervisorBin(join(dir, "old-bun-bin"), {
-      bun: "#!/bin/sh\nif [ \"${1:-}\" = --version ]; then printf '1.0.35\\n'; fi\nexit 0\n",
+      bun: `#!/bin/sh\nif [ "\${1:-}" = --version ]; then printf '${version}\\n'; fi\nexit 0\n`,
     });
 
     const result = Bun.spawnSync(["/bin/bash", join(ROOT, "setup.sh"), "--harness", "codex"], {
@@ -165,7 +165,7 @@ describe("setup command contract", () => {
     });
 
     expect(result.exitCode).toBe(1);
-    expect(new TextDecoder().decode(result.stderr)).toContain("Bun 1.1 or newer is required");
+    expect(new TextDecoder().decode(result.stderr)).toContain("Bun 1.2.21 or newer is required");
     expect(existsSync(join(codexHome, "hooks.json"))).toBe(false);
     expect(existsSync(join(home, "Library", "LaunchAgents", "com.llmwiki.daemon.plist"))).toBe(false);
   });

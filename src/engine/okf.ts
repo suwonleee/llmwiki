@@ -51,12 +51,12 @@ export function splitFrontmatter(content: string): { block: string | null; body:
  *
  * `error` is set when the block is not valid YAML — such a page is not OKF-conformant (§11.1),
  * but the engine still needs its title and tags, so `data` then falls back to the historical
- * line-oriented reading. Without a YAML parser in the runtime (Bun < 1.2.21) the line reader is
- * the only reader and `error` stays null.
+ * line-oriented reading. A runtime without YAML must stop rather than certify invalid YAML
+ * or discard nested edit rules during conversion. Setup requires Bun 1.2.21 or newer.
  */
 export function parseYamlBlock(block: string): { data: YamlMap; error: string | null } {
   const yaml = bunYaml();
-  if (yaml === null) return { data: parseLegacyBlock(block), error: null };
+  if (yaml === null) throw new Error("Bun 1.2.21 or newer is required for OKF YAML; update Bun before running llmwiki.");
   try {
     const parsed = block.trim() === "" ? {} : yaml.parse(block);
     if (parsed === null || parsed === undefined) return { data: {}, error: null };

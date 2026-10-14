@@ -1,7 +1,7 @@
 {
   "contract_version": 4,
   "runtime": {
-    "bun_minimum": "1.1.0",
+    "bun_minimum": "1.2.21",
     "git_required_for_capture": true
   },
   "harness_compatibility": {

@@ -15,7 +15,7 @@
     "check": "bun run src/dev/check.ts"
   },
   "engines": {
-    "bun": ">=1.1.0"
+    "bun": ">=1.2.21"
   },
   "devDependencies": {
     "@types/bun": "latest",

@@ -53,7 +53,7 @@ conservative rechecking instead of silently skipping memory capture.
     - `auto` or `all` only when the human explicitly requests every available harness
 - Phase 3 — preflight
     - Confirm `git`
-    - Confirm Bun 1.1 or newer
+    - Confirm Bun 1.2.21 or newer (OKF YAML requires it)
     - Confirm the selected harness CLI on `PATH`
     - Run `./setup.sh --dry-run --harness <harness>`
     - Stop before mutation on a reported conflict, unsupported CLI, or missing prerequisite

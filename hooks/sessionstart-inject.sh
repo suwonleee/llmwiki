@@ -46,6 +46,10 @@ if [ -n "$CLAUDE_PLUGIN_ROOT" ]; then
     echo "[llmwiki] Bun not found — the llmwiki plugin needs Bun (https://bun.sh) on PATH. Wiki injection stays silent until it is installed."
     exit 0
   fi
+  if ! "$BUN" -e 'process.exit(typeof Bun.YAML?.parse === "function" ? 0 : 1)' >/dev/null 2>&1; then
+    echo "[llmwiki] Bun 1.2.21 or newer is required for OKF YAML — update Bun, then start a new session. Wiki injection stays silent until then."
+    exit 0
+  fi
 fi
 
 [ -n "$BUN" ] && "$BUN" "$ROOT/src/hook-cli.ts" context-hook "$PROJ" 2>/dev/null

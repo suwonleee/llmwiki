@@ -33,6 +33,16 @@ import {
 } from "../src/engine/okf.ts";
 
 describe("frontmatter YAML", () => {
+  test("a runtime without YAML cannot silently certify or convert a bundle", () => {
+    const runtime = Bun as unknown as { YAML: unknown };
+    const previous = runtime.YAML;
+    try {
+      runtime.YAML = undefined;
+      expect(() => parseYamlBlock("type: Decision\ntitle: a: b")).toThrow("Bun 1.2.21 or newer");
+    } finally {
+      runtime.YAML = previous;
+    }
+  });
   test("parses OKF nested fields and keeps timestamps as text", () => {
     const { data, error } = parseYamlBlock(
       "type: Decision\ngenerated: { by: claude-code/opus, at: 2026-10-13T14:00:00+09:00 }\n" +

@@ -3,7 +3,7 @@
 // checklist made executable — version sync, no leaked personal paths, sources-in-sync, hook
 // scripts that actually exist and execute.
 import { describe, expect, test } from "bun:test";
-import { accessSync, constants, cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { accessSync, constants, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { CLONE_ROOT } from "../src/engine/paths.ts";
@@ -226,6 +226,26 @@ describe("plugin distribution surface", () => {
       const body = readFileSync(join(CLONE_ROOT, script), "utf-8");
       expect(body).toContain("CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json");
       expect(body, `${script} must also detect the Codex clone wiring`).toContain("CODEX_HOME:-$HOME/.codex}/hooks.json");
+    }
+  });
+
+  test("a plugin runtime without YAML reports the prerequisite and skips injection", () => {
+    const home = mkdtempSync(join(tmpdir(), "llmwiki-plugin-runtime-"));
+    try {
+      const bin = join(home, "bin");
+      mkdirSync(bin);
+      writeFileSync(join(bin, "bun"), '#!/bin/sh\n[ "$1" = -e ] && exit 1\necho UNEXPECTED-INJECTION\n', { mode: 0o755 });
+      const result = Bun.spawnSync(["/bin/bash", join(CLONE_ROOT, "hooks/sessionstart-inject.sh")], {
+        env: { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: join(home, "claude"),
+          CODEX_HOME: join(home, "codex"), CLAUDE_PLUGIN_ROOT: CLONE_ROOT,
+          LLMWIKI_ENGINE_SUBPROCESS: "", PATH: `${bin}:/usr/bin:/bin` },
+        stdout: "pipe", stderr: "pipe",
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.toString()).toContain("Bun 1.2.21 or newer");
+      expect(result.stdout.toString()).not.toContain("UNEXPECTED-INJECTION");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
     }
   });
 
