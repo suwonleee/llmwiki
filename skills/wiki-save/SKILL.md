@@ -19,11 +19,11 @@ description: Session close-out (warm, O(this session)) — file THIS session int
 
 # /wiki-save — session close-out (warm, human-present)
 
-File **THIS session's** work into durable knowledge **right here (warm context)** and keep the **reading input (L0) fresh** — the primary path, not a cron. **Minutes, not tens of minutes.** Volume work defers to **`/wiki-deep`** — safe (save-rationale §3): an un-filed session ageing out is **self-selection, not loss**.
+File **THIS session's** work into durable knowledge **right here (warm context)** and keep the **reading input (L0) fresh** — the primary path, not a cron. **Minutes, not tens of minutes.** Volume work defers to **`/wiki-deep`**; an un-filed session ageing out is **self-selection, not loss** (save-rationale §3).
 
 Steps name a reference section (`llmwiki conventions <repo> --section <name>`) only where needed — never pre-load. Rationale: `llmwiki conventions <repo> --section save-rationale`; command semantics: `llmwiki conventions <repo> --section cli`.
 
-Two layers: the **log** (`2_milestone`·`3_decision`·`4_insight` — one immutable entry per session, append-only) and the **topic encyclopedia** (`5_topic` — one living page per concept, merged in place). Promotion is log → topic only.
+Two layers: the **log** (`2_milestone`·`3_decision`·`4_insight` — one immutable entry per session) and the **topic encyclopedia** (`5_topic` — one living page per concept, merged in place). Promotion is log → topic only.
 
 ## ★ Execution rules
 - **Custom conventions**: if a team `llmwiki.config.toml` (or a per-repo `configs/*.toml`) is active (check: `llmwiki config <repo>` shows a non-default source), run `llmwiki conventions <repo>` FIRST and follow ITS category table (dirs · types · review gates) over any category names written below and in any `--section` output.
@@ -93,9 +93,9 @@ $ARGUMENTS
 
 3. **Consolidate**: dry-run `llmwiki consolidate <repo>` (+ `llmwiki topics <repo>`) → select → create-or-update `5_topic/<slug>.md` (a NEW page: `llmwiki conventions <repo> --section topic-page`) → cross-link.
 
-4. **Refresh L0** (most important): in `docs/wiki/current-state.md` update **'now (TL;DR)' and 'next'** from this session + recent milestones + new topic pages (state/task on `-`, evidence/owner/blocker on `    -`). **L0 is the team handoff packet** — name owners (`- <task> (→ name)`). **Trim to ~1,600 chars**: displaced detail moves to `current-state-detail.md` (linked from L0) — **move, never delete**; keep only now+next in L0. Direction and absolute rules are the human's — propose, the human confirms: a direction change → a `1_direction/` draft + draft-marked section as a diff; record after approval. **Active rules** (after Direction, never trimmed): a convention/prohibition the human set this session → one concrete line + decision link (save-rationale §9).
+4. **Refresh L0** (most important): in `docs/wiki/current-state.md` update **'now (TL;DR)' and 'next'** from this session + recent milestones + new topic pages (state/task on `-`, evidence/owner/blocker on `    -`). **L0 is the team handoff packet** — name owners (`- <task> (→ name)`). **Trim to ~1,600 chars**: displaced detail moves to `current-state-detail.md` (linked from L0) — **move, never delete**; keep only now+next in L0. Direction and absolute rules are the human's — propose, the human confirms: a direction change → a `1_direction/` draft + draft-marked section as a diff; record after approval. **Active rules** (after Direction, never trimmed): a convention/prohibition the human set this session → one concrete line + decision link; one scoped to code paths also gets `x-llmwiki: { applies_to, rule }` on its decision page (save-rationale §9).
 
-5. **Overview (entry point, not a changelog)**: refresh `docs/wiki/overview.md` **Key Findings only** (one line + link each); **never prepend a per-session paragraph**. Then **`llmwiki overview --normalize <repo>`** (idempotent; Recent Updates → one log pointer; warns over budget).
+5. **Overview (entry point, not a changelog)**: refresh `docs/wiki/overview.md` **Key Findings only** (one line + link each); **never prepend a per-session paragraph**. Then **`llmwiki overview --normalize <repo>`** (idempotent; Recent Updates → one log pointer).
 
 6. **Log**: `llmwiki log-append <repo> update "<one-line session>" "<topic page touched>"…` — engine-formatted (dated, newest first); never hand-edit `log.md`.
 
@@ -115,6 +115,6 @@ $ARGUMENTS
 - **Supersession (never delete or rewrite a decision)**: a replacing decision gets a NEW page; the old one keeps its body and gains `status: deprecated` + `superseded_by: <new page path>` + `superseded_at: YYYY-MM-DD` (lint errors without the pointer). Never move it to an archive. Numeric `confidence:` values are banned — certainty lives only in footnoted evidence.
 - transcript = immutable raw (citation only); process only past the watermark → zero re-cost.
 - Commits are in the user's name alone — only when instructed. A git conflict in `docs/wiki/` → `llmwiki conventions <repo> --section team-merge`.
-- `/wiki-ask` answers a question; `/wiki-deep` is the periodic deep pass (backlog · review · gaps · re-distill).
+- `/wiki-ask` answers questions; `/wiki-deep` is the deep pass.
 
 <!-- generated by src/plugin/build-assets.ts — edit skill/*.md, then re-run -->
