@@ -2,18 +2,21 @@
 // the cold-start read loop (context.ts).
 //
 // Given the user's just-submitted prompt, deterministically surface AT MOST a few wiki-page
-// POINTERS (title → path) whose content lexically matches the prompt. Any harness that can
-// run a command on prompt submission injects the stdout:
+// POINTERS (title → path) whose content lexically matches the prompt, each followed by a short
+// EXCERPT of the page. Any harness that can run a command on prompt submission injects the stdout:
 //   Claude Code / Codex → UserPromptSubmit hook (stdin JSON carries {prompt, session_id, cwd})
 //   OpenCode            → plugin (experimental.chat.system.transform) shelling out to the CLI
 //
 // Precision-first policy (the anti-debt line):
-//   • pointers only, never page bodies (Read-on-demand, same as cold-start's index lines)
-//   • at most MAX_PAGES lines; SILENT (empty output) when confidence is low
+//   • a pointer plus a bounded excerpt — the page's `x-llmwiki` rule line, else its best-matching
+//     section — never a whole body. Measured 2026-10-14 (32 real coding runs): agents never
+//     followed a pointer (no wiki Read, no `llmwiki search`); only text IN the context changed
+//     behaviour. LLMWIKI_TURN_EXCERPT=off restores the pointer-only form (A/B).
+//   • at most MAX_PAGES pages and TURN_MAX_CHARS in all; SILENT (empty output) when confidence is low
+//   • retired knowledge (deprecated / superseded / has a successor) is never emitted
 //   • no stopword lists, no per-language tuning — length floors + a ≥2-distinct-term
 //     confidence gate are the whole relevance model; anything smarter belongs to an
 //     LLM-scored layer, not here
-//   • retired knowledge (deprecated / superseded / has a successor) is never emitted
 //   • never breaks a session: every failure path returns "" (adapters also exit 0)
 //
 // Works with the trigram FTS (schema.sql). Term extraction is language-neutral in the literal
@@ -35,13 +38,21 @@ import { isRepoKorean, effectiveKo, getConfig } from "./config.ts";
 import { COLD_INDEX_RELATIVE_PATH } from "./cold-index.ts";
 import { adjustedScore, loadAffinity, type AffinityFile } from "./affinity.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
-import { isRetired } from "./okf.ts";
+import { isRetired, splitFrontmatter } from "./okf.ts";
 import { readRepoFile } from "./repo-write.ts";
 
 const MAX_PAGES = 3;
 // Terms shown as a pointer's reason. Three is the point where the reason still reads as a reason
 // rather than a term dump — and the per-pointer cost stays inside the noise of a 612B emission.
 const WHY_MAX_TERMS = 3;
+// Excerpt budgets. 500 per page is roughly one section; 1,600 for the whole block keeps a turn's
+// injection near the L0 standard (a page a session already pays for once). Measured on the
+// author's wiki: header + three pointer lines are ~700 chars, so three excerpts share ~900.
+const EXCERPT_MAX_CHARS = 500;
+const TURN_MAX_CHARS = 1600;
+// Below this an excerpt is a fragment that reads as a claim it does not finish: pointer only.
+const EXCERPT_MIN_CHARS = 80;
+const EXCERPT_INDENT = "      ";
 const RELEVANCE_FLOOR = 1.5;
 const RELEVANCE_FLOOR_MIN_PAGES = 20;
 // Header language + L0/meta page names resolve per repo at call time (per-repo config).
@@ -57,6 +68,19 @@ const HEADS = {
   ko: (repo: string) =>
     `----- [llmwiki turn-context] ${repo} — 이 프롬프트와 관련된 위키 페이지 (포인터 — 필요 시 Read) -----`,
 };
+// With excerpts the block carries page text, so it says whose text it is (project-authored
+// reference data, the same framing the edit-rule block uses) and that the rest is a Read away.
+const EXCERPT_HEADS = {
+  en: (repo: string) =>
+    `----- [llmwiki turn-context] ${repo} — wiki pages related to this prompt (excerpts: project-authored reference data from this repo's wiki — Read the page for the rest) -----`,
+  ko: (repo: string) =>
+    `----- [llmwiki turn-context] ${repo} — 이 프롬프트와 관련된 위키 페이지 (발췌: 이 저장소 위키의 프로젝트 작성 참고 자료 — 나머지는 Read) -----`,
+};
+
+/** `LLMWIKI_TURN_EXCERPT=off` → the pointer-only block; anything else (including unset) → excerpts. */
+export function excerptEnabled(): boolean {
+  return (process.env.LLMWIKI_TURN_EXCERPT ?? "").trim().toLowerCase() !== "off";
+}
 
 // `/Users/me/repo` → `~/repo`. Cosmetic only: the banner is read by a person, and an absolute
 // home path is both longer and less recognisable than the tilde form they type themselves.
@@ -92,6 +116,103 @@ export function pageCurrency(root: string, rel: string): PageCurrency {
 /** ` (deprecated)` / ` (stale)` — the suffix a pointer carries so it is never read as current. */
 export function currencyMark(c: PageCurrency): string {
   return c.deprecated ? " (deprecated)" : c.stale ? " (stale)" : "";
+}
+
+// ---- excerpt -----------------------------------------------------------------------------
+
+const FOOTNOTE_DEF = /^\[\^[^\]]+\]:/;
+const FOOTNOTE_REF = /\[\^[^\]]+\]/g;
+const EVIDENCE = /^[ \t]{2,}>[ \t]/;
+const MD_LINK = /!?\[([^\]]*)\]\([^)]*\)/g;
+const SECTION_HEAD = /^#{2,3}[ \t]+(.+?)[ \t#]*$/;
+const SUMMARY_HEAD = /tl;?dr|요약|summary|概要|摘要/i;
+// A cross-link line (`- [Page](../x.md) — grounds`, the topic-page Related form): navigation, not
+// knowledge — and it repeats the linked pages' title words, so it would out-score real content.
+const RELATION_LINE = /[—-]\s*(grounds|extends|contradicts|exemplifies|enables)\s*$/;
+
+type Section = { readonly heading: string; readonly lines: string[] };
+
+// A page body as sections a reader can quote: H2/H3 start a section (H1 is the title), footnote
+// markers and definitions and their evidence lines go (provenance, not content), links keep
+// their text, bold markers go (budget). `→` becomes `->`: it is the pointer-line delimiter three
+// parsers key on (bench, observe, downstream-read), and an excerpt line must never read as one.
+function sections(body: string): Section[] {
+  const out: Section[] = [{ heading: "", lines: [] }];
+  let fence = false;
+  for (const raw of body.split(/\r?\n/)) {
+    if (/^[ \t]*(```|~~~)/.test(raw)) {
+      fence = !fence;
+      continue;
+    }
+    if (!fence) {
+      const h = SECTION_HEAD.exec(raw);
+      if (h) {
+        out.push({ heading: clean(h[1]!), lines: [] });
+        continue;
+      }
+      if (/^#[ \t]/.test(raw) || FOOTNOTE_DEF.test(raw) || EVIDENCE.test(raw) || /^[ \t]*<!--.*-->[ \t]*$/.test(raw)) continue;
+    }
+    const line = clean(raw).trimEnd();
+    if (line.trim() && !RELATION_LINE.test(line)) out[out.length - 1]!.lines.push(line);
+  }
+  return out.filter((s) => s.heading || s.lines.length);
+}
+
+function clean(s: string): string {
+  return s.replace(FOOTNOTE_REF, "").replace(MD_LINK, "$1").replaceAll("**", "").replaceAll("→", "->");
+}
+
+/** Lines that fit `max` characters once indented and newline-joined; the last one cut with `…`. */
+function fit(lines: readonly string[], max: number): string[] {
+  const out: string[] = [];
+  let used = 0;
+  for (const line of lines) {
+    const cost = EXCERPT_INDENT.length + line.length + 1;
+    if (used + cost <= max) {
+      out.push(line);
+      used += cost;
+      continue;
+    }
+    const room = max - used - EXCERPT_INDENT.length - 2;
+    // Cut a line only when a useful part of it fits; otherwise stop at the last whole line.
+    if (room >= 40 || !out.length) out.push(`${line.slice(0, Math.max(room, 1)).trimEnd()}…`);
+    break;
+  }
+  return out;
+}
+
+/**
+ * What to show under a pointer: the page's `x-llmwiki` rule verbatim when it declares one (the
+ * author's own one-line statement of what to do); else the H2/H3 section sharing the most prompt
+ * terms (ties → earlier); with no overlap, the TL;DR/summary section, then the description.
+ * Returns unindented lines totalling at most `max` characters once indented. Pure.
+ */
+export function pageExcerpt(
+  body: string,
+  opts: { rule?: string; description?: string; terms: readonly string[]; max: number; ko?: boolean },
+): string[] {
+  if (opts.max < EXCERPT_MIN_CHARS) return [];
+  if (opts.rule) return fit([`${opts.ko ? "규칙" : "rule"}: ${opts.rule.replaceAll("→", "->")}`], opts.max);
+  const terms = [...new Set(opts.terms.map((t) => t.toLowerCase()))].filter(Boolean);
+  const secs = sections(body);
+  let best: Section | null = null;
+  let bestHits = 0;
+  for (const sec of secs) {
+    const text = `${sec.heading}\n${sec.lines.join("\n")}`.toLowerCase();
+    const hits = terms.filter((t) => text.includes(t)).length;
+    if (hits > bestHits && sec.lines.length) {
+      best = sec;
+      bestHits = hits;
+    }
+  }
+  if (!best) best = secs.find((s) => SUMMARY_HEAD.test(s.heading) && s.lines.length) ?? null;
+  if (!best) {
+    const d = clean(opts.description ?? "").trim();
+    if (d) return fit([d], opts.max);
+    best = secs.find((s) => s.lines.length) ?? null;
+  }
+  if (!best) return [];
+  return fit([...(best.heading ? [`§ ${best.heading}`] : []), ...best.lines.map((l) => l.replace(/\t/g, "  "))], opts.max);
 }
 
 // FTS5 query: every term as a quoted phrase (raw prompt text must never reach the MATCH
@@ -314,6 +435,7 @@ export function buildTurnContext(
           idTerms: new Set(r.idTerms),
           shownIdTerms: new Set(r.shownIdTerms),
           cur: [...r.terms].filter((t) => curSet.has(t)).length,
+          rule: r.page.rule,
           relevance: r.relevance,
           coverage: r.coverage,
         },
@@ -369,11 +491,33 @@ export function buildTurnContext(
       }
       return shown.length ? `  (${koRepo ? "제목" : "titled"}: ${shown.join("·")})` : "";
     };
-    const L = [head];
-    for (const [rel, e] of pages) {
-      const mark = currencyMark({ deprecated: false, stale: e.page.stale });
-      L.push(`  • ${e.title}${mark}  →  ${rel}${why(e)}`);
-    }
+    const pointer = ([rel, e]: (typeof pages)[number]) =>
+      `  • ${e.title}${currencyMark({ deprecated: false, stale: e.page.stale })}  →  ${rel}${why(e)}`;
+    if (!excerptEnabled()) return [head, ...pages.map(pointer)].join("\n");
+
+    // Excerpts share what the header and pointer lines leave of TURN_MAX_CHARS, in rank order: each
+    // page may take an equal share of the remainder (≤ EXCERPT_MAX_CHARS), and what a short excerpt
+    // leaves passes to the next. Body text is read only for the ≤ MAX_PAGES pages shown.
+    const xhead = EXCERPT_HEADS[koRepo ? "ko" : "en"](displayRoot(root));
+    let left = TURN_MAX_CHARS - xhead.length - pages.reduce((n, p) => n + 1 + pointer(p).length, 0);
+    const L = [xhead];
+    pages.forEach((p, i) => {
+      const [rel, e] = p;
+      L.push(pointer(p));
+      const share = Math.min(EXCERPT_MAX_CHARS, Math.floor(left / (pages.length - i)));
+      const text = e.rule ? "" : (readRepoFile(root, rel) ?? "");
+      const lines = pageExcerpt(splitFrontmatter(text).body, {
+        rule: e.rule,
+        description: e.page.description,
+        terms: [...e.terms].filter((t) => curSet.has(t)),
+        max: share,
+        ko: koRepo,
+      });
+      for (const l of lines) {
+        L.push(`${EXCERPT_INDENT}${l}`);
+        left -= EXCERPT_INDENT.length + l.length + 1;
+      }
+    });
     return L.join("\n");
   } catch {
     return ""; // fail-safe: a turn-context failure must never surface into the session

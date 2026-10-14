@@ -71,11 +71,27 @@ describe("buildTurnContext", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  test("korean prompt matches korean page; L0 pages excluded; pointers only", () => {
+  test("korean prompt matches korean page; L0 pages excluded; a bounded excerpt rides along", () => {
     const out = buildTurnContext(root, "캡처 데몬이 트랜스크립트 큐를 놓치는 것 같은데 확인해줘");
     expect(out).toContain("capture-daemon.md");
     expect(out).not.toContain("overview.md"); // L0 never re-suggested
-    expect(out).not.toContain("launchd 로 상주"); // no body injection
+    expect(out).toContain("launchd 로 상주"); // the text itself, not only where to find it
+    expect(out.length).toBeLessThanOrEqual(1600);
+  });
+
+  test("LLMWIKI_TURN_EXCERPT=off restores the pointer-only block", () => {
+    const saved = process.env.LLMWIKI_TURN_EXCERPT;
+    process.env.LLMWIKI_TURN_EXCERPT = "off";
+    try {
+      const out = buildTurnContext(root, "캡처 데몬이 트랜스크립트 큐를 놓치는 것 같은데 확인해줘");
+      expect(out).toBe(
+        `----- [llmwiki turn-context] ${displayRoot(root)} — wiki pages related to this prompt (pointers — Read on demand) -----\n` +
+          "  • 캡처 데몬 결정  →  docs/wiki/3_decision/capture-daemon.md  (titled: 캡처·데몬)",
+      );
+    } finally {
+      if (saved === undefined) delete process.env.LLMWIKI_TURN_EXCERPT;
+      else process.env.LLMWIKI_TURN_EXCERPT = saved;
+    }
   });
 
   test("the banner names the clone its relative pointers belong to", () => {
@@ -84,7 +100,9 @@ describe("buildTurnContext", () => {
     expect(head).toContain("[llmwiki turn-context]");
     expect(head).toContain(displayRoot(root)); // two clones can share a basename; the path cannot
     // The pointer lines stay repo-relative — the root is stated once, not repeated per line.
-    for (const line of out.split("\n").slice(1)) expect(line).toContain("  →  docs/wiki/");
+    const pointers = out.split("\n").filter((l) => l.startsWith("  • "));
+    expect(pointers.length).toBeGreaterThan(0);
+    for (const line of pointers) expect(line).toContain("  →  docs/wiki/");
   });
 
   test("displayRoot collapses home and leaves other paths alone", () => {

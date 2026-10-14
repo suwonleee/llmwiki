@@ -10,7 +10,8 @@
 # Output contract: the engine emits the JSON envelope BOTH harnesses DECLARE
 # ({"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"…"}}). Bare text
 # also works today (both accept it as a fallback); the envelope is the declared contract rather than
-# the undeclared one. The engine prints AT MOST a few pointer lines and is SILENT when unconfident,
+# the undeclared one. The engine prints AT MOST a few pointer lines (each with a short page excerpt;
+# LLMWIKI_TURN_EXCERPT=off for pointers only) and is SILENT when unconfident,
 # and silence stays zero bytes (never an empty envelope) — so most turns inject nothing.
 # Fail-safe: any error → silent exit 0 (never block or pollute a turn).
 set +e
