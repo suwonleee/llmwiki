@@ -38,9 +38,16 @@ Background only; nothing here is a step. Read it when a rule in `/wiki-save` see
 
 ## 7. Why `daemon-sync` rides in the close-out
 
+- It restarts a capture daemon older than the engine code, so the day's fixes run now.
 - Observed 2026-08-21: a live daemon ran the day's fixes 209 minutes late because restarting relied on a human remembering launchctl.
 - The close-out is where upkeep latency is already consented to — never fail the close-out over it.
 
 ## 8. Why subagents write long returns to a file
 
 - Issue-#956 class failure: long inline returns from a subagent intermittently collapse into summaries and the original is unrecoverable.
+
+## 9. Why active rules stay in L0, untrimmed
+
+- A standing convention or prohibition the human set (a `3_decision/` page) gets ONE line in L0's Active rules section, after Direction: the rule itself, concrete enough to apply without opening the page (names, formats, the forbidden default), plus a link to the decision.
+- Measured 2026-10-14 (real harness, 2 repos × 4 scenarios): once now/next moved on, a decision that lived only in pages was applied 0/8 times by later coding sessions; kept as an Active rules line, 8/8. Coding sessions opened no wiki page in 24 runs; L0 is the channel that reaches them.
+- The line goes when its decision is deprecated or replaced. Past ~8 lines, fold related ones into one line linking a `5_topic/` conventions page.

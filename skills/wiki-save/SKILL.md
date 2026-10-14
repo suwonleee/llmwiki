@@ -19,7 +19,7 @@ description: Session close-out (warm, O(this session)) — file THIS session int
 
 # /wiki-save — session close-out (warm, human-present)
 
-File **THIS session's** work into durable knowledge **right here (warm context)** and keep the **reading input (L0) fresh** — the primary path, not a cron. **Minutes, not tens of minutes.** Deferring volume work to **`/wiki-deep`** is safe: the backlog is durable raw material, not debt, and an un-filed session ageing out of retention is **self-selection, not loss**.
+File **THIS session's** work into durable knowledge **right here (warm context)** and keep the **reading input (L0) fresh** — the primary path, not a cron. **Minutes, not tens of minutes.** Volume work defers to **`/wiki-deep`** — safe (save-rationale §3): an un-filed session ageing out is **self-selection, not loss**.
 
 Steps name a reference section (`llmwiki conventions <repo> --section <name>`) only where needed — never pre-load. Rationale: `llmwiki conventions <repo> --section save-rationale`; command semantics: `llmwiki conventions <repo> --section cli`.
 
@@ -93,13 +93,13 @@ $ARGUMENTS
 
 3. **Consolidate**: dry-run `llmwiki consolidate <repo>` (+ `llmwiki topics <repo>`) → select → create-or-update `5_topic/<slug>.md` (a NEW page: `llmwiki conventions <repo> --section topic-page`) → cross-link.
 
-4. **Refresh L0** (the reading input — most important): in `docs/wiki/current-state.md` update **only 'now (TL;DR)' and 'next'** from this session + recent milestones + new topic pages (state/task on `-`, evidence/owner/blocker on `    -`). **L0 is the team handoff packet** — write for a teammate's next session; name owners (`- <task> (→ name)`). **Trim to ~1,600 chars**: displaced detail moves to `current-state-detail.md` (beside L0, linked from it) — **move, never delete**; keep only now+next in L0. Direction and absolute rules are the human's — propose, the human confirms: a direction change → a `1_direction/` draft + draft-marked section as a diff; record after approval.
+4. **Refresh L0** (most important): in `docs/wiki/current-state.md` update **'now (TL;DR)' and 'next'** from this session + recent milestones + new topic pages (state/task on `-`, evidence/owner/blocker on `    -`). **L0 is the team handoff packet** — name owners (`- <task> (→ name)`). **Trim to ~1,600 chars**: displaced detail moves to `current-state-detail.md` (linked from L0) — **move, never delete**; keep only now+next in L0. Direction and absolute rules are the human's — propose, the human confirms: a direction change → a `1_direction/` draft + draft-marked section as a diff; record after approval. **Active rules** (after Direction, never trimmed): a convention/prohibition the human set this session → one concrete line + decision link (save-rationale §9).
 
 5. **Overview (entry point, not a changelog)**: refresh `docs/wiki/overview.md` **Key Findings only** (one line + link each); **never prepend a per-session paragraph**. Then **`llmwiki overview --normalize <repo>`** (idempotent; Recent Updates → one log pointer; warns over budget).
 
 6. **Log**: `llmwiki log-append <repo> update "<one-line session>" "<topic page touched>"…` — engine-formatted (dated, newest first); never hand-edit `log.md`.
 
-7. **Close out (deterministic)**: `llmwiki register-transcript <repo>` → `llmwiki okf <repo> --commit --if-okf` (fills `sources`/`generated`, re-stamps `generated.at` — never hand-maintain timestamps) → `llmwiki index <repo>` (regenerates each folder's `index.md`; never hand-edit) → `llmwiki reconcile <repo> --commit` → `llmwiki lint <repo> --errors-only` → `llmwiki daemon-sync` (restarts a capture daemon older than the code; always exit 0 — never fail the close-out over it). Lint must reach **0 errors**; warnings are advisory — never over-format to silence them. A not-yet-OKF wiki gets a one-line hint; converting is the person's call (`llmwiki okf <repo>` dry-run, then `--commit`), never yours.
+7. **Close out (deterministic)**: `llmwiki register-transcript <repo>` → `llmwiki okf <repo> --commit --if-okf` (fills `sources`/`generated`, re-stamps `generated.at` — never hand-maintain timestamps) → `llmwiki index <repo>` (regenerates each folder's `index.md`; never hand-edit) → `llmwiki reconcile <repo> --commit` → `llmwiki lint <repo> --errors-only` → `llmwiki daemon-sync` (always exit 0 — never fail the close-out over it). Lint must reach **0 errors**; warnings are advisory — never over-format to silence them. A not-yet-OKF wiki gets a one-line hint; converting is the person's call (`llmwiki okf <repo>` dry-run, then `--commit`), never yours.
    - **`unresolved-citation` → fix the footnote, never delete it**: `llmwiki conventions <repo> --section citations` §3.
    - **Maintenance signal (never repair here)**: run exactly this opt-in notice after lint:
      ```sh
