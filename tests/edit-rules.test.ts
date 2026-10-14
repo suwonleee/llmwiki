@@ -35,7 +35,7 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-const UA = "외부 httpx 요청에 User-Agent: qagent/<어댑터명> (ax-team) — 모듈 맨 위 _USER_AGENT 상수";
+const UA = "외부 httpx 요청에 User-Agent: example-app/<어댑터명> — 모듈 맨 위 _USER_AGENT 상수";
 
 function page(root: string, rel: string, frontmatter: string, body = "\nbody\n"): void {
   const p = join(root, "docs", "wiki", rel);
