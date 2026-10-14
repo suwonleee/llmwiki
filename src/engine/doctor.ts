@@ -15,6 +15,7 @@ import {
   writeOwnedCommand,
 } from "./claude-commands.ts";
 import { RETIRED_CODEX_SKILLS } from "./install-history.ts";
+import { EDIT_HOOK_MATCHER } from "./edit-rules.ts";
 import { CLONE_ROOT, CLONE_ROOT_SHELL, normalizeConfigPath } from "./paths.ts";
 import { claudeCaptureDirs, claudeConfigDirs, claudeRetentionDays } from "./sources/claude.ts";
 import { EXPIRY_WARN_DAYS, healthReadOnly, pendingPastRetentionReadOnly } from "./capture.ts";
@@ -73,6 +74,7 @@ const CORE = [
   "daemon/install.sh",
   "hooks/sessionstart-inject.sh",
   "hooks/userpromptsubmit-inject.sh",
+  "hooks/pretooluse-inject.sh",
   "setup.sh",
   "skill/wiki-save.md",
   "skill/wiki-ask.md",
@@ -99,6 +101,8 @@ function shellQuote(value: string): string {
 const SESSIONSTART_CMD = `bash ${shellQuote(`${CLONE_ROOT_SHELL}/hooks/sessionstart-inject.sh`)}`;
 // per-turn read-injection hook — same self-heal contract as SessionStart
 const TURNCTX_CMD = `bash ${shellQuote(`${CLONE_ROOT_SHELL}/hooks/userpromptsubmit-inject.sh`)}`;
+// edit-time path rules (PreToolUse) — same presence key + self-heal, with the tool matcher
+const EDITRULES_CMD = `bash ${shellQuote(`${CLONE_ROOT_SHELL}/hooks/pretooluse-inject.sh`)}`;
 // "wired to THIS clone" is matched on the bare script path, not the full command string:
 // wire.ts registers the hook unquoted while repairHook writes it shellQuoted, and both
 // spellings must pass — the path itself is the clone identity (the *_CMD forms above stay
@@ -106,6 +110,7 @@ const TURNCTX_CMD = `bash ${shellQuote(`${CLONE_ROOT_SHELL}/hooks/userpromptsubm
 // JSON escaping and `\` vs `/` cannot make a clone fail to recognize its own hook (paths.ts).
 const SESSIONSTART_SCRIPT = normalizeConfigPath(`${CLONE_ROOT_SHELL}/hooks/sessionstart-inject.sh`);
 const TURNCTX_SCRIPT = normalizeConfigPath(`${CLONE_ROOT_SHELL}/hooks/userpromptsubmit-inject.sh`);
+const EDITRULES_SCRIPT = normalizeConfigPath(`${CLONE_ROOT_SHELL}/hooks/pretooluse-inject.sh`);
 // Codex on Windows is wired WITHOUT the shell adapters (see wire-codex.ts for the measurement:
 // `bash` is not on the Windows PATH and Codex runs hook commands through PowerShell, so both the
 // bare name and a quoted absolute path produced "hook exited with code 1"). Recognition accepts
@@ -544,7 +549,7 @@ export function reassertClaudeReadHooks(): string[] {
   return notes;
 }
 
-function repairHook(sp: string, event = "SessionStart", cmd = SESSIONSTART_CMD): string {
+function repairHook(sp: string, event = "SessionStart", cmd = SESSIONSTART_CMD, matcher = "", timeout?: number): string {
   let settings: any;
   try {
     settings = JSON.parse(readFileSync(sp, "utf-8"));
@@ -556,8 +561,8 @@ function repairHook(sp: string, event = "SessionStart", cmd = SESSIONSTART_CMD):
   if (!settings.hooks) settings.hooks = {};
   if (!settings.hooks[event]) settings.hooks[event] = [];
   settings.hooks[event].push({
-    matcher: "",
-    hooks: [{ type: "command", command: cmd }],
+    matcher,
+    hooks: [{ type: "command", command: cmd, ...(timeout ? { timeout } : {}) }],
   });
   let text: string;
   try {
@@ -1077,6 +1082,22 @@ export function runDoctor(
       );
     } else {
       console.log(`  [${name}] ⚠️ no llmwiki UserPromptSubmit hook (run \`doctor --fix\` to re-register)`);
+      issues += 1;
+    }
+
+    // edit-time path rules (PreToolUse) — same presence key + self-heal
+    const hasEdit = txt.includes("pretooluse-inject.sh") && txt.includes("PreToolUse");
+    if (hasEdit && norm.includes(EDITRULES_SCRIPT)) {
+      console.log(`  [${name}] ✅ edit-rules hook present`);
+    } else if (hasEdit) {
+      console.log(`  [${name}] ⚠️ PreToolUse edit-rules hook points to a different clone (re-point: ${WIRE_CLAUDE_CMD})`);
+      issues += 1;
+    } else if (fix) {
+      console.log(
+        `  [${name}] ⚠️ no llmwiki PreToolUse edit-rules hook → ${repairHook(sp, "PreToolUse", EDITRULES_CMD, EDIT_HOOK_MATCHER, 5)}`,
+      );
+    } else {
+      console.log(`  [${name}] ⚠️ no llmwiki PreToolUse edit-rules hook (run \`doctor --fix\` to re-register)`);
       issues += 1;
     }
 

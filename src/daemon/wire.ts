@@ -3,6 +3,7 @@
 // For each ~/.claude*/settings.json — plus $CLAUDE_CONFIG_DIR — (backup → edit → JSON-validate → save):
 //   - REMOVE old hooks (legacy distill check/enqueue).
 //   - ADD/RE-POINT SessionStart: bash <ROOT>/hooks/sessionstart-inject.sh.
+//   - ADD/RE-POINT UserPromptSubmit (turn pointers) and PreToolUse (edit-time path rules).
 //   - INSTALL /wiki-* commands → <profile>/commands/, rewriting the ~/llmwiki
 //     placeholder to THIS clone's absolute path.
 //
@@ -26,6 +27,7 @@ import {
   commandRootState,
   writeOwnedCommand,
 } from "../engine/claude-commands.ts";
+import { EDIT_HOOK_MATCHER } from "../engine/edit-rules.ts";
 import { RETIRED_CLAUDE_COMMANDS } from "../engine/install-history.ts";
 import { CLONE_ROOT, CLONE_ROOT_SHELL, engineCliCommand } from "../engine/paths.ts";
 import { claudeConfigDirs } from "../engine/sources/claude.ts";
@@ -44,6 +46,10 @@ function shellQuote(value: string): string {
 // clone-identity check, and uninstall comparing the same bytes (paths.ts). Identical on POSIX.
 const INJECT = `bash ${shellQuote(`${CLONE_ROOT_SHELL}/hooks/sessionstart-inject.sh`)}`;
 const TURN_INJECT = `bash ${shellQuote(`${CLONE_ROOT_SHELL}/hooks/userpromptsubmit-inject.sh`)}`;
+const EDIT_INJECT = `bash ${shellQuote(`${CLONE_ROOT_SHELL}/hooks/pretooluse-inject.sh`)}`;
+// Seconds. The hook measures in tens of milliseconds; the ceiling only bounds a wedged run, and
+// a timed-out PreToolUse hook lets the edit proceed.
+const EDIT_TIMEOUT = 5;
 
 // The ownership mark and the command list live in engine/claude-commands.ts — doctor's `--fix`
 // installs the same files, and a second copy of either would let the two installers drift.
@@ -54,11 +60,13 @@ const TURN_INJECT = `bash ${shellQuote(`${CLONE_ROOT_SHELL}/hooks/userpromptsubm
 // from a new location detects & re-points the old hook instead of leaving a stale duplicate.
 const NEW_MARK = "hooks/sessionstart-inject.sh";
 const TURN_MARK = "hooks/userpromptsubmit-inject.sh";
+const EDIT_MARK = "hooks/pretooluse-inject.sh";
 const OLD_MARKS = ["wiki-distill-check.sh", "wiki-distill-enqueue.py"];
 
 interface HookEntry {
   type?: string;
   command?: string;
+  timeout?: number;
 }
 interface HookBlock {
   matcher?: string;
@@ -117,6 +125,17 @@ function addUserPromptSubmit(settings: Settings): void {
   settings.hooks ??= {};
   settings.hooks.UserPromptSubmit ??= [];
   settings.hooks.UserPromptSubmit.push({ matcher: "", hooks: [{ type: "command", command: TURN_INJECT }] });
+}
+
+// Edit-time rules. Appended as its OWN group next to whatever PreToolUse groups the person already
+// has (a branch guard, a formatter) — never merged into one, so uninstall can remove exactly ours.
+function addPreToolUse(settings: Settings): void {
+  settings.hooks ??= {};
+  settings.hooks.PreToolUse ??= [];
+  settings.hooks.PreToolUse.push({
+    matcher: EDIT_HOOK_MATCHER,
+    hooks: [{ type: "command", command: EDIT_INJECT, timeout: EDIT_TIMEOUT }],
+  });
 }
 
 function timestamp(): string {
@@ -216,9 +235,12 @@ function apply(dryRun = false): number {
     // re-point: drop any prior llmwiki inject hook (possibly a different clone path)
     // then re-add THIS clone's, so a run from a new location cuts over cleanly.
     const repointed =
-      strip(settings, "SessionStart", NEW_MARK) + strip(settings, "UserPromptSubmit", TURN_MARK);
+      strip(settings, "SessionStart", NEW_MARK) +
+      strip(settings, "UserPromptSubmit", TURN_MARK) +
+      strip(settings, "PreToolUse", EDIT_MARK);
     addSessionStart(settings);
     addUserPromptSubmit(settings);
+    addPreToolUse(settings);
 
     const text = JSON.stringify(settings, null, 2) + "\n";
     JSON.parse(text); // validate
@@ -241,7 +263,7 @@ function apply(dryRun = false): number {
     const cmds = CLAUDE_COMMANDS.map((s) => "/" + s.slice(0, -3)).join(", ");
     console.log(
       `  [${name}] ✅ old removed: ${removed}, re-pointed: ${repointed}, ` +
-        `SessionStart+UserPromptSubmit → ${basename(ROOT)}, installed (owned copy): ${cmds}`,
+        `SessionStart+UserPromptSubmit+PreToolUse → ${basename(ROOT)}, installed (owned copy): ${cmds}`,
     );
   }
   console.log("✓ cutover applied (backups: settings.json.llmwiki-bak.*)");
@@ -298,8 +320,8 @@ function revert(): number {
         try {
           copyFileSync(sp, `${sp}.llmwiki-bak.${timestamp()}`);
           let removed = 0;
-          for (const mark of [NEW_MARK, TURN_MARK, ...OLD_MARKS]) {
-            for (const event of ["SessionStart", "UserPromptSubmit", "Stop"]) {
+          for (const mark of [NEW_MARK, TURN_MARK, EDIT_MARK, ...OLD_MARKS]) {
+            for (const event of ["SessionStart", "UserPromptSubmit", "PreToolUse", "Stop"]) {
               removed += strip(settings, event, mark);
             }
           }

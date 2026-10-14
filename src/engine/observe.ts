@@ -35,6 +35,11 @@ import {
   type Channel,
 } from "./downstream-read.ts";
 
+// The ledger also records edit-time rule emissions (engine/edit-rules.ts) — their cost, per session.
+// They carry no page pointers to answer with a read, so the reach report (readEmissionsFor) keeps
+// reading only the two pointer channels.
+export type EmissionChannel = Channel | "edit_rules";
+
 export interface Emission {
   ts: number; // ms epoch, stamped at emission
   session: string; // harness session id, exactly as the hook/plugin handed it over
@@ -92,7 +97,7 @@ const PAGE_RE = /→\s+(docs\/wiki\/[^\s"'`\\]+\.md)/g;
 export function recordEmission(
   root: string,
   session: string,
-  channel: Channel,
+  channel: EmissionChannel,
   emittedText: string,
   maxBytes = LEDGER_MAX_BYTES,
 ): void {

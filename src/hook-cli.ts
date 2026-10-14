@@ -135,6 +135,46 @@ async function turnContextHook(repo: string): Promise<void> {
   await writeEnvelope("UserPromptSubmit", out);
 }
 
+/**
+ * PreToolUse (Edit|Write|MultiEdit|NotebookEdit): the human-confirmed rules whose `applies_to`
+ * globs match the file about to be edited (engine/edit-rules.ts). Unlike turn-context, subagents
+ * ARE served — they edit code too, and the rule has to reach whichever context is editing.
+ */
+async function editContextHook(repo: string): Promise<void> {
+  if ((process.env.LLMWIKI_ENGINE_SUBPROCESS ?? "") !== "") return;
+  const payload = await readPayload();
+  if (!payload) return;
+  const input = payload.tool_input;
+  const tool = typeof input === "object" && input !== null ? (input as Payload) : {};
+  const filePath = String(tool.file_path ?? tool.notebook_path ?? "").trim();
+  const sessionId = String(payload.session_id ?? "").trim();
+  if (!filePath || !sessionId) return;
+  const { buildEditRules, editRulesMode } = await import("./engine/edit-rules.ts");
+  const mode = editRulesMode();
+  if (mode === "off") return;
+  const target = String(payload.cwd ?? "").trim() || repo || process.cwd();
+  const [{ inspectEnrollment, isEnrolled }, { wikiRootFor }] = await Promise.all([
+    import("./engine/enrollment.ts"),
+    import("./engine/wiki-root.ts"),
+  ]);
+  if (!isEnrolled(target)) return;
+  const root = wikiRootFor(target, inspectEnrollment(target).worktree);
+  const result = await buildEditRules({
+    root,
+    sessionId,
+    agentId: String(payload.agent_id ?? "").trim(),
+    filePath,
+    cwd: target,
+    mode,
+  });
+  if (!result) return;
+  // The rules are already marked shown, so delivery comes first; the ledger line is observability.
+  const { preToolUseEnvelope } = await import("./engine/hook-envelope.ts");
+  process.stdout.write(preToolUseEnvelope(result.text, result.deny));
+  const { recordEmission } = await import("./engine/observe.ts");
+  recordEmission(root, sessionId, "edit_rules", result.text);
+}
+
 async function openCodeContext(repo: string): Promise<void> {
   const prompt = valueFlag("--prompt");
   const sessionId = valueFlag("--session");
@@ -166,6 +206,7 @@ try {
   if (command === "enabled") await enabled(repo);
   else if (command === "context-hook") await contextHook(repo);
   else if (command === "turn-context-hook") await turnContextHook(repo);
+  else if (command === "edit-context-hook") await editContextHook(repo);
   else if (command === "opencode-context") await openCodeContext(repo);
   else process.exitCode = 2;
 } catch {

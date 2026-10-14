@@ -24,7 +24,8 @@ import { hasSecret } from "./screen.ts";
 import { L0_BUDGET, L0_LINT_BUDGET } from "./budgets.ts";
 import { effectiveKo, getConfig, type WikiConfig } from "./config.ts";
 import { parseFrontmatter as parseFrontmatterBoundary, type Frontmatter } from "./frontmatter.ts";
-import { checkConcept, checkIndex, checkLog, linkTextOnly, splitFrontmatter, type OkfIssue } from "./okf.ts";
+import { checkConcept, checkIndex, checkLog, linkTextOnly, okfStatus, parseYamlBlock, splitFrontmatter, type OkfIssue } from "./okf.ts";
+import { EDIT_RULE_KEY, editRuleProblems } from "./edit-rules.ts";
 
 export { linkTextOnly };
 import { bundleFiles, domainForType, isOkfBundle, WIKI_REL } from "./okf-bundle.ts";
@@ -283,7 +284,42 @@ export class Linter {
     issues.push(...this._oversizedL0(doc, content));
     issues.push(...this._oversizedTopic(doc, content));
     issues.push(...this._bodyStructure(doc, content));
+    issues.push(...this._editRule(doc, content));
     return issues;
+  }
+
+  /**
+   * `x-llmwiki: { applies_to, rule }` — the edit-time path rule a page declares (edit-rules.ts).
+   * Advisory only: a malformed rule is simply not delivered, which costs a reminder, never a page.
+   * A retired page keeping one is flagged because the hook skips it — the line reads as live
+   * policy to the next writer while it reaches no one.
+   */
+  _editRule(doc: WikiDoc, content: string): LintIssue[] {
+    const { block } = splitFrontmatter(content);
+    if (block === null || !block.includes(EDIT_RULE_KEY)) return [];
+    const { data } = parseYamlBlock(block);
+    const value = data[EDIT_RULE_KEY];
+    if (value === undefined) return [];
+    const path = this._p(doc);
+    const out: LintIssue[] = editRuleProblems(value).map((problem) => ({
+      severity: "warn" as const,
+      code: "edit-rule-shape",
+      path,
+      message: this.ko
+        ? `\`${EDIT_RULE_KEY}\` 편집 규칙 형식 문제 — ${problem} (형식이 틀린 규칙은 주입되지 않는다)`
+        : `\`${EDIT_RULE_KEY}\` edit rule: ${problem} (a malformed rule is not injected)`,
+    }));
+    if (okfStatus(data.status) === "deprecated") {
+      out.push({
+        severity: "warn",
+        code: "edit-rule-deprecated",
+        path,
+        message: this.ko
+          ? `폐기된 페이지가 \`${EDIT_RULE_KEY}\` 편집 규칙을 지니고 있음 — 주입되지 않으니 대체 결정 페이지로 옮기거나 지울 것`
+          : `a deprecated page carries an \`${EDIT_RULE_KEY}\` edit rule — it is never injected; move it to the replacing decision or drop it`,
+      });
+    }
+    return out;
   }
 
   /**

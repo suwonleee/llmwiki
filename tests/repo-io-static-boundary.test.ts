@@ -42,6 +42,8 @@ const ALLOWED_MUTATORS: Record<string, string> = {
   "engine/hermes-export.ts":
     "writes one Hermes session transcript to a caller-chosen path outside any repository (the ingest hand-off), and stats Hermes' own state.db — never repository content",
   "engine/turncontext.ts": "per-session scratch state in the OS temp dir, not in any repository",
+  "engine/edit-rules.ts":
+    "the edit-rule cache and per-session dedupe markers in the OS temp dir (private, owner-checked), plus lstat metadata of docs/wiki entries already listed through repo-write for the cache signature — page content is read only through repo-write",
   "engine/update-check.ts": "records the daily origin check in the machine-local state root; reads the engine clone's own package.json — never repository content",
   "engine/claude.ts": "creates and removes the throwaway cwd for a generative subprocess",
   "engine/doctor.ts": "repairs HARNESS configuration (~/.claude, ~/.codex), never a repository",

@@ -17,6 +17,7 @@ const SHELL_FILES = [
   "daemon/autoupdate-schedule.sh",
   "hooks/sessionstart-inject.sh",
   "hooks/userpromptsubmit-inject.sh",
+  "hooks/pretooluse-inject.sh",
 ] as const;
 const FOCUSED_TESTS = [
   "tests/cli-flags.test.ts",

@@ -26,3 +26,18 @@ export function hookEnvelope(event: HookEvent, additionalContext: string, system
   if (event === "SessionStart" && systemMessage) envelope.systemMessage = systemMessage;
   return JSON.stringify(envelope) + "\n";
 }
+
+/**
+ * The PreToolUse envelope for edit-time rules (engine/edit-rules.ts). Two shapes, both declared by
+ * Claude Code's PreToolUse variant: a `deny` with its reason — the only output the model sees
+ * BEFORE the tool runs — or `additionalContext`, which arrives alongside the tool result. Never
+ * an `allow`: its reason is shown to the person only, and an explicit allow would also bypass the
+ * permission prompt the person configured. Same silence rule as above.
+ */
+export function preToolUseEnvelope(text: string, deny: boolean): string {
+  if (!text) return "";
+  const inner = deny
+    ? { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: text }
+    : { hookEventName: "PreToolUse", additionalContext: text };
+  return JSON.stringify({ hookSpecificOutput: inner }) + "\n";
+}
