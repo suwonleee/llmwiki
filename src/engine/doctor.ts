@@ -1129,9 +1129,11 @@ export function runDoctor(
           console.log("  [codex] ⚠️ hooks installed; one-time review required — start Codex and open `/hooks`");
           actions += 1;
         } else {
+          // Trust is Codex's own record (a hash this engine cannot recompute), so this cannot be
+          // verified here. It used to be a ⚠️ counted as a required action on every run, which sent
+          // people to an empty `/hooks` list: Codex lists a hook only when its hash is untrusted.
           console.log("  [codex] ✅ hooks installed; review records present");
-          console.log("  [codex] ⚠️ confirm the current hook hashes in `/hooks` after install or re-pointing");
-          actions += 1;
+          console.log("  [codex] • `/hooks` lists an llmwiki hook only when its hash changed — an empty list means it is already trusted");
         }
         if (status.sessionHook && !status.sessionSpillGuard) {
           // Pre-guard install: Codex truncates cold starts above ~2,500 approx tokens (10,000
