@@ -27,7 +27,7 @@ import { Database } from "bun:sqlite";
 import { ensureProjectStateDir, projectStateIsRegularFile, projectStatePath } from "./project-state.ts";
 import { openReadonlyDatabase } from "./sqlite-open.ts";
 import { opencodeDbPaths } from "./sources/opencode.ts";
-import { codexHome } from "./sources/codex.ts";
+import { codexHome, readRollout } from "./sources/codex.ts";
 import {
   discoverClaudeTranscripts,
   pickTranscripts,
@@ -227,7 +227,8 @@ export function scanOpenCodeReads(dbPath?: string, observed?: Set<string>): Ledg
 // Codex has no file-read tool: the model opens files with shell commands (`sed -n … docs/wiki/…`,
 // `cat …`), recorded as custom_tool_call / function_call / local_shell_call response items. So
 // FOR CODEX a shell open is the read signal, not a blind spot. Relative paths resolve against the
-// session_meta cwd. `.zst`-compressed rollouts are skipped (declared, not silently zero).
+// session_meta cwd. Codex compresses cold rollouts to `.jsonl.zst`; those are decompressed through
+// the adapter's reader so an old session's reads are counted, not dropped.
 
 const CODEX_CALL_TYPES = new Set(["custom_tool_call", "function_call", "local_shell_call"]);
 const CODEX_PATH_RE = /(?:[A-Za-z]:)?[^\s"'`\\]*docs\/wiki\/[^\s"'`\\]+\.md/g;
@@ -245,7 +246,7 @@ export function discoverCodexRollouts(rootDir?: string): string[] {
     for (const e of entries) {
       const full = join(dir, e.name);
       if (e.isDirectory()) walk(full);
-      else if (e.isFile() && e.name.startsWith("rollout-") && e.name.endsWith(".jsonl")) out.push(full);
+      else if (e.isFile() && e.name.startsWith("rollout-") && /\.jsonl(\.zst)?$/.test(e.name)) out.push(full);
     }
   };
   walk(base);
@@ -256,12 +257,9 @@ export function discoverCodexRollouts(rootDir?: string): string[] {
 export function scanCodexReads(files: readonly string[], observed?: Set<string>): LedgerRead[] {
   const out: LedgerRead[] = [];
   for (const f of files) {
-    let text: string;
-    try {
-      text = readFileSync(f, "utf-8");
-    } catch {
-      continue;
-    }
+    const buf = readRollout(f);
+    if (!buf) continue;
+    const text = buf.toString("utf-8");
     let session = "";
     let cwd = "";
     for (const line of text.split("\n")) {

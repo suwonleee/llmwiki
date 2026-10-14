@@ -75,6 +75,85 @@ describe("codex parse", () => {
     expect(inc.sessionId).toBe("cx-2");
   });
 
+  // Record shapes measured on Codex 0.162.1. Besides response_item messages a rollout now carries
+  // item_completed echoes, token_usage_record, inter-agent agent_message and a compaction's
+  // replacement_history — none of them may become a second copy of a turn.
+  const THREAD = "01a1283e-2276-75a3-84cd-8e9f89fab9a8";
+  const rollout0162 = () => [
+    { type: "session_meta", payload: { id: THREAD, session_id: THREAD, cwd: "/repo/v162" } },
+    {
+      type: "response_item",
+      payload: { type: "message", id: "msg_a", role: "user", content: [{ type: "input_text", text: "# AGENTS.md instructions\n\n<INSTRUCTIONS>be terse</INSTRUCTIONS>" }] },
+    },
+    {
+      type: "response_item",
+      timestamp: "2026-10-11T00:00:00Z",
+      payload: { type: "message", id: "msg_b", role: "user", content: [{ type: "input_text", text: "2B 메모리 점검을 다시 시작해줘" }] },
+    },
+    {
+      type: "event_msg",
+      payload: { type: "item_completed", thread_id: THREAD, item: { type: "UserMessage", content: [{ type: "text", text: "2B 메모리 점검을 다시 시작해줘" }] } },
+    },
+    {
+      type: "response_item",
+      payload: { type: "message", id: "msg_c", role: "assistant", phase: "commentary", content: [{ type: "output_text", text: "1/4 진행: 작업 폴더와 학습 로그부터 확인합니다. 로컬 LLM 운영 규칙을 적용하고 비교 기준으로 점검을 이어가겠습니다." }] },
+    },
+    {
+      type: "event_msg",
+      payload: { type: "item_completed", thread_id: THREAD, item: { type: "AgentMessage", content: [{ type: "Text", text: "C".repeat(300) }], phase: "commentary" } },
+    },
+    { type: "token_usage_record", payload: { thread_id: THREAD, session_id: THREAD, usage: { input_tokens: 1 } } },
+    {
+      type: "response_item",
+      payload: { type: "agent_message", id: "amsg_1", author: "/root/audit", content: [{ type: "input_text", text: "M".repeat(300) }] },
+    },
+    {
+      type: "compacted",
+      payload: { message: "", replacement_history: [{ type: "message", role: "user", content: [{ type: "input_text", text: "2B 메모리 점검을 다시 시작해줘" }] }] },
+    },
+    {
+      type: "response_item",
+      timestamp: "2026-10-11T00:13:00Z",
+      payload: { type: "message", id: "msg_d", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "감시를 복구했고 2B가 CPU·FP32로 학습하던 JEFF_DEVICE 설정 누락도 찾았습니다. 첫 스텝은 11분 2초, 관측 최대 스왑은 17.9GiB였습니다. 이벤트 경로 자동 설정과 중복 실행 차단을 보강했고 132개 테스트가 통과했습니다." }] },
+    },
+  ];
+
+  test("0.162.1 shapes: one copy of each turn, AGENTS.md and echoes dropped", () => {
+    const path = join(dir, "rollout-v162.jsonl");
+    writeJsonl(path, rollout0162());
+    const inc = codexSource.parse(path, 0);
+    expect(inc.users.map((t) => t.text)).toEqual(["2B 메모리 점검을 다시 시작해줘"]);
+    expect(inc.sessionId).toBe(THREAD);
+    expect(inc.cwd).toBe("/repo/v162");
+    // short commentary is narration; a short Korean final answer is still the conclusion
+    expect(inc.assistants.map((t) => t.text.slice(0, 8))).toEqual(["감시를 복구했고"]);
+  });
+
+  test("a final_answer below the script-aware floor is still dropped", () => {
+    const path = join(dir, "rollout-short.jsonl");
+    writeJsonl(path, [
+      { type: "session_meta", payload: { id: THREAD, cwd: "/repo/v162" } },
+      { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "완료했습니다." }] } },
+    ]);
+    expect(codexSource.parse(path, 0).assistants).toEqual([]);
+  });
+
+  // An incremental parse starts after session_meta. The first record it sees is a response_item
+  // whose payload.id is an ITEM id; the thread must come from a record that names it.
+  test("a parse that starts mid-file never takes an item id as the session", () => {
+    const path = join(dir, "rollout-mid.jsonl");
+    const records = rollout0162();
+    const head = Buffer.from(JSON.stringify(records[0]) + "\n", "utf-8");
+    writeJsonl(path, records);
+    const inc = codexSource.parse(path, head.length);
+    expect(inc.sessionId).toBe(THREAD);
+    expect(inc.users.length).toBe(1);
+
+    const onlyItems = join(dir, "rollout-items.jsonl");
+    writeJsonl(onlyItems, [records[0], records[2], records[4]]);
+    expect(codexSource.parse(onlyItems, head.length).sessionId).toBeNull();
+  });
+
   test("byte-offset watermark advances on bytes (multibyte safe)", () => {
     const first = { type: "response_item", payload: { type: "message", role: "user", content: [{ text: "가나다 첫 지시" }] } };
     const second = { type: "response_item", payload: { type: "message", role: "user", content: [{ text: "라마바 둘째 지시" }] } };

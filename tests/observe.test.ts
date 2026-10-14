@@ -20,6 +20,7 @@ import {
   type LedgerRead,
 } from "../src/engine/observe.ts";
 import { enrollRepo, makeGitRepo } from "./support/git-repo.ts";
+import { zstdCompressFixture } from "./support/zstd-fixture.ts";
 
 const PAGE = "docs/wiki/5_topic/a.md";
 const PAGE2 = "docs/wiki/3_decision/b.md";
@@ -217,15 +218,34 @@ describe("Codex observer", () => {
     expect(reads[0]!.ts).toBeGreaterThan(0);
   });
 
-  test("discovery finds rollout jsonl files and skips compressed ones", () => {
+  test("discovery finds plain and compressed rollouts, nothing else", () => {
     const dir = mkdtempSync(join(tmpdir(), "llmwiki-sessions-"));
     mkdirSync(join(dir, "2026", "08", "05"), { recursive: true });
     writeFileSync(join(dir, "2026", "08", "05", "rollout-a.jsonl"), "");
     writeFileSync(join(dir, "2026", "08", "05", "rollout-b.jsonl.zst"), "");
     writeFileSync(join(dir, "2026", "08", "05", "notes.txt"), "");
-    const found = discoverCodexRollouts(dir);
-    expect(found.length).toBe(1);
-    expect(found[0]!.endsWith("rollout-a.jsonl")).toBe(true);
+    const found = discoverCodexRollouts(dir).map((f) => f.split("/").pop()).sort();
+    expect(found).toEqual(["rollout-a.jsonl", "rollout-b.jsonl.zst"]);
+  });
+
+  // Codex compresses cold rollouts; skipping them made an old session's reads count as zero.
+  test("a compressed rollout's reads are counted", () => {
+    const dir = mkdtempSync(join(tmpdir(), "llmwiki-rollout-"));
+    const plain = [
+      { type: "session_meta", payload: { id: "codex-z", cwd: "/work/repo" } },
+      {
+        timestamp: "2026-08-05T10:00:05.000Z",
+        type: "response_item",
+        payload: { type: "custom_tool_call", name: "exec", input: `cat '${PAGE}'` },
+      },
+    ];
+    const f = join(dir, "rollout-2026-08-05T10-00-00-zst.jsonl.zst");
+    writeFileSync(f, zstdCompressFixture(Buffer.from(plain.map((l) => JSON.stringify(l)).join("\n"))));
+    const observed = new Set<string>();
+    const reads = scanCodexReads([f], observed);
+    expect(reads.length).toBe(1);
+    expect(reads[0]).toMatchObject({ session: "codex-z", root: "/work/repo", page: PAGE, harness: "codex" });
+    expect([...observed]).toEqual(["codex-z"]);
   });
 });
 

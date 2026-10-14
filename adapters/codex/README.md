@@ -61,6 +61,21 @@ the installer (or reinstall the plugin) so the recorded hashes match. And after
 any update, confirm the hashes in `/hooks` — the same thing `llmwiki doctor`
 advises for Codex.
 
+## Rollout format (measured on 0.162.1)
+
+The engine reads `response_item` messages only. A current rollout also carries
+`event_msg/item_completed` echoes, `token_usage_record`, inter-agent `agent_message`
+items and a compaction's `replacement_history`; none of them has a message role, so
+none becomes a second copy of a turn. Two fields are used:
+
+- `phase` on assistant messages: a `final_answer` gets the same script-aware length
+  floor as Claude Code, while `commentary` (in-turn narration) keeps the stricter one.
+- `thread_id` on turn-level records: an incremental parse that starts after
+  `session_meta` takes the session from it, never from a `response_item`'s item id.
+
+Rollouts Codex compressed to `.jsonl.zst` are decompressed for capture and for the
+read observer alike.
+
 ## Coexistence with OMX
 
 The installer removes and re-points only commands containing llmwiki's two hook

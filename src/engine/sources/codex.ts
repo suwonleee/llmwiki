@@ -19,7 +19,7 @@ import { homedir } from "node:os";
 import { join, relative } from "node:path";
 import type { DiscoveredRoute, DiscoveredSession, ParseOpts, TranscriptSource } from "../source.ts";
 import { countLines, discoverViaRoutes, scanIdentity, type IdentitySpec } from "./routing.ts";
-import { readTail, type Increment, type Turn } from "../extract.ts";
+import { readTail, substantiveFloor, type Increment, type Turn } from "../extract.ts";
 import { canonicalWorktree } from "../enrollment.ts";
 import { persistedCodexHome } from "../harness-locate.ts";
 import { openReadonlyDatabase } from "../sqlite-open.ts";
@@ -358,8 +358,9 @@ export function resolveRolloutPath(path: string): string {
   return path;
 }
 
-// Full decompressed content of a rollout, or null when unreadable/undecompressable.
-function readRollout(path: string): Buffer | null {
+// Full decompressed content of a rollout, or null when unreadable/undecompressable. Shared with
+// the read observer so a compressed rollout counts its wiki reads instead of being skipped.
+export function readRollout(path: string): Buffer | null {
   const real = resolveRolloutPath(path);
   try {
     const raw = readFileSync(real);
@@ -372,10 +373,24 @@ function readRollout(path: string): Buffer | null {
 
 // Pull (cwd, sessionId, role, text) out of one parsed rollout line, tolerating Codex's
 // response_item/payload nesting and the flatter message shape alike.
-function fields(o: any): { cwd: string | null; session: string | null; role: string | null; text: string } {
+function fields(o: any): {
+  cwd: string | null;
+  session: string | null;
+  role: string | null;
+  phase: string | null;
+  text: string;
+} {
   const cwd =
     o.cwd || o.payload?.cwd || o.git?.repository_path || o.payload?.git?.repository_path || null;
-  const session = o.id || o.session_id || o.payload?.id || o.payload?.session_id || null;
+  // payload.id is the thread only on session_meta; on a response_item it is the ITEM id (msg_…,
+  // rs_…, ctc_…), which an incremental parse that starts mid-file would otherwise take as the
+  // session. Turn-level records (item_completed, token_usage_record) name their thread_id instead
+  // — not payload.session_id, which a forked thread shares with its parent.
+  const session =
+    o.id ||
+    o.session_id ||
+    (o.type === "session_meta" ? o.payload?.id || o.payload?.session_id : o.payload?.thread_id) ||
+    null;
 
   // role and content can live at different depths across Codex versions — look each up
   // independently rather than committing to one "message" object.
@@ -395,7 +410,8 @@ function fields(o: any): { cwd: string | null; session: string | null; role: str
       if (p && typeof p === "object" && typeof p.text === "string") text += p.text; // input_text/output_text/text
     }
   }
-  return { cwd, session, role, text };
+  const phase = typeof o.payload?.phase === "string" ? o.payload.phase : null;
+  return { cwd, session, role, phase, text };
 }
 
 // Routing has a stricter data boundary than parsing. Do not reuse `fields()` here: that helper
@@ -688,7 +704,12 @@ export const codexSource: TranscriptSource = {
         if (t.startsWith("# AGENTS.md instructions") && t.includes("<INSTRUCTIONS>")) continue;
         users.push({ ts, role: "user", text: t.slice(0, cap) });
       } else if (f.role === "assistant") {
-        if (t.length >= minChars) assistants.push({ ts, role: "assistant", text: t.slice(0, cap) });
+        // Since 0.15x every assistant message carries a phase. `final_answer` closes the turn, so
+        // it gets the Claude adapter's script-aware floor (a short Korean conclusion is still the
+        // conclusion). `commentary` is in-turn narration — "1/4 진행: …" — and keeps the flat
+        // floor; the long ones carry real findings (measured: 96 of 851 clear 180 chars).
+        const floor = f.phase === "final_answer" ? substantiveFloor(t, minChars) : minChars;
+        if (t.length >= floor) assistants.push({ ts, role: "assistant", text: t.slice(0, cap) });
       }
     }
     return { users, assistants, newOffset, cwd, sessionId };
