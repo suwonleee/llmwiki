@@ -6,6 +6,7 @@
 //   manual       → run it and paste the output
 //
 // Language: LLMWIKI_LANG=ko switches the operating-rules/headers to Korean (default: en).
+import { isOkfBundle } from "./okf-bundle.ts";
 import { linkTextOnly } from "./okf.ts";
 import { statSync } from "node:fs";
 import { join } from "node:path";
@@ -69,6 +70,8 @@ const makeT = (lang: "ko" | "en", cfg: WikiConfig) =>
       renderRuleAuthoringBrief("en", cfg),
     ],
     indexHead: "----- [llmwiki index] recent pages in this repo's wiki (Read as needed) -----",
+    listingPointer: (_repo: string) =>
+      `----- [llmwiki index] page listing: docs/wiki/index.md (per-folder titles + one-line descriptions) → Read only what you need · question search: llmwiki search . "<question>" --kind wiki -----`,
     spineHead: "----- [llmwiki synthesis] conceptual spine — most-referenced pages (the wiki's hubs; full view: llmwiki digest) -----",
     pending: (n: number) => `[llmwiki] ${n} un-updated session(s) in this repo`,
     quizDue: (n: number) => `[llmwiki quiz] ${n} review(s) due (day-granular forgetting curve) → reinforce YOUR memory with  /wiki-quiz`,
@@ -99,6 +102,8 @@ const makeT = (lang: "ko" | "en", cfg: WikiConfig) =>
       renderRuleAuthoringBrief("ko", cfg),
     ],
     indexHead: "----- [llmwiki 인덱스] 이 레포 위키 최근 페이지 (필요 시 Read) -----",
+    listingPointer: (_repo: string) =>
+      `----- [llmwiki 인덱스] 페이지 목록: docs/wiki/index.md (폴더별 제목·한 줄 설명) → 필요한 것만 Read · 질문 검색: llmwiki search . "<질문>" --kind wiki -----`,
     spineHead: "----- [llmwiki 종합] 개념 spine — 가장 많이 참조된 페이지(위키 허브; 전체: llmwiki digest) -----",
     pending: (n: number) => `[llmwiki] 이 레포 미update 세션 ${n}건`,
     quizDue: (n: number) => `[llmwiki quiz] 복습 due ${n}건 (망각곡선·일 단위) → /wiki-quiz 로 '사람 기억' 강화`,
@@ -164,6 +169,11 @@ function behindUpstream(repo: string): number {
 
 // category folders scanned for the page index + staleness (numbered + legacy), from the
 // resolved per-repo config: log categories + topic + legacy flat names (scanDirs(cfg)).
+/** Cold-start shape: `full` (default) or `slim` — env LLMWIKI_COLDSTART. */
+export function coldStartMode(): "full" | "slim" {
+  return (process.env.LLMWIKI_COLDSTART ?? "").trim().toLowerCase() === "slim" ? "slim" : "full";
+}
+
 function categoryPages(root: string, catDirs: string[]): string[] {
   const out: { p: string; m: number }[] = [];
   for (const c of catDirs) {
@@ -313,8 +323,19 @@ export function buildContext(repo: string, opts: { affinity?: AffinityFile | nul
   // absent/stale data leaves both lists exactly as they were.
   const affinity = !hasWiki ? null : opts.affinity !== undefined ? opts.affinity : loadAffinity(proj);
 
+  // Slim cold start (LLMWIKI_COLDSTART=slim, OKF bundles only): the two page lists below give way
+  // to one pointer at the generated listing. Measured on 4 project wikis (160 runs): the injected
+  // context added cost (+$0.02/run) without a measurable accuracy gain over the wiki files alone,
+  // and in 120 runs no agent opened index.md on its own — so the listing is named instead of
+  // pre-loaded, and the agent reads only the folder it needs.
+  const slim = hasWiki && coldStartMode() === "slim" && isOkfBundle(proj);
+  if (slim) {
+    L.push(T.listingPointer(base(proj)));
+    L.push("");
+  }
+
   // (B2) lightweight on-the-fly page index — recent 6 titles (filesystem-derived, never stale).
-  if (hasWiki) {
+  if (hasWiki && !slim) {
     const pages = rerankByAffinity(categoryPages(proj, catDirs), 6, affinity, (p) => p, RECENT_POLICY);
     if (pages.length) {
       L.push(T.indexHead);
@@ -326,7 +347,7 @@ export function buildContext(repo: string, opts: { affinity?: AffinityFile | nul
   // (B3) synthesis spine — the conceptual centers (most-referenced pages by in-degree, NOT just
   // recent). Deterministic/regenerable relational synthesis — no LLM, no
   // new claims, just links from the grounded graph. Bounded; failure-safe (never breaks cold-start).
-  if (hasWiki) {
+  if (hasWiki && !slim) {
     const spine = buildSpine(proj, 4, affinity);
     if (spine.length) {
       L.push(T.spineHead);
