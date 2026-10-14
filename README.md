@@ -32,6 +32,33 @@ These are one person's numbers on one machine over eleven weeks, on wikis in the
 person writes in. They say the engine stays cheap and stays honest at this scale; they are not a
 claim about teams, other corpora, or answer quality.
 
+## Does the agent actually use it? — controlled runs
+
+Writing a wiki is easy; getting a coding agent to act on it is not. We measured it with real
+Claude Code sessions on two private work repositories (2026-10-13/14): one session settles a
+project rule in conversation and closes out, a later fresh session gets a different task where that
+rule applies, and a blind grader checks whether the change follows it.
+
+| What the agent had | Applied the earlier decision |
+| --- | --- |
+| No wiki | — (Q&A: accuracy 0.57, hallucination 23%) |
+| The wiki (Q&A questions) | accuracy 0.73–0.78, hallucination 4–8% (480 runs) |
+| A decision kept only in wiki pages (coding tasks) | **0/8** — in 32 coding runs agents opened no wiki page and ran no wiki search |
+| The decision as an L0 "Active rules" line | **8/8** |
+| The decision only in its page, delivered at edit time + in the per-prompt excerpt | **8/8** (excerpt alone 4/8, edit-time gate alone 7/8) |
+
+What this changed in v0.14.0: rules a person sets are written as one concrete line, kept in L0 and
+tagged with the paths they govern (`x-llmwiki: { applies_to, rule, recall }`); the per-prompt
+block now carries the rule text instead of a title; and an edit to a governed file — through the
+Edit tool or a Bash write — gets the rule in front of the agent before the edit (Claude Code).
+
+These are small samples (2 repositories, 4 scenarios, 8 runs per arm, one grader model) on tasks
+built so that the obvious change breaks the rule; they show the delivery mechanism works, not how
+often your own rules matter. Converting to OKF by itself did not change answer accuracy (+0.03,
+within noise) — the gains come from what reaches the agent.
+
+The same flow was also run as a new user would, from a fresh clone of this release in an isolated home (`./setup.sh` → `llmwiki init` → session → `/wiki-save` → new session): the rule was applied in 2/2 scenarios — once via the edit-time gate, once because the per-prompt excerpt led the agent to open the decision page itself.
+
 ## Everything you need to do
 
 Already have Git, [Bun](https://bun.sh), and one coding agent installed? The rest is one clone and one prompt.
@@ -244,7 +271,7 @@ Six stages — two fully unattended, the rest one command each.
 | **Capture** | Every session transcript → central queue | ✔ | `src/daemon/watch.ts` (terminal/profile-agnostic) |
 | **Condense (update)** | Queue → that repo's `docs/wiki/` **log layer** (incremental append) | 1 command | Codex: `$wiki-save` / `$wiki-deep` · Claude/OpenCode: `/wiki-save` / `/wiki-deep` + `src/engine/update.ts` |
 | **Consolidate** | Log → per-concept **topic encyclopedia** `5_topic/` (in-place merge·raw re-grounding) | 1 command | Codex: `$wiki-save` / `$wiki-deep` · Claude/OpenCode: `/wiki-save` / `/wiki-deep` + `src/engine/consolidate.ts` |
-| **Read** | Cold-start injection + per-turn related-page pointers | ✔ | `hooks/sessionstart-inject.sh` · `hooks/userpromptsubmit-inject.sh` (Claude Code; Codex/OpenCode → `adapters/`) |
+| **Read** | Cold-start injection + per-turn page excerpts + edit-time path rules | ✔ | `hooks/sessionstart-inject.sh` · `hooks/userpromptsubmit-inject.sh` · `hooks/pretooluse-inject.sh` (Claude Code; Codex/OpenCode → `adapters/`) |
 | **Quiz (human memory)** | Wiki's judgment layer → day-granular spaced-repetition quiz **for the human** (`6_quiz/` records — never indexed/searched; cold-start shows a due-count line) | 1 command | Codex: `$wiki-quiz` · Claude/OpenCode: `/wiki-quiz` + `src/engine/quiz.ts` (`quiz-status`·`quiz-next`·`quiz-record`) |
 | **Self-healing** | Structural (orphan·stale·dangling) = deterministic `lint` / semantic (contradiction·stale claim·missing concept) = generative `review` (auto on sync — engine-gated cadence `--if-due`, default 7d·scoped+cached) → gaps land in `gaps`'s self-closing queue (`0_review/gap-queue.md`) | 1 command → auto | `lint`·`review`·`gaps` (`src/engine/{lint,review,gaps}.ts`) |
 
@@ -305,6 +332,8 @@ A citation like `[^s1]: <session>.jsonl` points at a transcript that lives on **
 - every page carries `type` (`Decision` · `Topic` · `Current State` …), `status` (`stable` · `draft` · `deprecated`), `generated: { by, at }`, and one `sources` entry per footnote; links are relative markdown, not `[[wikilinks]]`
 - each folder gets a generated `index.md`; `log.md` holds dated groups, newest first (written by `llmwiki log-append`)
 - an existing wiki converts once, on your call: `llmwiki okf <repo>` (dry-run) → `--commit`; `llmwiki okf --bundle docs/wiki` checks conformance
+- checked against outside readers too: Google's reference parser and viewer, `W4G1/okf`, `okf-rs` and `okf-studio` open the bundles with 0 errors (Korean filenames included)
+- llmwiki's own fields live in one extension key, `x-llmwiki`, which other OKF readers ignore and `llmwiki okf` preserves
 
 ### Self-healing flow (the human only fills in)
 
@@ -350,7 +379,7 @@ src/           TypeScript engine (Bun runtime, bun:sqlite built in — zero node
     wire-opencode.ts OpenCode global plugin + /wiki-* + shared CLI
     list-pending-repos.ts  print only pending repos from the queue (for schedulers)
 daemon/        install.sh (launchd/systemd/cron auto-detect) + autoupdate-*.sh (unattended fact pass)
-hooks/         sessionstart-inject.sh (cold-start) · userpromptsubmit-inject.sh (per-turn pointers)
+hooks/         sessionstart-inject.sh (cold-start) · userpromptsubmit-inject.sh (per-turn excerpts) · pretooluse-inject.sh (edit-time path rules)
 adapters/      codex/ (native-hook hooks.json template) · opencode/ (single-file plugin)
 skill/         wiki-save(session close-out)·wiki-deep(periodic deep pass)·wiki-doctor(diagnose/repair)·wiki-ask·wiki-quiz(human memory) (/commands)
 examples/      sample-wiki/ — a finished wiki example (read-only illustration). Not indexed by the engine (IGNORE_DIRS). **Do not copy** — real wikis are auto-generated under each project's docs/wiki. See examples/README.md

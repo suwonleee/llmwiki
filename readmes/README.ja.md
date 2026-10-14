@@ -31,6 +31,31 @@
 一人の開発者が一台のマシンで11週間、本人が書く言語のウィキで得た数値です。この規模でエンジンが
 軽く正直に動くことを示すもので、チーム運用・他のコーパス・回答品質についての主張ではありません。
 
+## エージェントは本当に使うのか — 対照実験
+
+wiki を書くのは簡単でも、コーディングエージェントにそれを守らせるのは難しい。実務リポジトリ2つで、
+実際の Claude Code セッションを使って測りました（2026-10-13/14）。あるセッションが会話でプロジェクトの
+ルールを決めて締めくくり、後の新しいセッションがそのルールに関わる別の作業を受け、ブラインド採点者が
+変更がルールに従っているかを確認します。
+
+| エージェントが持っていたもの | 先の決定を守った割合 |
+| --- | --- |
+| wiki なし | — （Q&A: 正答率 0.57、幻覚 23%） |
+| wiki あり（Q&A の質問） | 正答率 0.73–0.78、幻覚 4–8%（480回） |
+| 決定が wiki ページにしかない（コーディング作業） | **0/8** — コーディング32回でエージェントは wiki ページを一度も開かず検索もしなかった |
+| 決定を L0 の「有効なルール」1行に | **8/8** |
+| 決定はページのみ、編集時 + プロンプトごとの抜粋で配信 | **8/8**（抜粋のみ 4/8、編集時 gate のみ 7/8） |
+
+v0.14.0 で変わったこと: 人が決めたルールは具体的な1行として L0 に残り、適用パスがタグ付けされます
+（`x-llmwiki: { applies_to, rule, recall }`）。プロンプトごとのブロックはタイトルの代わりにルール本文を載せ、
+対象パスのファイルを編集しようとすると（Edit ツールでも Bash の書き込みでも）編集の前にルールがエージェントに示されます（Claude Code）。
+
+標本は小さく（リポジトリ2つ、シナリオ4つ、条件ごと8回、採点モデル1つ）、課題も素直な変更がルールを破るように
+作っています。配信の仕組みが機能することの根拠であって、あなたのルールがどれほど頻繁に効くかの主張ではありません。
+OKF への変換自体は正答率を変えませんでした（+0.03、誤差の範囲）— 効果はエージェントに届く内容から生まれます。
+
+同じ流れを新規ユーザーとしても実行しました。このリリースを隔離した HOME に新しく clone し、`./setup.sh` → `llmwiki init` → セッション → `/wiki-save` → 新しいセッションの順に進め、2/2 のシナリオでルールが守られました。1回は編集時の gate により、もう1回はプロンプトごとの抜粋を見たエージェントが自ら決定ページを開いたことによります。
+
 ## やることは、これだけ
 
 Git、[Bun](https://bun.sh)、いずれかのコーディングエージェントが入っていれば、あとは一度のcloneと一つのプロンプトだけです。
@@ -176,7 +201,7 @@ MCPサーバー、Docker、外部データベース、ベクトルDB、クラウ
 | **キャプチャ** | 全セッショントランスクリプト → 中央キュー | ✔ | `src/daemon/watch.ts`（ターミナル/プロファイル非依存） |
 | **凝縮（update）** | キュー → そのリポジトリの `docs/wiki/` **ログ層**（増分append） | 1コマンド | Codex: `$wiki-save` / `$wiki-deep` · Claude/OpenCode: `/wiki-save` / `/wiki-deep` + `src/engine/update.ts` |
 | **統合（consolidate）** | ログ → 概念別**トピック百科** `5_topic/`（in-placeマージ·raw再グラウンディング） | 1コマンド | Codex: `$wiki-save` / `$wiki-deep` · Claude/OpenCode: `/wiki-save` / `/wiki-deep` + `src/engine/consolidate.ts` |
-| **読み込み** | コールドスタート注入 + ターン毎の関連ページポインタ | ✔ | `hooks/sessionstart-inject.sh` · `hooks/userpromptsubmit-inject.sh`（Claude Code; Codex/OpenCodeは `adapters/`） |
+| **読み込み** | コールドスタート注入 + ターン毎のページ抜粋 + 編集時のパス別ルール | ✔ | `hooks/sessionstart-inject.sh` · `hooks/userpromptsubmit-inject.sh` · `hooks/pretooluse-inject.sh`（Claude Code; Codex/OpenCodeは `adapters/`） |
 | **クイズ（人間の記憶）** | wikiの判断層 → **人間のための**日次・忘却曲線の間隔反復クイズ（`6_quiz/` 記録 — インデックス/検索から除外; コールドスタートにdue件数1行） | 1コマンド | Codex: `$wiki-quiz` · Claude/OpenCode: `/wiki-quiz` + `src/engine/quiz.ts`（`quiz-status`·`quiz-next`·`quiz-record`） |
 | **自己治癒** | 構造（orphan·stale·dangling）= 決定的 `lint` / 意味（矛盾·古い主張·概念欠落）= 生成的 `review`（sync時自動 — エンジン管理の周期 `--if-due` 既定7日·範囲限定+キャッシュ）→ ギャップは `gaps` の自己終了キュー（`0_review/gap-queue.md`） | 1コマンド → 自動 | `lint`·`review`·`gaps`（`src/engine/{lint,review,gaps}.ts`） |
 
@@ -237,6 +262,8 @@ MCPサーバー、Docker、外部データベース、ベクトルDB、クラウ
 - 全ページに `type`（`Decision` · `Topic` · `Current State` …）· `status`（`stable` · `draft` · `deprecated`）· `generated: { by, at }` · 脚注ごとに `sources` 項目一つ。リンクは `[[wikilink]]` ではなく相対 markdown リンク
 - フォルダごとに生成される `index.md`。`log.md` は日付グループ・新しい順（`llmwiki log-append` が記録）
 - 既存 wiki の変換は一度だけ、人が判断: `llmwiki okf <repo>`（dry-run）→ `--commit`。適合性の確認は `llmwiki okf --bundle docs/wiki`
+- 外部リーダーでも確認: Google のリファレンスパーサー・ビューア、`W4G1/okf`、`okf-rs`、`okf-studio` がエラー0で開きます（韓国語ファイル名を含む）
+- llmwiki 独自のフィールドは拡張キー `x-llmwiki` 1つにまとめ、他の OKF リーダーは無視し、`llmwiki okf` は保持します
 
 ### 自己治癒フロー（人間は埋めるだけ）
 
@@ -282,7 +309,7 @@ src/           TypeScriptエンジン（Bunランタイム、bun:sqlite内蔵 �
     wire-opencode.ts OpenCodeグローバルプラグイン + /wiki-* + 共有CLI
     list-pending-repos.ts  キューからpendingリポジトリのみ出力（スケジューラ用）
 daemon/        install.sh（launchd/systemd/cron自動検出）+ autoupdate-*.sh（無人の事実パス）
-hooks/         sessionstart-inject.sh（コールドスタート注入）· userpromptsubmit-inject.sh（ターン毎ポインタ注入）
+hooks/         sessionstart-inject.sh（コールドスタート注入）· userpromptsubmit-inject.sh（ターン毎の抜粋注入）· pretooluse-inject.sh（編集時のパス別ルール）
 adapters/      codex/（ネイティブフック hooks.json テンプレート）· opencode/（プラグイン1ファイル）
 skill/         wiki-save（セッション締め）·wiki-deep（deep定期パス）·wiki-doctor（診断・修復）·wiki-ask·wiki-quiz（人間の記憶）（/コマンド）
 examples/      sample-wiki/ — 完成wikiの例（読み取り専用）。エンジンは非インデックス（IGNORE_DIRS）。**コピー禁止** — 実wikiは各プロジェクトの docs/wiki に自動生成。examples/README.md 参照

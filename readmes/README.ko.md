@@ -31,6 +31,30 @@
 한 사람이 한 대의 머신에서 11주간, 본인이 쓰는 언어의 위키로 낸 수치입니다. 이 규모에서 엔진이
 가볍고 정직하게 동작한다는 뜻이지, 팀 단위·다른 코퍼스·답변 품질에 대한 주장은 아닙니다.
 
+## 에이전트가 정말 쓰는가 — 통제 실험
+
+위키를 쓰는 건 쉽고, 코딩 에이전트가 그걸 따르게 만드는 건 어렵습니다. 실제 업무 레포 2개에서
+실제 Claude Code 세션으로 쟀습니다(2026-10-13/14). 한 세션이 대화로 프로젝트 규칙을 정하고 마감하면,
+나중의 새 세션이 그 규칙이 걸린 다른 작업을 받고, 블라인드 채점자가 변경이 규칙을 지켰는지 봅니다.
+
+| 에이전트가 가진 것 | 앞선 결정을 지킨 비율 |
+| --- | --- |
+| 위키 없음 | — (Q&A: 정확도 0.57, 환각 23%) |
+| 위키 (Q&A 질문) | 정확도 0.73–0.78, 환각 4–8% (480회) |
+| 결정이 위키 페이지에만 있음 (코딩 작업) | **0/8** — 코딩 32회에서 에이전트는 위키 페이지를 한 번도 열지 않고 검색도 하지 않음 |
+| 결정을 L0 "유효 규칙" 한 줄로 | **8/8** |
+| 결정은 페이지에만, 편집 시점 + 프롬프트별 발췌로 전달 | **8/8** (발췌만 4/8, 편집 시점 gate만 7/8) |
+
+v0.14.0에서 바뀐 것: 사람이 정한 규칙은 구체적인 한 줄로 L0에 남고, 적용 경로가 태그됩니다
+(`x-llmwiki: { applies_to, rule, recall }`). 프롬프트별 블록은 제목 대신 규칙 본문을 싣고,
+해당 경로 파일을 고치려 하면(Edit 도구든 Bash 쓰기든) 편집 전에 규칙이 에이전트 앞에 놓입니다(Claude Code).
+
+표본은 작습니다(레포 2개, 시나리오 4개, 조건별 8회, 채점 모델 1개). 과제도 뻔한 변경이 규칙을 어기도록
+만들었습니다. 전달 메커니즘이 동작한다는 근거이지, 여러분의 규칙이 얼마나 자주 중요한지에 대한 주장은
+아닙니다. OKF 전환 자체는 답변 정확도를 바꾸지 않았습니다(+0.03, 오차 범위) — 이득은 에이전트에게 닿는 내용에서 나옵니다.
+
+같은 흐름을 새 사용자처럼도 돌렸습니다. 이 릴리즈를 격리된 HOME에 새로 clone해 `./setup.sh` → `llmwiki init` → 세션 → `/wiki-save` → 새 세션 순으로 진행했고, 2/2 시나리오에서 규칙이 지켜졌습니다. 한 번은 편집 시점 gate로, 한 번은 프롬프트별 발췌를 보고 에이전트가 결정 페이지를 직접 열어서였습니다.
+
 ## 사용자가 할 일은 이것뿐
 
 Git, [Bun](https://bun.sh), 코딩 에이전트 하나가 이미 설치되어 있다면 나머지는 clone 한 번과 프롬프트 한 번입니다.
@@ -179,7 +203,7 @@ MCP 서버·Docker·외부 데이터베이스·벡터 DB·클라우드 서비스
 | **캡처** | 모든 세션 transcript → 중앙 큐 | ✔ | `src/daemon/watch.ts` (터미널·프로필 무관) |
 | **업데이트(update)** | 큐 → 그 레포 `docs/wiki/` **로그층**(증분 append) | 1커맨드 | Codex: `$wiki-save` / `$wiki-deep` · Claude·OpenCode: `/wiki-save` / `/wiki-deep` + `src/engine/update.ts` |
 | **통합(consolidate)** | 로그 → 개념별 **주제 백과** `5_topic/`(in-place 병합·raw 재-grounding) | 1커맨드 | Codex: `$wiki-save` / `$wiki-deep` · Claude·OpenCode: `/wiki-save` / `/wiki-deep` + `src/engine/consolidate.ts` |
-| **읽기** | cold-start 주입 + 턴별 관련 페이지 포인터 | ✔ | `hooks/sessionstart-inject.sh` · `hooks/userpromptsubmit-inject.sh` (Claude Code; Codex/OpenCode 는 `adapters/`) |
+| **읽기** | cold-start 주입 + 턴별 페이지 발췌 + 편집 시점 경로 규칙 | ✔ | `hooks/sessionstart-inject.sh` · `hooks/userpromptsubmit-inject.sh` · `hooks/pretooluse-inject.sh` (Claude Code; Codex/OpenCode 는 `adapters/`) |
 | **퀴즈(사람 기억)** | 위키의 판단층 → **사람을 위한** 망각곡선(일 단위) 간격반복 퀴즈 (`6_quiz/` 기록 — 인덱스·검색 제외; cold-start 에 due 카운트 1줄) | 1커맨드 | Codex: `$wiki-quiz` · Claude·OpenCode: `/wiki-quiz` + `src/engine/quiz.ts` (`quiz-status`·`quiz-next`·`quiz-record`) |
 | **자가치유** | 구조(orphan·stale·dangling)=결정적 `lint` / 의미(모순·낡은주장·개념누락)=생성적 `review`(sync 자동 — 주기 게이트 `--if-due` 기본 7일·범위한정+캐시) → 갭은 `gaps` 자가종료 큐(`0_review/gap-queue.md`) | 1커맨드 → 자동 | `lint`·`review`·`gaps` (`src/engine/{lint,review,gaps}.ts`) |
 
@@ -240,6 +264,8 @@ MCP 서버·Docker·외부 데이터베이스·벡터 DB·클라우드 서비스
 - 모든 페이지에 `type`(`Decision` · `Topic` · `Current State` …) · `status`(`stable` · `draft` · `deprecated`) · `generated: { by, at }` · 각주마다 `sources` 항목 하나; 링크는 `[[wikilink]]` 가 아닌 상대 markdown 링크
 - 폴더마다 생성되는 `index.md`; `log.md` 는 날짜 그룹·최신순(`llmwiki log-append` 가 기록)
 - 기존 위키 전환은 한 번, 사람이 결정: `llmwiki okf <repo>`(dry-run) → `--commit`; 적합성 확인은 `llmwiki okf --bundle docs/wiki`
+- 외부 리더로도 확인: Google 레퍼런스 파서·뷰어, `W4G1/okf`, `okf-rs`, `okf-studio`가 오류 0으로 엽니다(한국어 파일명 포함)
+- llmwiki 전용 필드는 확장 키 `x-llmwiki` 하나에 모아 두며, 다른 OKF 리더는 무시하고 `llmwiki okf`는 보존합니다
 
 ### 자가치유 흐름 (사람은 채우기만)
 
@@ -285,7 +311,7 @@ src/           TypeScript 엔진 (Bun 런타임, bun:sqlite 내장 — node_modu
     wire-opencode.ts OpenCode 전역 플러그인 + /wiki-* + 공유 CLI
     list-pending-repos.ts  큐에서 pending 레포만 출력 (스케줄러용)
 daemon/        install.sh (launchd/systemd/cron 자동감지) + autoupdate-*.sh (무인 사실 패스)
-hooks/         sessionstart-inject.sh (cold-start 주입) · userpromptsubmit-inject.sh (턴별 포인터 주입)
+hooks/         sessionstart-inject.sh (cold-start 주입) · userpromptsubmit-inject.sh (턴별 발췌 주입) · pretooluse-inject.sh (편집 시점 경로 규칙)
 adapters/      codex/ (네이티브 훅 hooks.json 템플릿) · opencode/ (플러그인 1파일)
 skill/         wiki-save(세션 마감)·wiki-deep(deep 주기 패스)·wiki-doctor(진단·복구)·wiki-ask·wiki-quiz(사람 기억) (/커맨드)
 examples/      sample-wiki/ — 완성된 위키 예시(읽기 전용). 엔진이 인덱싱 안 함(IGNORE_DIRS). **복사하지 말 것** — 실제 위키는 각 프로젝트 docs/wiki에 자동 생성. examples/README.ko.md 참조

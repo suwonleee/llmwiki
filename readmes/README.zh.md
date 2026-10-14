@@ -31,6 +31,30 @@
 这是一位开发者在一台机器上、用他自己书写的语言的 wiki、历时十一周得到的数字。它说明引擎在这个
 规模下保持轻量与诚实，但不构成对团队协作、其他语料或回答质量的断言。
 
+## 智能体真的会用吗 — 对照实验
+
+写 wiki 很容易，让编码智能体照着做却很难。我们在两个真实工作仓库上用真实的 Claude Code 会话做了测量
+（2026-10-13/14）：一个会话在对话中定下项目规则并收尾，之后一个新会话接到受该规则约束的另一项任务，
+由盲评模型判断改动是否遵守了规则。
+
+| 智能体拥有的 | 遵守先前决定的比例 |
+| --- | --- |
+| 没有 wiki | — （问答：准确率 0.57，幻觉 23%） |
+| 有 wiki（问答题） | 准确率 0.73–0.78，幻觉 4–8%（480 次） |
+| 决定只写在 wiki 页面里（编码任务） | **0/8** — 32 次编码中智能体从未打开 wiki 页面，也没有搜索 |
+| 决定作为 L0「有效规则」中的一行 | **8/8** |
+| 决定只在页面里，通过编辑时 + 每轮摘录送达 | **8/8**（仅摘录 4/8，仅编辑时 gate 7/8） |
+
+v0.14.0 的变化：人定下的规则以具体的一行保留在 L0，并标注所约束的路径
+（`x-llmwiki: { applies_to, rule, recall }`）；每轮注入的内容改为规则正文而不是标题；当智能体要修改受约束的文件时
+（无论用 Edit 工具还是 Bash 写入），规则会在编辑之前摆到它面前（Claude Code）。
+
+样本很小（2 个仓库、4 个场景、每组 8 次、一个评分模型），任务也刻意设计成"直觉上的改法会违反规则"。
+这说明送达机制有效，并不说明你的规则有多常起作用。转换为 OKF 本身没有改变答题准确率（+0.03，在误差范围内）——
+收益来自真正送到智能体面前的内容。
+
+我们还以新用户的方式跑了同样的流程：把本版本全新 clone 到隔离的 HOME 中，依次执行 `./setup.sh` → `llmwiki init` → 会话 → `/wiki-save` → 新会话，2/2 个场景都遵守了规则——一次靠编辑时 gate，一次是智能体看到每轮摘录后自己打开了决定页面。
+
 ## 你需要做的，只有这些
 
 如果已经安装 Git、[Bun](https://bun.sh) 和任意一个编码智能体，剩下的只有一次 clone 和一段提示词。
@@ -171,7 +195,7 @@ cp llmwiki.config.example.toml llmwiki.config.toml   # 英文，注释齐全
 | **捕获** | 每个会话 transcript → 中央队列 | ✔ | `src/daemon/watch.ts`（终端/配置无关） |
 | **凝练（update）** | 队列 → 该仓库 `docs/wiki/` **日志层**（增量 append） | 1 条命令 | Codex: `$wiki-save` / `$wiki-deep` · Claude/OpenCode: `/wiki-save` / `/wiki-deep` + `src/engine/update.ts` |
 | **整合（consolidate）** | 日志 → 按概念的**主题百科** `5_topic/`（原地合并·raw 再接地） | 1 条命令 | Codex: `$wiki-save` / `$wiki-deep` · Claude/OpenCode: `/wiki-save` / `/wiki-deep` + `src/engine/consolidate.ts` |
-| **读取** | 冷启动注入 + 每轮相关页面指针 | ✔ | `hooks/sessionstart-inject.sh` · `hooks/userpromptsubmit-inject.sh`（Claude Code; Codex/OpenCode → `adapters/`） |
+| **读取** | 冷启动注入 + 每轮页面摘录 + 编辑时路径规则 | ✔ | `hooks/sessionstart-inject.sh` · `hooks/userpromptsubmit-inject.sh` · `hooks/pretooluse-inject.sh`（Claude Code; Codex/OpenCode → `adapters/`） |
 | **测验（人的记忆）** | wiki 的判断层 → **给人做的**按天遗忘曲线间隔重复测验（`6_quiz/` 记录 — 永不索引/搜索; 冷启动显示一行到期数） | 1 条命令 | Codex: `$wiki-quiz` · Claude/OpenCode: `/wiki-quiz` + `src/engine/quiz.ts`（`quiz-status`·`quiz-next`·`quiz-record`） |
 | **自愈** | 结构（orphan·stale·dangling）= 确定性 `lint` / 语义（矛盾·过时主张·概念缺失）= 生成式 `review`（sync 时自动 — 引擎节流 `--if-due` 默认 7 天·限定范围+缓存）→ 缺口进入 `gaps` 的自闭队列（`0_review/gap-queue.md`） | 1 条命令 → 自动 | `lint`·`review`·`gaps`（`src/engine/{lint,review,gaps}.ts`） |
 
@@ -232,6 +256,8 @@ cp llmwiki.config.example.toml llmwiki.config.toml   # 英文，注释齐全
 - 每个页面都带 `type`（`Decision` · `Topic` · `Current State` …）· `status`（`stable` · `draft` · `deprecated`）· `generated: { by, at }`，每个脚注对应一条 `sources`；链接使用相对 markdown 链接，而非 `[[wikilink]]`
 - 每个文件夹有生成的 `index.md`；`log.md` 按日期分组、最新在前（由 `llmwiki log-append` 写入）
 - 现有 wiki 只需转换一次，由人决定：`llmwiki okf <repo>`（dry-run）→ `--commit`；用 `llmwiki okf --bundle docs/wiki` 检查一致性
+- 也用外部读取器验证过：Google 参考解析器与查看器、`W4G1/okf`、`okf-rs`、`okf-studio` 打开时 0 错误（包括韩文文件名）
+- llmwiki 自己的字段集中在一个扩展键 `x-llmwiki` 中，其他 OKF 读取器会忽略它，`llmwiki okf` 会保留它
 
 ### 自愈流程（人只负责填）
 
@@ -277,7 +303,7 @@ src/           TypeScript 引擎（Bun 运行时，内置 bun:sqlite — 零 nod
     wire-opencode.ts OpenCode 全局插件 + /wiki-* + 共享 CLI
     list-pending-repos.ts  只输出队列中 pending 的仓库（供调度器）
 daemon/        install.sh（launchd/systemd/cron 自动检测）+ autoupdate-*.sh（无人值守事实通道）
-hooks/         sessionstart-inject.sh（冷启动注入）· userpromptsubmit-inject.sh（每轮指针注入）
+hooks/         sessionstart-inject.sh（冷启动注入）· userpromptsubmit-inject.sh（每轮摘录注入）· pretooluse-inject.sh（编辑时路径规则）
 adapters/      codex/（原生钩子 hooks.json 模板）· opencode/（单文件插件）
 skill/         wiki-save（会话收尾）·wiki-deep（周期深度整理）·wiki-doctor（诊断与修复）·wiki-ask·wiki-quiz（人的记忆）（/命令）
 examples/      sample-wiki/ — 一个完成态 wiki 示例（只读展示）。引擎不索引（IGNORE_DIRS）。**请勿复制** — 真实 wiki 会在各项目 docs/wiki 下自动生成。见 examples/README.md
