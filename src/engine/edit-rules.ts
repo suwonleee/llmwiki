@@ -171,7 +171,9 @@ export function repoRelativePath(root: string, file: string, cwd: string = root)
 const EXPAND_CAP = 200;
 
 /**
- * Shell-command targets (bash-writes.ts) as absolute paths: `~`/`$HOME` expanded, a glob
+ * Shell-command targets (bash-writes.ts) as absolute paths: `~`/`$HOME` and `$PWD` expanded (an
+ * agent writing `cd "$PWD"; python3 - <<EOF … open("$PWD/src/x.py","w")` was measured slipping
+ * past every rule while the literal `$PWD/…` stayed unmatched), a glob
  * (`src/adapters/*.py`) and an existing directory (`find src/adapters | xargs sed -i …`) expanded
  * to the files under it, each capped. Runs only after the command was judged a write.
  */
@@ -190,7 +192,8 @@ export function expandBashTargets(targets: readonly string[], cwd: string): stri
     }
   };
   for (const raw of targets) {
-    const t = home ? raw.replace(/^(?:~|\$HOME)(?=\/|$)/, home) : raw;
+    const h = home ? raw.replace(/^(?:~|\$HOME|\$\{HOME\})(?=\/|$)/, home) : raw;
+    const t = h.replace(/^(?:\$PWD|\$\{PWD\}|\$\(pwd\))(?=\/|$)/, cwd);
     const parts = t.split("/");
     const g = parts.findIndex((p) => /[*?[{]/.test(p));
     if (g >= 0) {

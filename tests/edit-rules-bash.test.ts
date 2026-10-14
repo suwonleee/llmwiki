@@ -107,6 +107,9 @@ describe("path resolution", () => {
     expect(expandBashTargets(["src/adapters"], root)).toContain(join(root, "src", "adapters", "b.py"));
     const home = process.env.HOME ?? "";
     if (home) expect(expandBashTargets(["~/x.py"], root)).toEqual([join(home, "x.py")]);
+    for (const v of ["$PWD", "${PWD}", "$(pwd)"]) {
+      expect(expandBashTargets([`${v}/src/adapters/new.py`], root)).toEqual([join(root, "src", "adapters", "new.py")]);
+    }
   });
 });
 
