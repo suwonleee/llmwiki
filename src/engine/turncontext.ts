@@ -185,21 +185,24 @@ function fit(lines: readonly string[], max: number): string[] {
  * What to show under a pointer: the page's `x-llmwiki` rule verbatim when it declares one (the
  * author's own one-line statement of what to do); else the H2/H3 section sharing the most prompt
  * terms (ties → earlier); with no overlap, the TL;DR/summary section, then the description.
+ * A term in `named` (it names the page — the pointer line already shows that match) counts half:
+ * the section worth quoting is the one that answers the REST of the prompt.
  * Returns unindented lines totalling at most `max` characters once indented. Pure.
  */
 export function pageExcerpt(
   body: string,
-  opts: { rule?: string; description?: string; terms: readonly string[]; max: number; ko?: boolean },
+  opts: { rule?: string; description?: string; terms: readonly string[]; named?: readonly string[]; max: number; ko?: boolean },
 ): string[] {
   if (opts.max < EXCERPT_MIN_CHARS) return [];
   if (opts.rule) return fit([`${opts.ko ? "규칙" : "rule"}: ${opts.rule.replaceAll("→", "->")}`], opts.max);
   const terms = [...new Set(opts.terms.map((t) => t.toLowerCase()))].filter(Boolean);
+  const named = new Set((opts.named ?? []).map((t) => t.toLowerCase()));
   const secs = sections(body);
   let best: Section | null = null;
   let bestHits = 0;
   for (const sec of secs) {
     const text = `${sec.heading}\n${sec.lines.join("\n")}`.toLowerCase();
-    const hits = terms.filter((t) => text.includes(t)).length;
+    const hits = terms.filter((t) => text.includes(t)).reduce((n, t) => n + (named.has(t) ? 1 : 2), 0);
     if (hits > bestHits && sec.lines.length) {
       best = sec;
       bestHits = hits;
@@ -510,6 +513,7 @@ export function buildTurnContext(
         rule: e.rule,
         description: e.page.description,
         terms: [...e.terms].filter((t) => curSet.has(t)),
+        named: [...e.shownIdTerms],
         max: share,
         ko: koRepo,
       });

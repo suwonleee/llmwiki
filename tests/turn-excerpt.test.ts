@@ -68,6 +68,12 @@ describe("pageExcerpt", () => {
     expect(lines).toEqual(["§ What", "- 트랜스크립트 큐는 capture.db 에 쌓인다.", "- launchd 로 상주한다."]);
   });
 
+  test("a term the title already carries counts half — the excerpt answers the rest of the prompt", () => {
+    const body = "## 1. 배경\n\n- Figma 파일이 크다.\n\n## 2. 발견\n\n- fetch_nodes 는 depth 없이 전체 트리를 내려준다.\n";
+    expect(pageExcerpt(body, { terms: ["figma", "fetch_nodes"], max: 500 })[0]).toBe("§ 1. 배경"); // tie → earlier
+    expect(pageExcerpt(body, { terms: ["figma", "fetch_nodes"], named: ["figma"], max: 500 })[0]).toBe("§ 2. 발견");
+  });
+
   test("footnote markers, definitions, evidence lines go; links keep their text; → never survives", () => {
     const text = pageExcerpt(BODY, { terms: ["데몬이"], max: 500 }).join("\n");
     expect(text).toBe("§ Why\n캡처 데몬이 멈추면 큐가 쌓인다. 관련 -> 결정.");
