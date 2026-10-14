@@ -5,7 +5,7 @@
 // allow: SIZE_OK — legacy handlers remain co-located while typed parsing, declarative command/help
 // metadata, and maintenance commands have dedicated boundaries; further extraction stays incremental.
 import { WikiIndex, dedupeByPage } from "./engine/db.ts";
-import { humanUpdateLine, inPluginContext, updateAvailable } from "./engine/update-check.ts";
+import { humanUpdateLine, inPluginContext, stageUpstreamSync, updateAvailable } from "./engine/update-check.ts";
 import { hookEnvelope, type HookEvent } from "./engine/hook-envelope.ts";
 import { today } from "./engine/today.ts";
 import packageJson from "../package.json" with { type: "json" };
@@ -1038,6 +1038,31 @@ function cmdContextAudit(p: Parsed) {
   console.log(formatAudit(repo, auditContext(repo)));
 }
 
+// A diverged fork (llmwiki.updateRemote + llmwiki.updateBase) takes upstream changes as one staged
+// file-level diff. Staging only: the person reviews and commits, then runs setup.
+function cmdSyncUpstream(_p: Parsed) {
+  const r = stageUpstreamSync();
+  if (!r.ok) {
+    console.error(`sync-upstream: ${r.message}`);
+    process.exit(1);
+  }
+  if (r.commits.length === 0) {
+    console.log(ko ? `sync-upstream: 이미 최신 (${r.to?.slice(0, 12)})` : `sync-upstream: already current (${r.to?.slice(0, 12)})`);
+    return;
+  }
+  console.log(
+    ko
+      ? `sync-upstream: ${r.commits.length}커밋 스테이징 (${r.from?.slice(0, 12)}..${r.to?.slice(0, 12)})`
+      : `sync-upstream: staged ${r.commits.length} commit(s) (${r.from?.slice(0, 12)}..${r.to?.slice(0, 12)})`,
+  );
+  for (const line of r.commits) console.log(`  ${line}`);
+  console.log(
+    ko
+      ? `다음: bun run check → git commit → ./setup.sh  (취소: git restore --staged --worktree . && git config llmwiki.updateBase ${r.from})`
+      : `next: bun run check → git commit → ./setup.sh  (undo: git restore --staged --worktree . && git config llmwiki.updateBase ${r.from})`,
+  );
+}
+
 // optional feature: print the team's git conventions doc (reference/git-strategy.md) if present.
 function cmdGitRules(_p: Parsed) {
   const doc = join(CLONE_ROOT, "reference", "git-strategy.md");
@@ -1794,6 +1819,7 @@ const HANDLERS: Record<CommandName, (p: Parsed) => void | Promise<void>> = {
   overview: MAINTENANCE_HANDLERS.overview,
   gaps: MAINTENANCE_HANDLERS.gaps,
   "git-rules": cmdGitRules,
+  "sync-upstream": cmdSyncUpstream,
   locate: cmdLocate,
   connect: cmdConnect,
   doctor: MAINTENANCE_HANDLERS.doctor,

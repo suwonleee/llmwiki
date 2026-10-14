@@ -48,10 +48,20 @@ interface InstallReceipt {
   recordedAt: string;
 }
 
+// `source` names the tracked ref (`origin/main`, or `<updateRemote>/main` for a fork) and `apply` is
+// the exact command that brings it in — renderers print both instead of assuming `git pull`.
 export type EngineUpdateNotice =
-  | { kind: "update"; localVersion: string; remoteVersion: string; checkedAt: string }
+  | { kind: "update"; localVersion: string; remoteVersion: string; checkedAt: string; source: string; apply: string }
   | { kind: "setup-required"; localVersion: string; remoteVersion: string; checkedAt: string }
-  | { kind: "commits-behind"; localVersion: string; remoteVersion: string; behind: number; checkedAt: string };
+  | {
+      kind: "commits-behind";
+      localVersion: string;
+      remoteVersion: string;
+      behind: number;
+      checkedAt: string;
+      source: string;
+      apply: string;
+    };
 
 function git(args: string[], cwd: string, timeout = 15_000): string | null {
   try {
@@ -82,6 +92,45 @@ export function liveEngineVersion(clone: string = CLONE_ROOT): string | null {
   }
 }
 
+// Where updates come from. A clone that shares history with its upstream pulls from `origin`. A
+// clone whose history DIVERGED from it — a private runtime fork whose origin is its own backup and
+// which takes upstream changes as file-level diffs — names the upstream remote in
+// `git config --local llmwiki.updateRemote` and records the last upstream commit it applied in
+// `llmwiki.updateBase`. Without that, the check fetched the fork's own backup and answered
+// "0 behind" while the real upstream was eight commits ahead (measured 2026-10-06), and
+// `HEAD..<upstream>/main` on unrelated histories counts the upstream's whole past instead.
+// Both values are local config, never repository content, and are validated before use.
+const REMOTE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+export interface UpdateSource {
+  remote: string; // remote whose main is the upstream
+  base: string | null; // last upstream commit applied to a diverged fork; null = shared history
+}
+
+export function updateSource(clone: string = CLONE_ROOT): UpdateSource {
+  const remote = git(["config", "--local", "--get", "llmwiki.updateRemote"], clone, 5_000);
+  const base = git(["config", "--local", "--get", "llmwiki.updateBase"], clone, 5_000);
+  return {
+    remote: remote !== null && REMOTE_RE.test(remote) ? remote : "origin",
+    base: base !== null && GIT_OID_RE.test(base) ? base : null,
+  };
+}
+
+/** Upstream commits this clone has not taken yet, from local refs only. null = unknowable. */
+function behindUpstream(clone: string, src: UpdateSource, timeout: number): number | null {
+  const raw = git(["rev-list", "--count", `${src.base ?? "HEAD"}..${src.remote}/main`], clone, timeout);
+  if (raw === null) return null;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** The one command that brings the upstream in, for this clone's tracking mode. */
+export function applyCommand(clone: string = CLONE_ROOT, src: UpdateSource = updateSource(clone)): string {
+  if (src.base !== null) return `cd ${clone} && bun src/cli.ts sync-upstream`;
+  const pull = src.remote === "origin" ? "git pull" : `git pull ${src.remote} main`;
+  return `cd ${clone} && ${pull} && ./setup.sh`;
+}
+
 function cmpSemver(a: string, b: string): number {
   const pa = a.split(".").map(Number);
   const pb = b.split(".").map(Number);
@@ -101,13 +150,13 @@ export function checkEngineUpdate(clone: string = CLONE_ROOT, stateRoot: string 
   try {
     if (!existsSync(stateRoot)) return null;
     if (git(["rev-parse", "--is-inside-work-tree"], clone) !== "true") return null;
-    const fetch = spawnSync("git", ["fetch", "--quiet", "origin", "main"], { cwd: clone, timeout: 30_000 });
+    const src = updateSource(clone);
+    const fetch = spawnSync("git", ["fetch", "--quiet", src.remote, "main"], { cwd: clone, timeout: 30_000 });
     if (fetch.status !== 0) return null;
     const local = liveEngineVersion(clone);
-    const remote = versionOf(git(["show", "origin/main:package.json"], clone));
+    const remote = versionOf(git(["show", `${src.remote}/main:package.json`], clone));
     if (local === null || remote === null) return null;
-    const behindRaw = git(["rev-list", "--count", "HEAD..origin/main"], clone);
-    const behind = behindRaw === null ? 0 : Number.parseInt(behindRaw, 10) || 0;
+    const behind = behindUpstream(clone, src, 15_000) ?? 0;
     const rec: UpdateCheck = {
       checkedAt: new Date().toISOString(),
       localVersion: local,
@@ -270,8 +319,11 @@ export function updateAvailable(
   const rec = readUpdateCheck(stateRoot);
   const live = liveEngineVersion(clone);
   if (live === null) return null;
+  const src = updateSource(clone);
+  const source = `${src.remote}/main`;
+  const apply = applyCommand(clone, src);
   if (rec !== null && cmpSemver(rec.remoteVersion, live) > 0) {
-    return { kind: "update", localVersion: live, remoteVersion: rec.remoteVersion, checkedAt: rec.checkedAt };
+    return { kind: "update", localVersion: live, remoteVersion: rec.remoteVersion, checkedAt: rec.checkedAt, source, apply };
   }
   if (!installReceiptMatches(clone, stateRoot)) {
     return {
@@ -289,7 +341,7 @@ export function updateAvailable(
   //
   // Lowest priority on purpose — it speaks only when the version says nothing and the install is
   // otherwise healthy, so it can never mask the two more actionable notices above.
-  const behind = behindOriginNow(clone);
+  const behind = behindOriginNow(clone, src);
   if (rec !== null && behind > 0) {
     return {
       kind: "commits-behind",
@@ -297,6 +349,8 @@ export function updateAvailable(
       remoteVersion: rec.remoteVersion,
       behind,
       checkedAt: rec.checkedAt,
+      source,
+      apply,
     };
   }
   return null;
@@ -325,17 +379,16 @@ export function humanUpdateLine(
 ): string {
   if (notice === null || opts.pluginContext) return "";
   const clone = opts.clone ?? CLONE_ROOT;
-  const pull = `cd ${clone} && git pull && ./setup.sh`;
   const setup = `cd ${clone} && ./setup.sh`;
   switch (notice.kind) {
     case "update":
       return opts.ko
-        ? `[llmwiki] 엔진 업데이트 있음: v${notice.localVersion} → v${notice.remoteVersion} — 적용: ${pull}`
-        : `[llmwiki] engine update available: v${notice.localVersion} → v${notice.remoteVersion} — apply: ${pull}`;
+        ? `[llmwiki] 엔진 업데이트 있음: v${notice.localVersion} → v${notice.remoteVersion} — 적용: ${notice.apply}`
+        : `[llmwiki] engine update available: v${notice.localVersion} → v${notice.remoteVersion} — apply: ${notice.apply}`;
     case "commits-behind":
       return opts.ko
-        ? `[llmwiki] 엔진이 origin보다 ${notice.behind}커밋 뒤 (버전 번호는 같음) — 적용: ${pull}`
-        : `[llmwiki] engine is ${notice.behind} commit(s) behind origin (same version number) — apply: ${pull}`;
+        ? `[llmwiki] 엔진이 ${notice.source}보다 ${notice.behind}커밋 뒤 (버전 번호는 같음) — 적용: ${notice.apply}`
+        : `[llmwiki] engine is ${notice.behind} commit(s) behind ${notice.source} (same version number) — apply: ${notice.apply}`;
     case "setup-required":
       return opts.ko
         ? `[llmwiki] 마지막 설치 뒤 엔진 파일이 변경됨 — 적용을 마치려면: ${setup}`
@@ -349,7 +402,8 @@ export function inPluginContext(env: NodeJS.ProcessEnv = process.env): boolean {
 }
 
 /**
- * Commits in HEAD..origin/main RIGHT NOW, from local refs only — no network.
+ * Commits in HEAD..origin/main (or updateBase..<updateRemote>/main) RIGHT NOW, from local refs
+ * only — no network.
  *
  * Deliberately not `rec.behind`: that number was measured by the daemon's last daily check, so it
  * survives the pull that resolves it. Reading it here would keep telling someone who just pulled
@@ -360,9 +414,51 @@ export function inPluginContext(env: NodeJS.ProcessEnv = process.env): boolean {
  * 0 on any failure (no origin, no main, detached, git missing): the notice stays quiet rather than
  * guessing. Same local-refs-only rule as context.ts's team `behindUpstream`.
  */
-function behindOriginNow(clone: string): number {
-  const raw = git(["rev-list", "--count", "HEAD..origin/main"], clone, 5_000);
-  if (raw === null) return 0;
-  const n = Number.parseInt(raw, 10);
-  return Number.isFinite(n) && n > 0 ? n : 0;
+function behindOriginNow(clone: string, src: UpdateSource = updateSource(clone)): number {
+  return behindUpstream(clone, src, 5_000) ?? 0;
+}
+
+export interface UpstreamSync {
+  ok: boolean;
+  from: string | null; // updateBase before the run
+  to: string | null; // <updateRemote>/main applied
+  commits: string[]; // `git log --oneline from..to`, newest first
+  message: string; // failure reason, or "" on success
+}
+
+/**
+ * Stage `<updateBase>..<updateRemote>/main` onto a diverged fork as one file-level diff, then move
+ * updateBase to the applied commit. Staging only — the person reviews and commits, then runs setup
+ * (the receipt keys on HEAD, so setup before the commit would be stale again right after it).
+ *
+ * `--3way` makes an overlap with fork-only edits a visible conflict instead of a silent reject;
+ * any failure leaves updateBase where it was, so the same command can simply be re-run.
+ */
+export function stageUpstreamSync(clone: string = CLONE_ROOT): UpstreamSync {
+  const src = updateSource(clone);
+  const fail = (message: string, to: string | null = null): UpstreamSync => ({
+    ok: false,
+    from: src.base,
+    to,
+    commits: [],
+    message,
+  });
+  if (src.base === null) return fail("llmwiki.updateBase is not set — this clone tracks its upstream by history; use git pull");
+  const fetch = spawnSync("git", ["fetch", "--quiet", src.remote, "main"], { cwd: clone, timeout: 60_000 });
+  if (fetch.status !== 0) return fail(`git fetch ${src.remote} main failed`);
+  const to = git(["rev-parse", "--verify", `${src.remote}/main`], clone);
+  if (to === null || !GIT_OID_RE.test(to)) return fail(`${src.remote}/main is not resolvable`);
+  if (to === src.base) return { ok: true, from: src.base, to, commits: [], message: "" };
+  if (git(["merge-base", "--is-ancestor", src.base, to], clone) === null) {
+    return fail(`updateBase ${src.base.slice(0, 12)} is not an ancestor of ${src.remote}/main`, to);
+  }
+  const diff = spawnSync("git", ["diff", "--binary", src.base, to], { cwd: clone, timeout: 60_000, maxBuffer: 256 * 1024 * 1024 });
+  if (diff.status !== 0) return fail("git diff failed", to);
+  const applied = spawnSync("git", ["apply", "--index", "--3way"], { cwd: clone, input: diff.stdout, encoding: "utf8", timeout: 60_000 });
+  if (applied.status !== 0) return fail(`git apply failed — resolve or reset the index, then re-run:\n${applied.stderr}`.trim(), to);
+  if (git(["config", "--local", "llmwiki.updateBase", to], clone) === null) {
+    return fail("applied, but recording llmwiki.updateBase failed — set it to the applied commit by hand", to);
+  }
+  const log = git(["log", "--oneline", "--no-decorate", `${src.base}..${to}`], clone) ?? "";
+  return { ok: true, from: src.base, to, commits: log.split("\n").filter(Boolean), message: "" };
 }

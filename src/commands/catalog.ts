@@ -42,6 +42,7 @@ export const COMMANDS = [
   { name: "digest", group: "Index and retrieve", usage: "digest [workspace]", summary: "Render a deterministic relationship digest." },
   { name: "context-audit", group: "Index and retrieve", usage: "context-audit [workspace]", summary: "Audit always-injected agent instruction files." },
   { name: "git-rules", group: "Index and retrieve", usage: "git-rules", summary: "Print the optional repository Git conventions." },
+  { name: "sync-upstream", group: "Project setup", usage: "sync-upstream", summary: "Stage upstream engine changes onto a diverged fork clone." },
 
   { name: "update-status", group: "Capture and close out", usage: "update-status <workspace>", summary: "List captured transcripts still awaiting close-out." },
   { name: "save-current", group: "Capture and close out", usage: "save-current <workspace> --session ID", summary: "Select the exact current session for manual close-out." },

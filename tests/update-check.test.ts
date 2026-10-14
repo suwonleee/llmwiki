@@ -17,7 +17,9 @@ import {
   liveEngineVersion,
   readUpdateCheck,
   recordInstallReceipt,
+  stageUpstreamSync,
   updateAvailable,
+  updateSource,
 } from "../src/engine/update-check.ts";
 import { setEffectiveStateRoot } from "../src/engine/state-dir.ts";
 import { buildContext } from "../src/engine/context.ts";
@@ -304,7 +306,13 @@ test("cold start keeps a setup-only reminder after the clone catches up", () => 
 import { humanUpdateLine, inPluginContext } from "../src/engine/update-check.ts";
 
 test("humanUpdateLine renders one actionable sentence per notice kind, in both languages", () => {
-  const base = { checkedAt: "2026-09-03T00:00:00.000Z", localVersion: "0.12.0", remoteVersion: "0.13.0" };
+  const base = {
+    checkedAt: "2026-09-03T00:00:00.000Z",
+    localVersion: "0.12.0",
+    remoteVersion: "0.13.0",
+    source: "origin/main",
+    apply: "cd /x/llmwiki && git pull && ./setup.sh",
+  };
   const clone = "/x/llmwiki";
   const en = (n: any) => humanUpdateLine(n, { ko: false, pluginContext: false, clone });
   const ko = (n: any) => humanUpdateLine(n, { ko: true, pluginContext: false, clone });
@@ -313,7 +321,7 @@ test("humanUpdateLine renders one actionable sentence per notice kind, in both l
     "[llmwiki] engine update available: v0.12.0 → v0.13.0 — apply: cd /x/llmwiki && git pull && ./setup.sh",
   );
   expect(ko({ kind: "update", ...base })).toContain("v0.12.0 → v0.13.0");
-  expect(en({ kind: "commits-behind", ...base, remoteVersion: "0.12.0", behind: 3 })).toContain("3 commit(s) behind");
+  expect(en({ kind: "commits-behind", ...base, remoteVersion: "0.12.0", behind: 3 })).toContain("3 commit(s) behind origin/main");
   expect(en({ kind: "setup-required", ...base, remoteVersion: "0.12.0" })).toBe(
     "[llmwiki] engine files changed since the last install — finish applying them: cd /x/llmwiki && ./setup.sh",
   );
@@ -326,7 +334,7 @@ test("humanUpdateLine renders one actionable sentence per notice kind, in both l
 test("a plugin install is told nothing: every line ends in a clone command it does not have", () => {
   // A plugin updates through the harness's plugin manager and never runs setup.sh, so both
   // "git pull && ./setup.sh" and "./setup.sh" would be wrong instructions there — not merely noisy.
-  const base = { checkedAt: "", localVersion: "0.12.0" };
+  const base = { checkedAt: "", localVersion: "0.12.0", source: "origin/main", apply: "cd /x && git pull && ./setup.sh" };
   expect(humanUpdateLine({ kind: "setup-required", ...base, remoteVersion: "0.12.0" }, { ko: false, pluginContext: true })).toBe("");
   expect(humanUpdateLine({ kind: "update", ...base, remoteVersion: "0.13.0" }, { ko: false, pluginContext: true })).toBe("");
   expect(humanUpdateLine({ kind: "commits-behind", ...base, remoteVersion: "0.12.0", behind: 2 }, { ko: false, pluginContext: true })).toBe("");
@@ -360,4 +368,82 @@ test("a commit confined to in-place files (hooks, engine src, root prose) needs 
   // skill/ is copied into every harness at setup — now the installed copies really are stale.
   commit("skill/wiki-deep.md", "skill");
   expect(updateAvailable(clone, state)).toEqual(expect.objectContaining({ kind: "setup-required" }));
+});
+
+// ---- a diverged fork tracks its upstream by recorded base, not by history -----------------------
+//
+// A private runtime fork's origin is its own backup; the upstream lives under another remote and
+// arrives as file-level diffs. Checking origin answered "0 behind" while the upstream was 8 commits
+// ahead (2026-10-06), and HEAD..upstream/main on unrelated histories counts the upstream's past.
+
+function headOf(repo: string): string {
+  return spawnSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).stdout.trim();
+}
+
+function commitFile(repo: string, name: string, body: string): void {
+  writeFileSync(join(repo, name), body);
+  sh(["git", "add", "-A"], repo);
+  sh(["git", "-c", "commit.gpgsign=false", "commit", "-qm", `add ${name}`], repo);
+}
+
+/** A fork clone: upstream under `public`, origin elsewhere, base = the upstream commit it took. */
+function mkFork(upstream: string): string {
+  const fork = cloneOf(upstream);
+  sh(["git", "remote", "rename", "origin", "public"], fork);
+  sh(["git", "remote", "add", "origin", join(tmp("llmwiki-upd-backup-"), "none")], fork);
+  sh(["git", "config", "--local", "llmwiki.updateRemote", "public"], fork);
+  sh(["git", "config", "--local", "llmwiki.updateBase", headOf(upstream)], fork);
+  commitFile(fork, "fork-only.txt", "runtime data\n");
+  return fork;
+}
+
+test("a fork counts upstream commits from its recorded base and names the sync command", () => {
+  const upstream = mkOrigin("0.1.0");
+  const fork = mkFork(upstream);
+  commitFile(upstream, "feature.txt", "new\n");
+  const state = tmp("llmwiki-upd-state-");
+
+  expect(checkEngineUpdate(fork, state)).toEqual(expect.objectContaining({ remoteVersion: "0.1.0", behind: 1 }));
+  expect(recordInstallReceipt(fork, state)).toBe(true);
+  const notice = updateAvailable(fork, state);
+  expect(notice).toEqual(expect.objectContaining({ kind: "commits-behind", behind: 1, source: "public/main" }));
+  expect(notice?.kind === "commits-behind" && notice.apply).toBe(`cd ${fork} && bun src/cli.ts sync-upstream`);
+});
+
+test("sync-upstream stages the upstream diff, advances the base, and is idempotent", () => {
+  const upstream = mkOrigin("0.1.0");
+  const fork = mkFork(upstream);
+  const before = headOf(upstream);
+  commitFile(upstream, "feature.txt", "new\n");
+
+  const r = stageUpstreamSync(fork);
+  expect(r).toEqual(expect.objectContaining({ ok: true, from: before, to: headOf(upstream) }));
+  expect(r.commits).toHaveLength(1);
+  expect(readFileSync(join(fork, "feature.txt"), "utf8")).toBe("new\n");
+  const staged = spawnSync("git", ["diff", "--cached", "--name-only"], { cwd: fork, encoding: "utf8" }).stdout.trim();
+  expect(staged).toBe("feature.txt");
+  expect(updateSource(fork).base).toBe(headOf(upstream));
+
+  expect(stageUpstreamSync(fork)).toEqual(expect.objectContaining({ ok: true, commits: [] }));
+});
+
+test("a failed apply leaves the recorded base untouched so the command can be re-run", () => {
+  const upstream = mkOrigin("0.1.0");
+  const fork = mkFork(upstream);
+  const before = headOf(upstream);
+  commitFile(upstream, "fork-only.txt", "upstream disagrees\n");
+
+  expect(stageUpstreamSync(fork).ok).toBe(false);
+  expect(updateSource(fork).base).toBe(before);
+});
+
+test("without fork config the source stays origin, and a hostile remote name is ignored", () => {
+  const origin = mkOrigin("0.1.0");
+  const clone = cloneOf(origin);
+  expect(updateSource(clone)).toEqual({ remote: "origin", base: null });
+  expect(stageUpstreamSync(clone).ok).toBe(false);
+
+  sh(["git", "config", "--local", "llmwiki.updateRemote", "--upload-pack=touch pwned"], clone);
+  sh(["git", "config", "--local", "llmwiki.updateBase", "not-a-sha"], clone);
+  expect(updateSource(clone)).toEqual({ remote: "origin", base: null });
 });

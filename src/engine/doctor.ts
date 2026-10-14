@@ -582,14 +582,14 @@ export function reportEngineUpdate(): void {
     const rec = readUpdateCheck();
     const avail = updateAvailable();
     if (avail?.kind === "update") {
-      console.log(`  [update] ⚠️ v${avail.localVersion} → v${avail.remoteVersion} available — cd ${CLONE_ROOT} && git pull && ./setup.sh`);
+      console.log(`  [update] ⚠️ v${avail.localVersion} → v${avail.remoteVersion} available on ${avail.source} — ${avail.apply}`);
       console.log("  [update]    (the engine never updates itself — applying is your act)");
     } else if (avail?.kind === "setup-required") {
       console.log(`  [update] ⚠️ clone files changed after the last successful install — cd ${CLONE_ROOT} && ./setup.sh`);
       console.log("  [update]    copied skills/plugins and the running daemon are current only after setup finishes");
     } else if (avail?.kind === "commits-behind") {
       console.log(
-        `  [update] ⚠️ ${avail.behind} commit(s) behind origin at the same version (v${avail.localVersion}) — cd ${CLONE_ROOT} && git pull && ./setup.sh`,
+        `  [update] ⚠️ ${avail.behind} commit(s) behind ${avail.source} at the same version (v${avail.localVersion}) — ${avail.apply}`,
       );
       console.log("  [update]    a release that ships without a version bump is invisible to the version check alone");
     } else if (rec === null) {

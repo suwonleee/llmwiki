@@ -67,12 +67,12 @@ const makeT = (lang: "ko" | "en", cfg: WikiConfig) =>
     spineHead: "----- [llmwiki synthesis] conceptual spine — most-referenced pages (the wiki's hubs; full view: llmwiki digest) -----",
     pending: (n: number) => `[llmwiki] ${n} un-updated session(s) in this repo`,
     quizDue: (n: number) => `[llmwiki quiz] ${n} review(s) due (day-granular forgetting curve) → reinforce YOUR memory with  /wiki-quiz`,
-    updateAvail: (l: string, r: string) =>
-      `[llmwiki] engine update available: v${l} → v${r} — apply when you choose:  cd ${CLONE_ROOT} && git pull && ./setup.sh  (the engine never updates itself)`,
+    updateAvail: (l: string, r: string, apply: string) =>
+      `[llmwiki] engine update available: v${l} → v${r} — apply when you choose:  ${apply}  (the engine never updates itself)`,
     setupRequired: () =>
       `[llmwiki] engine files changed since the last successful install — finish applying them:  cd ${CLONE_ROOT} && ./setup.sh`,
-    commitsBehind: (n: number) =>
-      `[llmwiki] engine is ${n} commit(s) behind origin (same version number, newer code) — apply when you choose:  cd ${CLONE_ROOT} && git pull && ./setup.sh`,
+    commitsBehind: (n: number, source: string, apply: string) =>
+      `[llmwiki] engine is ${n} commit(s) behind ${source} (same version number, newer code) — apply when you choose:  ${apply}`,
     l0Over: (n: number) =>
       `----- [llmwiki] L0 is ${n} chars — over the ~${L0_BUDGET}-char standard; injected whole (nothing cut). Trim back at /wiki-save -----`,
     gapBacklog: (n: number) =>
@@ -97,12 +97,12 @@ const makeT = (lang: "ko" | "en", cfg: WikiConfig) =>
     spineHead: "----- [llmwiki 종합] 개념 spine — 가장 많이 참조된 페이지(위키 허브; 전체: llmwiki digest) -----",
     pending: (n: number) => `[llmwiki] 이 레포 미update 세션 ${n}건`,
     quizDue: (n: number) => `[llmwiki quiz] 복습 due ${n}건 (망각곡선·일 단위) → /wiki-quiz 로 '사람 기억' 강화`,
-    updateAvail: (l: string, r: string) =>
-      `[llmwiki] 엔진 업데이트 있음: v${l} → v${r} — 원할 때 적용:  cd ${CLONE_ROOT} && git pull && ./setup.sh  (엔진이 스스로를 갱신하는 일은 없다)`,
+    updateAvail: (l: string, r: string, apply: string) =>
+      `[llmwiki] 엔진 업데이트 있음: v${l} → v${r} — 원할 때 적용:  ${apply}  (엔진이 스스로를 갱신하는 일은 없다)`,
     setupRequired: () =>
       `[llmwiki] 마지막 설치 뒤 엔진 파일이 변경됨 — 적용을 마치려면:  cd ${CLONE_ROOT} && ./setup.sh`,
-    commitsBehind: (n: number) =>
-      `[llmwiki] 엔진이 origin보다 ${n}커밋 뒤 (버전 번호는 같고 코드가 더 새로움) — 원할 때 적용:  cd ${CLONE_ROOT} && git pull && ./setup.sh`,
+    commitsBehind: (n: number, source: string, apply: string) =>
+      `[llmwiki] 엔진이 ${source}보다 ${n}커밋 뒤 (버전 번호는 같고 코드가 더 새로움) — 원할 때 적용:  ${apply}`,
     l0Over: (n: number) =>
       `----- [llmwiki] L0 가 ${n}자 — 기준(~${L0_BUDGET}자) 초과; 전량 주입(자르지 않음). /wiki-save 에서 기준 이하로 트리밍 권장 -----`,
     gapBacklog: (n: number) =>
@@ -416,8 +416,8 @@ export function buildContext(repo: string, opts: { affinity?: AffinityFile | nul
   if (hasWiki) {
     try {
       const upd = updateAvailable();
-      if (upd?.kind === "update") L.push(T.updateAvail(upd.localVersion, upd.remoteVersion));
-      else if (upd?.kind === "commits-behind") L.push(T.commitsBehind(upd.behind));
+      if (upd?.kind === "update") L.push(T.updateAvail(upd.localVersion, upd.remoteVersion, upd.apply));
+      else if (upd?.kind === "commits-behind") L.push(T.commitsBehind(upd.behind, upd.source, upd.apply));
       else if (upd?.kind === "setup-required") L.push(T.setupRequired());
     } catch {
       /* freshness is an extra: never let it break cold-start */
