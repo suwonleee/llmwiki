@@ -6,7 +6,7 @@
 // runs. Deprecated pages, malformed rules, unenrolled repositories, engine subprocesses and files
 // outside the repository are all silence.
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -361,5 +361,35 @@ describe("lint", () => {
     const dep = lint(`${ruleFm(["src/**"], "ok", "status: deprecated\nsuperseded_by: 3_decision/x.md")}`);
     expect(dep.map((i) => i.code)).toEqual(["edit-rule-deprecated"]);
     for (const i of [...shape, ...dep]) expect(i.severity).toBe("warn");
+  });
+});
+
+describe("stale marker and cache sweep", () => {
+  test("removes only our own expired markers and caches; keeps fresh ones and foreign names", async () => {
+    const { pruneStale } = await import("../src/engine/edit-rules.ts");
+    const base = mkdtempSync(join(tmpdir(), "llmwiki-sweep-"));
+    dirs.push(base);
+    const prev = process.env.LLMWIKI_EDITRULES_TMPDIR;
+    process.env.LLMWIKI_EDITRULES_TMPDIR = base;
+    try {
+      const old = (Date.now() - 10 * 24 * 3600 * 1000) / 1000;
+      const mk = (name: string, dir: boolean, aged: boolean) => {
+        const p = join(base, name);
+        if (dir) mkdirSync(p);
+        else writeFileSync(p, "{}");
+        if (aged) utimesSync(p, old, old);
+        return p;
+      };
+      mk("llmwiki-editrules-0123456789abcdef", true, true); // expired marker
+      mk("llmwiki-editrules-cache-0123456789abcdef.json", false, true); // expired cache
+      mk("llmwiki-editrules-fedcba9876543210", true, false); // fresh marker
+      mk("llmwiki-editrules-alias-XYZ", true, true); // not our exact name
+      mk("other-file.json", false, true);
+      expect(pruneStale()).toBe(2);
+      expect(readdirSync(base).sort()).toEqual(["llmwiki-editrules-alias-XYZ", "llmwiki-editrules-fedcba9876543210", "other-file.json"]);
+    } finally {
+      if (prev === undefined) delete process.env.LLMWIKI_EDITRULES_TMPDIR;
+      else process.env.LLMWIKI_EDITRULES_TMPDIR = prev;
+    }
   });
 });

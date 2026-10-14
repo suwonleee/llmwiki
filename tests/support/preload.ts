@@ -37,6 +37,13 @@ if (!inherited || !insideTempRoot(inherited)) {
   process.env.LLMWIKI_STATE_DIR = mkdtempSync(join(tmpdir(), "llmwiki-test-state-"));
 }
 
+// Edit-rule caches and per-session markers (engine/edit-rules.ts) default to the OS tmpdir; a run
+// left ~34 of them behind each time. Give the run one directory of its own beside the state root —
+// not inside it: the engine refuses to adopt a state root holding entries it did not create.
+if (!process.env.LLMWIKI_EDITRULES_TMPDIR || !insideTempRoot(process.env.LLMWIKI_EDITRULES_TMPDIR)) {
+  process.env.LLMWIKI_EDITRULES_TMPDIR = mkdtempSync(join(tmpdir(), "llmwiki-test-editrules-"));
+}
+
 type Options = { env?: unknown } | undefined;
 const withLiveEnv = <T extends Options>(opts: T): T =>
   opts && opts.env !== undefined ? opts : ({ ...(opts ?? {}), env: process.env } as T);

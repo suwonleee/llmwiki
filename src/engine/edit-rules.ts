@@ -40,8 +40,10 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
+  rmSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -225,9 +227,14 @@ export function expandBashTargets(targets: readonly string[], cwd: string): stri
 const NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const ownUid = (): number | null => (typeof process.getuid === "function" ? process.getuid() : null);
 
+/** Where the cache and the session markers live: the OS tmpdir, or `LLMWIKI_EDITRULES_TMPDIR`. */
+function tmpBase(): string {
+  return process.env.LLMWIKI_EDITRULES_TMPDIR || tmpdir();
+}
+
 function cachePath(root: string): string {
   const h = createHash("sha1").update(resolve(root)).digest("hex").slice(0, 16);
-  return join(tmpdir(), `llmwiki-editrules-cache-${h}.json`);
+  return join(tmpBase(), `llmwiki-editrules-cache-${h}.json`);
 }
 
 function readPrivate(path: string): string | null {
@@ -372,9 +379,10 @@ export async function rulesFor(root: string, rel: string): Promise<EditRule[]> {
 
 function markerDir(root: string, sessionId: string, agentId: string): string | null {
   const h = createHash("sha1").update(`${sessionId}\n${agentId}\n${resolve(root)}`).digest("hex").slice(0, 16);
-  const dir = join(tmpdir(), `llmwiki-editrules-${h}`);
+  const dir = join(tmpBase(), `llmwiki-editrules-${h}`);
   try {
     mkdirSync(dir, { mode: 0o700 });
+    pruneStale(); // a new session is the moment old ones are certainly over
   } catch {
     /* exists (or cannot be made — checked below) */
   }
@@ -388,6 +396,44 @@ function markerDir(root: string, sessionId: string, agentId: string): string | n
   } catch {
     return null;
   }
+}
+
+// Nothing else ever removes these: one marker directory per session that met a rule, one cache per
+// wiki root (scratch clones included). Measured 2026-10-14: 745 directories and 207 caches in one
+// day of tests and experiments. Sweep on each NEW session: markers past two days (no session's
+// dedupe matters then), caches past a week (a live wiki rewrites its cache on every change). Only
+// our exact names, only our own entries, never through a link.
+const MARKER_TTL_MS = 2 * 24 * 3600 * 1000;
+const CACHE_TTL_MS = 7 * 24 * 3600 * 1000;
+const MARKER_NAME = /^llmwiki-editrules-[0-9a-f]{16}$/;
+const CACHE_NAME = /^llmwiki-editrules-cache-[0-9a-f]{16}\.json$/;
+
+export function pruneStale(now = Date.now()): number {
+  let removed = 0;
+  const base = tmpBase();
+  const uid = ownUid();
+  let names: string[];
+  try {
+    names = readdirSync(base);
+  } catch {
+    return 0;
+  }
+  for (const name of names) {
+    const marker = MARKER_NAME.test(name);
+    if (!marker && !CACHE_NAME.test(name)) continue;
+    const path = join(base, name);
+    try {
+      const st = lstatSync(path);
+      if (st.isSymbolicLink() || (uid !== null && st.uid !== uid)) continue;
+      if (marker ? !st.isDirectory() : !st.isFile()) continue;
+      if (now - st.mtimeMs < (marker ? MARKER_TTL_MS : CACHE_TTL_MS)) continue;
+      rmSync(path, { recursive: marker, force: true });
+      removed += 1;
+    } catch {
+      /* raced or unreadable — the next sweep gets it */
+    }
+  }
+  return removed;
 }
 
 function keyOf(kind: "r" | "p", value: string): string {
