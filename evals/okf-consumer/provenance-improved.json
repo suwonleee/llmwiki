@@ -1,0 +1,37 @@
+{
+  "scope": "Three synthetic provenance joins, not retrieval or model accuracy.",
+  "summary": {
+    "cases": 3,
+    "resolved": 3,
+    "citationIssues": 0
+  },
+  "results": [
+    {
+      "id": "bundle-source",
+      "expected": "policy.md",
+      "targets": [
+        "policy.md"
+      ],
+      "resolved": true,
+      "citationIssues": []
+    },
+    {
+      "id": "relative-source",
+      "expected": "policy.md",
+      "targets": [
+        "policy.md"
+      ],
+      "resolved": true,
+      "citationIssues": []
+    },
+    {
+      "id": "transcript-source",
+      "expected": "session-example.jsonl",
+      "targets": [
+        "session-example.jsonl"
+      ],
+      "resolved": true,
+      "citationIssues": []
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "baseline": {
+    "fixtureSHA256": "d060a547f29ad26593392a088ec330865e4d1dc1a6378a927b4c360d763999fa",
+    "scope": "Synthetic deterministic diagnostic; not model accuracy or external-user productivity evidence.",
+    "summary": {
+      "cases": 16,
+      "retrievalCases": 15,
+      "top1": 10,
+      "top3": 14,
+      "requiredRules": 1,
+      "deliveredRules": 0,
+      "forbiddenRules": 7,
+      "unrelatedDelivered": 0,
+      "fillerFired": 0,
+      "chars": 5478,
+      "meanMs": 29.331049375000013
+    }
+  },
+  "final": {
+    "fixtureSHA256": "d060a547f29ad26593392a088ec330865e4d1dc1a6378a927b4c360d763999fa",
+    "scope": "Synthetic deterministic diagnostic; not model accuracy or external-user productivity evidence.",
+    "summary": {
+      "cases": 16,
+      "retrievalCases": 15,
+      "top1": 11,
+      "top3": 15,
+      "requiredRules": 1,
+      "deliveredRules": 0,
+      "forbiddenRules": 7,
+      "unrelatedDelivered": 0,
+      "fillerFired": 0,
+      "chars": 5783,
+      "meanMs": 23.849731687500007
+    }
+  },
+  "public_port": {
+    "fixtureSHA256": "d060a547f29ad26593392a088ec330865e4d1dc1a6378a927b4c360d763999fa",
+    "scope": "Synthetic deterministic diagnostic; not model accuracy or external-user productivity evidence.",
+    "summary": {
+      "cases": 16,
+      "retrievalCases": 15,
+      "top1": 11,
+      "top3": 15,
+      "requiredRules": 1,
+      "deliveredRules": 0,
+      "forbiddenRules": 7,
+      "unrelatedDelivered": 0,
+      "fillerFired": 0,
+      "chars": 5978,
+      "meanMs": 28.28664325
+    },
+    "note": "Fresh run on the public port of runtime78c3d34; timing and emitted characters are descriptive."
+  }
+}

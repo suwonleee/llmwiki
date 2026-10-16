@@ -1,0 +1,159 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-15",
+  "scope": "Public-safe aggregate of read-only applied-reasoning evaluations on one private frozen project. No private questions, answers, source documents or paths included.",
+  "baseline_commit": "3514f4765eaed10ed49e508da9ca97cd3c8d1770",
+  "candidate_commit": "837fad478d677d383444c4f22191bd7426feedac",
+  "change": "Read relevant sections before using wiki claims; cite only material read; source links alone are not verification. Korean and English cold-start and turn-context wording.",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "medium",
+  "primary": "All required facts, no forbidden assertion, and task requirements satisfied.",
+  "studies": [
+    {
+      "label": "Initial challenge-development",
+      "independent_questions": 7,
+      "repeats_per_arm": 2,
+      "arms": {
+        "baseline": {
+          "scored_runs": 14,
+          "strict_success": 5,
+          "all_facts": 5,
+          "mean_fact_coverage": 0.8482142857142857,
+          "task_valid": 14,
+          "forbidden_runs": 0,
+          "scored_median_seconds": 88.36945649999689,
+          "scored_input_tokens": 4911901,
+          "scored_cached_input_tokens": 4078336,
+          "scored_uncached_input_tokens": 833565
+        },
+        "candidate": {
+          "scored_runs": 14,
+          "strict_success": 7,
+          "all_facts": 7,
+          "mean_fact_coverage": 0.8375,
+          "task_valid": 14,
+          "forbidden_runs": 0,
+          "scored_median_seconds": 84.20691108350002,
+          "scored_input_tokens": 4648453,
+          "scored_cached_input_tokens": 3855104,
+          "scored_uncached_input_tokens": 793349
+        }
+      },
+      "excluded_questions": 1,
+      "exclusion_reason": "One invalid gold contradicted current code; all six original three-arm runs excluded symmetrically.",
+      "paired_cluster_bootstrap": {
+        "fact_coverage_delta": {
+          "mean": -0.010714285714285707,
+          "question_cluster_bootstrap_95_interval": [
+            -0.05357142857142857,
+            0.028571428571428564
+          ],
+          "independent_questions": 7,
+          "exploratory": true
+        },
+        "strict_delta": {
+          "mean": 0.14285714285714285,
+          "question_cluster_bootstrap_95_interval": [
+            0,
+            0.2857142857142857
+          ],
+          "independent_questions": 7,
+          "exploratory": true
+        }
+      },
+      "private_archive_sha256": "e349d184437311e6fcc3540350e4db5c14e13c317b80b3ae8cfab0474d32f090"
+    },
+    {
+      "label": "Fresh authored additional validation",
+      "independent_questions": 8,
+      "repeats_per_arm": 2,
+      "arms": {
+        "baseline": {
+          "scored_runs": 16,
+          "strict_success": 13,
+          "all_facts": 13,
+          "mean_fact_coverage": 0.9765625,
+          "task_valid": 16,
+          "forbidden_runs": 0,
+          "scored_median_seconds": 53.14158966650575,
+          "scored_input_tokens": 2610301,
+          "scored_cached_input_tokens": 1993472,
+          "scored_uncached_input_tokens": 616829
+        },
+        "candidate": {
+          "scored_runs": 16,
+          "strict_success": 14,
+          "all_facts": 14,
+          "mean_fact_coverage": 0.984375,
+          "task_valid": 16,
+          "forbidden_runs": 0,
+          "scored_median_seconds": 55.056455166508385,
+          "scored_input_tokens": 2496227,
+          "scored_cached_input_tokens": 1849600,
+          "scored_uncached_input_tokens": 646627
+        }
+      },
+      "excluded_questions": 0,
+      "exclusion_reason": null,
+      "paired_cluster_bootstrap": {
+        "fact_coverage_delta": {
+          "mean": 0.0078125,
+          "question_cluster_bootstrap_95_interval": [
+            0,
+            0.0234375
+          ],
+          "independent_questions": 8,
+          "exploratory": true
+        },
+        "strict_delta": {
+          "mean": 0.0625,
+          "question_cluster_bootstrap_95_interval": [
+            0,
+            0.1875
+          ],
+          "independent_questions": 8,
+          "exploratory": true
+        }
+      },
+      "private_archive_sha256": "636da0fb3355200e7ea48f3eb567231b1d67dbeb7879b4193e3454e60318c536",
+      "question_outcomes": {
+        "candidate_better": 1,
+        "tied": 7,
+        "baseline_better": 0
+      },
+      "controls": {
+        "runs": 8,
+        "correct": 8,
+        "shell_calls": 0,
+        "unnecessary_turn_context_chars_range": [
+          1384,
+          1494
+        ],
+        "grading": "Separate manual blind review; not two independent graders"
+      },
+      "grading": {
+        "independent_graders": 2,
+        "adjudicated_answers": 1,
+        "agreement_votes": [
+          267,
+          268
+        ]
+      }
+    }
+  ],
+  "interpretation": "Small directional advantage in complete-fact answers; consistent general superiority and efficiency improvements are not established. Do not pool the differently authored suites into a headline accuracy claim.",
+  "remaining_work": [
+    "Irrelevant turn-context injection in self-contained tasks",
+    "Evaluation on additional projects and harnesses",
+    "Actual coding tasks and longitudinal knowledge accumulation"
+  ],
+  "porting": {
+    "files": [
+      "src/engine/context.ts",
+      "src/engine/turncontext.ts"
+    ],
+    "guidance_commit": "837fad478d677d383444c4f22191bd7426feedac",
+    "scope": "Port the bounded guidance diff to the compatible public engine; preserve later changes and language variants. Do not overwrite whole engine files from a differently based checkout.",
+    "privacy": "Keep private questions, raw traces, grades and corpus on the private evaluation storage."
+  }
+}

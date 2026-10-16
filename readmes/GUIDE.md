@@ -125,6 +125,9 @@ Since v0.14.0, new wikis use [Open Knowledge Format v0.2](https://github.com/Goo
 
 ### Self-healing
 
+For source-ID resolution, tag search and their measured limits,
+see [Consuming OKF structure](OKF-CONSUMPTION.md).
+
 The wiki reports what is missing. A person supplies the judgment.
 
 - On `/wiki-save` and `/wiki-deep`:
