@@ -3,9 +3,9 @@
 // sync by triggers in schema.sql.
 import type { Database } from "bun:sqlite";
 
-// Bump whenever a change here would cut chunks differently — db.ts invalidates the existing
-// chunks on mismatch so a wiki never carries two chunkings at once.
-export const CHUNKER_VERSION = "3-three-rate-tokens";
+// Bump whenever boundaries or derived chunk metadata change — db.ts invalidates the existing
+// chunks on mismatch so unchanged files also receive the current chunking and breadcrumbs.
+export const CHUNKER_VERSION = "4-heading-breadcrumb-boundary";
 export const CHUNK_SIZE = 512;
 const CHUNK_OVERLAP = 128;
 export const MIN_CHUNK_TOKENS = 32;
@@ -77,14 +77,6 @@ export function chunkText(
 
   for (const para of paragraphs) {
     const paraTokens = estimateTokens(para);
-    const m = HEADER_RE.exec(para);
-    if (m && m.index === 0) {
-      const level = m[1]!.length;
-      const heading = m[2]!.trim();
-      headerStack = headerStack.filter(([l]) => l < level);
-      headerStack.push([level, heading]);
-    }
-
     if (currentTokens + paraTokens > chunkSize && currentBlocks.length) {
       const text = currentBlocks.join("\n\n");
       if (estimateTokens(text) >= MIN_CHUNK_TOKENS) {
@@ -95,6 +87,16 @@ export function chunkText(
       currentBlocks = overlapBlocks;
       currentTokens = overlapTokens;
       currentStart = charPos - overlapBlocks.reduce((s, b) => s + b.length + 2, 0);
+    }
+
+    // Flush the preceding blocks before this paragraph changes their section context.
+    // A heading that starts the next chunk must never label content emitted without it.
+    const m = HEADER_RE.exec(para);
+    if (m && m.index === 0) {
+      const level = m[1]!.length;
+      const heading = m[2]!.trim();
+      headerStack = headerStack.filter(([l]) => l < level);
+      headerStack.push([level, heading]);
     }
 
     currentBlocks.push(para);

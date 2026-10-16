@@ -12,7 +12,8 @@ import {
   buildLinkIndex,
   decodeHref,
   lookupKey,
-  parseCitationFilename,
+  citationDeclarations,
+  resolveCitation,
   parseWikiLinkTargets,
   resolveMarkdownLink,
   resolveWikiLink,
@@ -627,14 +628,17 @@ export class Linter {
 
   _citations(path: string, content: string, sourceLookup: Record<string, WikiDoc>): LintIssue[] {
     const unresolved: [string, string][] = [];
-    for (const m of content.matchAll(FOOTNOTE_DEF)) {
-      const fid = m[1]!;
-      const raw = m[2]!;
-      const [filename] = parseCitationFilename(raw);
-      if (!this._resolveSource(filename, sourceLookup)) unresolved.push([fid, filename]);
+    const problems: LintIssue[] = [];
+    for (const c of citationDeclarations(content)) {
+      if (c.kind === "external") continue;
+      if (c.kind === "ambiguous" || c.kind === "invalid") {
+        problems.push({ severity: "warn", code: c.kind === "ambiguous" ? "ambiguous-source-id" : "invalid-source-resource", path, message: `source ID \`${c.id}\` has ${c.kind === "ambiguous" ? "multiple declarations" : "no resource"}` });
+        continue;
+      }
+      if (!resolveCitation(c, wikiPageDir({ relative_path: path }), sourceLookup)) unresolved.push([c.id, c.filename]);
     }
     const ignored = this._gitIgnored(unresolved.map(([, filename]) => filename));
-    return unresolved.map(([fid, filename]): LintIssue =>
+    return [...problems, ...unresolved.map(([fid, filename]): LintIssue =>
       ignored.has(filename)
         ? {
             // The cited path is gitignored here (local evidence dumps and the like): it can never
@@ -656,7 +660,7 @@ export class Linter {
             path,
             message: `footnote \`^${fid}\` cites \`${filename}\`, but no matching source exists`,
           },
-    );
+    )];
   }
 
   // Repo-relative cited paths that `git check-ignore` reports, cached per run and batched per page.
@@ -732,11 +736,10 @@ export class Linter {
     // footnote id → the transcript path it cites, when that file is readable on THIS machine
     const localTranscript = new Map<string, string>();
     const footnotes = new Set<string>();
-    for (const m of content.matchAll(FOOTNOTE_DEF)) {
-      const fid = m[1]!;
+    for (const c of citationDeclarations(content)) {
+      const fid = c.id;
       footnotes.add(fid);
-      const [filename] = parseCitationFilename(m[2]!);
-      const src = this._resolveSource(filename, sourceLookup);
+      const src = resolveCitation(c, wikiPageDir({ relative_path: doc.relative_path }), sourceLookup);
       if (!src?.metadata) continue;
       try {
         const p = JSON.parse(String(src.metadata))?.transcript_path;
@@ -933,10 +936,8 @@ export class Linter {
   _graph(doc: WikiDoc, content: string, sourceLookup: Record<string, WikiDoc>): LintIssue[] {
     const path = this._p(doc);
     const expected = new Set<string>();
-    for (const m of content.matchAll(FOOTNOTE_DEF)) {
-      const raw = m[2]!;
-      const [filename] = parseCitationFilename(raw);
-      const t = this._resolveSource(filename, sourceLookup);
+    for (const c of citationDeclarations(content)) {
+      const t = resolveCitation(c, wikiPageDir({ relative_path: doc.relative_path }), sourceLookup);
       if (t && String(t.id) !== String(doc.id)) expected.add(String(t.id));
     }
     if (expected.size === 0) return [];
@@ -1017,7 +1018,6 @@ export class Linter {
   _sourceLookup(docs: WikiDoc[]): Record<string, WikiDoc> {
     const out: Record<string, WikiDoc> = {};
     for (const d of docs) {
-      if (this._isWiki(d)) continue;
       const fn = lookupKey(d.filename);
       if (!(fn in out)) out[fn] = d;
       const stripped = fn.replace(SRC_EXT, "");

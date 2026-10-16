@@ -38,17 +38,21 @@ const IDENTITY_BONUS = 1.5; // a term in the title/filename/description, on top 
 // identity hit (1.5·idf) does not — a recall phrase exists precisely for the prompt that shares
 // nothing else with the page.
 const TRIGGER_BONUS = 3;
+const TAG_BONUS = 1; // explicit topic metadata, below title/description identity weight
 
 export type WikiPage = {
   readonly rel: string; // bundle-relative, e.g. 3_decision/x.md
   readonly title: string;
   readonly description: string;
+  readonly type?: string; // OKF descriptive type; absent/unknown types remain searchable
+  readonly tags?: string; // lower-cased descriptive tags, kept separate from title provenance
   readonly status: string;
   readonly identity: string; // lower-cased title · filename · description, plus a despaced copy
   readonly trigger: string; // lower-cased x-llmwiki rule · recall phrases, plus a despaced copy
   readonly rule: string; // the x-llmwiki rule line as written (whitespace collapsed), or ""
   readonly retired: boolean; // deprecated / superseded / has a successor (okf.ts isRetired)
   readonly stale: boolean; // OKF stale_after has passed
+  readonly snippetBody?: string; // original casing for display; never populated for cold-tier bodies
   readonly body: string; // lower-cased body without evidence-excerpt lines
 };
 
@@ -104,7 +108,8 @@ export function loadWikiPages(root: string, cfg: WikiConfig = getConfig(root), s
       // A cold-tier page is discoverable by its identity only (tiering.ts): its body is archived
       // knowledge the retrieval deliberately does not surface, so tags and keywords stand in for it.
       const cold = fm.tier === "cold";
-      const extra = cold ? ` ${[fm.tags, fm.keywords].flat().filter((x) => typeof x === "string").join(" ")}` : "";
+      const extra = cold ? ` ${[fm.keywords].flat().filter((x) => typeof x === "string").join(" ")}` : "";
+      const tags = [fm.tags].flat().filter((x): x is string => typeof x === "string").join(" ").toLowerCase();
       const id = `${title} ${e.name.replace(/\.md$/, "")} ${description}${extra}`.toLowerCase();
       const { rule, recall } = triggersOf(fm);
       const trig = [rule, ...recall].join(" ").toLowerCase();
@@ -112,12 +117,15 @@ export function loadWikiPages(root: string, cfg: WikiConfig = getConfig(root), s
         rel: child,
         title,
         description,
+        type: typeof fm.type === "string" ? fm.type.trim() : "",
+        tags: tags ? despaced(tags) : "",
         status: String(fm.status ?? ""),
         identity: despaced(id),
         trigger: trig ? despaced(trig) : "",
         rule,
         retired: isRetired(fm),
         stale: isStale(fm),
+        snippetBody: cold ? "" : body.replace(EVIDENCE_LINE, ""),
         body: cold ? "" : body.replace(EVIDENCE_LINE, "").toLowerCase(),
       });
     }
@@ -147,7 +155,7 @@ export function rankPages(pages: readonly WikiPage[], queryTerms: readonly strin
   const terms = [...new Set(queryTerms.map((t) => t.toLowerCase()))].filter(Boolean);
   if (!terms.length || !pages.length) return [];
   const df = new Map<string, number>();
-  for (const t of terms) df.set(t, pages.filter((p) => p.identity.includes(t) || p.trigger.includes(t) || p.body.includes(t)).length);
+  for (const t of terms) df.set(t, pages.filter((p) => p.identity.includes(t) || p.trigger.includes(t) || p.tags?.includes(t) || p.body.includes(t)).length);
   const n = pages.length;
   const out: RankedPage[] = [];
   for (const page of pages) {
@@ -160,17 +168,18 @@ export function rankPages(pages: readonly WikiPage[], queryTerms: readonly strin
     for (const t of terms) {
       const inIdentity = page.identity.includes(t);
       const inTrigger = page.trigger.includes(t);
+      const inTags = page.tags?.includes(t) ?? false;
       const tf = occurrences(page.body, t);
-      if (!inIdentity && !inTrigger && !tf) continue;
+      if (!inIdentity && !inTrigger && !inTags && !tf) continue;
       const idf = Math.log(1 + n / (1 + (df.get(t) ?? 0)));
-      const named = inTrigger ? TRIGGER_BONUS : inIdentity ? IDENTITY_BONUS : 0;
+      const named = inTrigger ? TRIGGER_BONUS : inIdentity ? IDENTITY_BONUS : inTags ? TAG_BONUS : 0;
       relevance += idf * (named + (tf ? (tf * (K1 + 1)) / (tf + K1 * lengthNorm) : 0));
       matched.add(t);
       // The confidence gate keeps its measured rules: identity promotion only at or above the
       // trigram floor (a 2-char word in a title is everyday vocabulary, a measured false positive).
-      // A trigger names the page as much as its title does. The pointer's "titled:" reason stays
+      // A trigger or explicit tag identifies the page. The pointer's "titled:" reason stays
       // title-only — a recall phrase is not what the page is called.
-      const promoted = (inIdentity || inTrigger) && [...t].length >= (/^[\x00-\x7F]+$/.test(t) ? 4 : 3);
+      const promoted = (inIdentity || inTrigger || inTags) && [...t].length >= (/^[\x00-\x7F]+$/.test(t) ? 4 : 3);
       if (promoted) idTerms.add(t);
       if (inIdentity) shownIdTerms.add(t);
       coverage += promoted ? 2 : termWeight(t);
@@ -190,10 +199,10 @@ export function searchWiki(root: string, query: string, limit: number): RankedPa
 export function matchSnippet(page: WikiPage, terms: ReadonlySet<string>, max = 200): string {
   let best = "";
   let bestHits = 0;
-  for (const line of page.body.split("\n")) {
+  for (const line of (page.snippetBody ?? page.body).split("\n")) {
     const l = line.trim();
     if (!l || l.startsWith("[^")) continue;
-    const hits = [...terms].filter((t) => l.includes(t)).length;
+    const hits = [...terms].filter((t) => l.toLowerCase().includes(t.toLowerCase())).length;
     if (hits > bestHits) {
       best = l;
       bestHits = hits;

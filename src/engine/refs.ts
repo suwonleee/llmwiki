@@ -1,6 +1,7 @@
 // Parse citations + cross-references from wiki content, materialize as graph edges.
 // Ported from engine/refs.py.
 // Citations: footnote defs `[^1]: file.pdf, p.3`. Links: markdown `[t](path.md)`.
+import { parseYamlBlock, splitFrontmatter } from "./okf.ts";
 import type { Database } from "bun:sqlite";
 import type { WikiIndex, DocRow } from "./db.ts";
 
@@ -11,7 +12,6 @@ export type WikiDocument = DocRow;
 // `[^s1]:` (used by 5_topic pages) materialize into graph edges too — must match lint's
 // FOOTNOTE_DEF label charset `[^\]]+`, else lint flags citation-graph-mismatch on every
 // page whose footnotes the parser silently skipped.
-const _CITATION_RE = /\[\^[^\]]+\]:\s*(.+)$/gm;
 // Link text may carry escaped brackets (`[\[TRUST\] ECS](x.md)` — a page title with brackets,
 // as `llmwiki okf` writes it); `[^\]]*` alone stops at the escaped `\]` and loses the edge.
 const _WIKI_LINK_RE = /(?<!!)\[(?:[^\]\\]|\\.)*\]\(([^)]+)\)/g;
@@ -35,6 +35,85 @@ const _PAGE_RE = /,\s*p\.?\s*(\d+)\b/;
 const _LINE_SUFFIX_RE = /:(\d+)(?:[-–]\d+)?$/;
 const _MD_LINK_HEAD_RE = /^\[([^\]]+)\]\([^)]*\)(.*)$/;
 
+/** OKF source IDs are stable join keys; the footnote prose is only a display label. */
+export function citationDeclarations(content: string): { id: string; filename: string; page: number | null; declared: boolean; kind: "local" | "external" | "ambiguous" | "invalid" }[] {
+  const { block, body } = splitFrontmatter(content);
+  const fm = block === null ? {} : parseYamlBlock(block).data;
+  const sources = new Map<string, unknown[]>();
+  for (const source of Array.isArray(fm.sources) ? fm.sources : []) {
+    if (!source || typeof source !== "object" || typeof source.id !== "string") continue;
+    sources.set(source.id, [...(sources.get(source.id) ?? []), source.resource]);
+  }
+  const out: ReturnType<typeof citationDeclarations> = [];
+  for (const m of stripCode(body).matchAll(/^\[\^([^\]]+)\]:[ \t]*(.+)$/gm)) {
+    const id = m[1]!;
+    const declared = sources.get(id);
+    if (!declared) {
+      const [filename, page] = parseCitationFilename(m[2]!);
+      out.push({ id, filename, page, declared: false, kind: "local" });
+      continue;
+    }
+    const resource = declared[0];
+    let filename = typeof resource === "string" ? resource.trim() : "";
+    let page: number | null = null;
+    // The converter preserves code line locators in resource, e.g. src/api.ts:123.
+    // Normalize that locator from the RESOURCE only; URLs and document citations keep their
+    // original semantics. Never let a descriptive footnote label choose the target or locator.
+    const locator = _LINE_SUFFIX_RE.exec(filename);
+    if (locator) {
+      const prefix = filename.slice(0, locator.index);
+      if (/[./]/.test(prefix) && !prefix.includes(":") && !prefix.startsWith("//") && !_SRC_EXT.test(prefix)) {
+        [filename, page] = parseCitationFilename(filename);
+      }
+    }
+    let kind: "local" | "external" | "ambiguous" | "invalid" = "local";
+    if (declared.length !== 1) kind = "ambiguous";
+    else if (!filename) kind = "invalid";
+    else if (/^[a-z][a-z0-9+.-]*:/i.test(filename) || filename.startsWith("//")) kind = "external";
+    // Scope descriptors are valid provenance, but do not name a dereferenceable artifact.
+    else if (!/[/.]/.test(filename) || (/\s/.test(filename) && !/\.[a-z0-9]+(?:#.*)?$/i.test(filename))) kind = "external";
+    out.push({ id, filename, page, declared: true, kind });
+  }
+  return out;
+}
+
+/** Shared by lint and graph. Declared resources never fall back to a colliding basename. */
+export function resolveCitation<T extends object>(
+  citation: ReturnType<typeof citationDeclarations>[number], pageDir: string, lookup: Readonly<Record<string, T>>,
+): T | undefined {
+  if (citation.kind !== "local") return undefined;
+  const key = lookupKey(citation.filename);
+  if (!citation.declared) return lookup[key] ?? lookup[key.replace(_SRC_EXT, "")];
+  const resource = decodeHref(citation.filename);
+  if (!resource || resource.includes("\\") || /[\x00-\x1f]/.test(resource) || /^[a-z][a-z0-9+.-]*:/i.test(resource) || resource.startsWith("//")) return undefined;
+  // Explicit ./ and ../ are document-relative (§6.2); bare sources paths are bundle-relative (§5.1).
+  const parts = resource.startsWith("./") || resource.startsWith("../") ? pageDir.split("/").filter(Boolean) : [];
+  for (const part of resource.split("/")) {
+    if (part === "..") { if (!parts.length) return undefined; parts.pop(); }
+    else if (part && part !== ".") parts.push(part);
+  }
+  const path = lookupKey(parts.join("/"));
+  const docs = [...new Set(Object.values(lookup))];
+  const rel = (d: T) => String((d as { relative_path?: unknown }).relative_path ?? "");
+  const hits = docs.filter((d) => lookupKey(rel(d).replace(/^docs\/wiki\//, "")) === path && rel(d).startsWith("docs/wiki/"));
+  if (hits.length === 1) return hits[0];
+  // Converter-produced provenance can refer to repository code. Exact path only, after bundle
+  // resolution; do not reinterpret explicit bundle-absolute or document-relative paths here.
+  if (!resource.startsWith("/") && !resource.startsWith(".")) {
+    const repoHits = docs.filter((d) => lookupKey(rel(d)) === path);
+    if (repoHits.length === 1) return repoHits[0];
+  }
+  // A bare identifier can name an explicitly registered transcript, including imported .md/.txt
+  // sessions. Only autoRegisterCitedTranscripts may invent virtual rows, and only for .jsonl.
+  if (/^[^/\s]+$/.test(resource)) {
+    const transcripts = docs.filter((d) =>
+      (d as { source_kind?: unknown }).source_kind === "transcript" &&
+      lookupKey(String((d as { filename?: unknown }).filename)) === key);
+    if (transcripts.length === 1) return transcripts[0];
+  }
+  return undefined;
+}
+
 // Self-heal transcript provenance: a wiki page cites its session transcript (`[^1]: <id>.jsonl`),
 // but transcripts ROTATE/disappear over time and a fresh index has none registered — so the
 // citation breaks (unresolved-citation). Register every `.jsonl` footnote target that isn't already
@@ -50,8 +129,8 @@ export function autoRegisterCitedTranscripts(w: WikiIndex): number {
     const existing = new Set(all.map((d) => String(d.filename).toLowerCase()));
     for (const d of all) {
       if (!String(d.relative_path).includes("docs/wiki/")) continue;
-      for (const m of String(d.content || "").matchAll(/^\[\^[^\]]+\]:\s*([^\s/]+\.jsonl)\s*$/gm)) {
-        if (!existing.has(m[1]!.toLowerCase())) wanted.add(m[1]!);
+      for (const c of citationDeclarations(String(d.content || ""))) {
+        if (c.kind === "local" && /^[^\s/:\\]+\.jsonl$/.test(c.filename) && !existing.has(c.filename.toLowerCase())) wanted.add(c.filename);
       }
     }
   } finally {
@@ -293,10 +372,9 @@ export function updateReferences(
   const linkIndex = buildLinkIndex(index.listDocuments(conn));
 
   const edges: [string, string, number | null][] = [];
-  for (const m of content.matchAll(_CITATION_RE)) {
-    const [filename, page] = parseCitationFilename(m[1]!);
-    const key = lookupKey(filename);
-    const target = linkIndex.byName[key] ?? linkIndex.byName[key.replace(_SRC_EXT, "")];
+  for (const citation of citationDeclarations(content)) {
+    const page = citation.page;
+    const target = resolveCitation(citation, wikiRelDir, linkIndex.byName);
     if (target && String(target.id) !== docId) {
       edges.push([String(target.id), "cites", page]);
     }

@@ -183,7 +183,9 @@ describe("setup lifecycle across every harness", () => {
       stderr: "pipe",
     });
     expect(launcher.exitCode).toBe(0);
-  }, 10_000);
+  // Two git clones from a linked worktree plus two all-harness installs can exceed 10s.
+  // This is a correctness check, not a setup latency gate.
+  }, 30_000);
 
   test("updating one harness cannot certify stale copies in another harness", () => {
     const clone = join(scratch, "partial update clone");

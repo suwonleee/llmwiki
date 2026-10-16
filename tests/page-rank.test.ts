@@ -64,3 +64,81 @@ describe("rankPages", () => {
     expect(matchSnippet(hit!.page, hit!.terms)).toBe("토큰 만료 확인 절차.");
   });
 });
+
+
+describe("OKF descriptive type neutrality", () => {
+  const typed = (type: string, body = "cache behavior") => page("cache", body).replace("type: Note", `type: ${type}`);
+
+  test("preserves descriptive and custom types, and tolerates absent types", () => {
+    const root = wiki({
+      "a.md": typed("Decision"), "b.md": typed("Deployment Guide"),
+      "c.md": page("cache", "cache").replace("type: Note\n", ""),
+    });
+    const types = loadWikiPages(root).sort((a, b) => a.rel.localeCompare(b.rel)).map(p => p.type);
+    expect(types).toEqual(["Decision", "Deployment Guide", ""]);
+    expect(searchWiki(root, "cache", 5)).toHaveLength(3);
+  });
+
+  test("changing only type cannot change ranking for causal, decision, or explanation questions", () => {
+    const first = wiki({ "a.md": typed("Topic"), "b.md": typed("Decision"), "c.md": typed("Custom") });
+    const swapped = wiki({ "a.md": typed("Decision"), "b.md": typed("Custom"), "c.md": typed("Topic") });
+    for (const query of [
+      "Why does cache eviction happen?", "Why is cache deployment failing?",
+      "왜 cache 연결이 끊기는가?", "Explain the decision to use cache",
+      "Explain why we chose cache", "How does cache work?",
+      "cache 선택 이유", "cache 구조를 설명해줘", "why cache and how does cache work?",
+    ]) {
+      const ranks = (root: string) => searchWiki(root, query, 5).map(r => ({ rel: r.page.rel, relevance: r.relevance }));
+      expect(ranks(first)).toEqual(ranks(swapped));
+      expect(ranks(first).map(r => r.rel)).toEqual(["a.md", "b.md", "c.md"]);
+    }
+  });
+
+  test("no lexical match stays silent regardless of type", () => {
+    const root = wiki({ "a.md": typed("Decision"), "b.md": typed("Topic") });
+    expect(searchWiki(root, "why zephyr?", 5)).toEqual([]);
+    expect(searchWiki(root, "explain zephyr", 5)).toEqual([]);
+  });
+});
+
+
+describe("OKF descriptive tags", () => {
+  test("warm and cold pages are discoverable by tags without claiming title provenance", () => {
+    const root = wiki({
+      "a.md": page("Caching", "cache policy", "tags: [invalidation]\n"),
+      "b.md": page("Archived policy", "hiddencontent", "tags: [invalidation]\ntier: cold\n"),
+    });
+    const hits = searchWiki(root, "invalidation", 5);
+    expect(hits).toHaveLength(2);
+    for (const hit of hits) {
+      expect(hit.idTerms.has("invalidation")).toBe(true);
+      expect(hit.shownIdTerms.has("invalidation")).toBe(false);
+      expect(hit.coverage).toBe(2);
+    }
+    expect(searchWiki(root, "hiddencontent", 5)).toEqual([]);
+  });
+
+  test("title evidence outweighs a tag and malformed tag shapes add no matches", () => {
+    const root = wiki({
+      "a.md": page("unrelated", "", "tags: [invalidation]\n"),
+      "b.md": page("invalidation", ""),
+      "c.md": page("other", "", "tags: { invalidation: true }\n"),
+    });
+    expect(searchWiki(root, "invalidation", 5).map(r => r.page.rel)).toEqual(["b.md", "a.md"]);
+  });
+});
+
+test("search snippets preserve case-sensitive identifiers and original source text", () => {
+  const source = "Set X-Request-ID with process.env.API_TOKEN; do not rename it.";
+  const root = wiki({ "request.md": page("Request policy", source) });
+  const [hit] = searchWiki(root, "x-request-id api_token", 1);
+  expect(hit).toBeDefined();
+  expect(matchSnippet(hit!.page, hit!.terms)).toBe(source);
+});
+
+test("cold-tier lookup never exposes archived body through original-case snippets", () => {
+  const root = wiki({ "cold.md": page("ArchiveToken", "ArchiveToken secret implementation.", "tier: cold\n") });
+  const [hit] = searchWiki(root, "ArchiveToken", 1);
+  expect(hit).toBeDefined();
+  expect(matchSnippet(hit!.page, hit!.terms)).not.toContain("secret implementation");
+});

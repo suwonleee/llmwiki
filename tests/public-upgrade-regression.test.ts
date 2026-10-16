@@ -236,6 +236,9 @@ describe("public 86e4aa1 derived-state upgrade", () => {
       expect(current.query("SELECT rowid FROM pages_fts WHERE pages_fts MATCH 'engine managed migration'").all()).toHaveLength(1);
       expect(current.query("SELECT value FROM index_build WHERE key='refs-built'").get()).toBeNull();
 
+      // The public chunker predates corrected section breadcrumbs. Derived chunks rebuild once
+      // even when page bytes are unchanged, then ordinary incremental indexing settles.
+      expect(index.indexAll(current)).toEqual([0, 2, 0]);
       expect(index.indexAll(current)).toEqual([0, 0, 0]);
       expect(current.query("SELECT value FROM index_build WHERE key='stat-skip'").get()).toEqual({ value: "1" });
     } finally {

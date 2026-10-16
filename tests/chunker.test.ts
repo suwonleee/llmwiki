@@ -28,6 +28,24 @@ describe("chunkText", () => {
     expect(chunks[0]!.headerBreadcrumb).toContain("Title");
   });
 
+  test("a heading that starts the next chunk does not label the preceding chunk", () => {
+    const firstBlocks = ["# Root", "## Earlier", "alpha ".repeat(26).trim()];
+    const chunkSize = firstBlocks.reduce((sum, block) => sum + estimateTokens(block), 0);
+    for (const [heading, breadcrumb] of [
+      ["# Later", "Later"],
+      ["## Later", "Root > Later"],
+      ["### Later", "Root > Earlier > Later"],
+    ]) {
+      const secondBlocks = [heading!, "beta ".repeat(26).trim()];
+      const chunks = chunkText([...firstBlocks, ...secondBlocks].join("\n\n"), chunkSize, 0);
+      expect(chunks).toHaveLength(2);
+      expect(chunks[0]!.content).toBe(firstBlocks.join("\n\n"));
+      expect(chunks[0]!.headerBreadcrumb).toBe("Root > Earlier");
+      expect(chunks[1]!.content).toBe(secondBlocks.join("\n\n"));
+      expect(chunks[1]!.headerBreadcrumb).toBe(breadcrumb);
+    }
+  });
+
   test("oversized single paragraph split", () => {
     const big = "This is a sentence. ".repeat(800); // ~16000 chars
     expect(big.length).toBeGreaterThan(MAX_CHUNK_CHARS);

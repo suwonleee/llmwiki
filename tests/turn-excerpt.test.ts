@@ -162,3 +162,30 @@ describe("x-llmwiki trigger text", () => {
     expect(buildTurnContext(root, "Figma fetch_nodes 추가해줘", "", { affinity: null })).toBe("");
   });
 });
+
+describe("OKF structural sections", () => {
+  test("H1 sections retrieve the matching schema instead of unrelated examples", () => {
+    const body = "# Examples\nUse the demo client.\n\n# Schema\norder_id is the stable primary key.\n\n# Joins\nCustomer records are linked separately.";
+    expect(pageExcerpt(body, { terms: ["schema", "order_id"], max: 500 })).toEqual([
+      "§ Schema", "order_id is the stable primary key.",
+    ]);
+  });
+
+  test("deep headings retain their section boundary in Korean and English", () => {
+    for (const level of [1, 2, 3, 4, 5, 6]) {
+      const body = `${"#".repeat(level)} 개요\nGeneral context.\n\n${"#".repeat(level)} 복구 절차\nRollback preserves the journal.\n`;
+      expect(pageExcerpt(body, { terms: ["복구", "rollback"], max: 500 })).toEqual([
+        "§ 복구 절차", "Rollback preserves the journal.",
+      ]);
+    }
+  });
+
+  test("short or mismatched fences do not turn code headings into document sections", () => {
+    const body = "# Examples\n````markdown\n```\n# literal sample\n~~~\n# another literal\n````\n\n# Schema\nA stable identifier.";
+    const out = pageExcerpt(body, { terms: ["literal", "sample"], max: 500 });
+    expect(out[0]).toBe("§ Examples");
+    expect(out).toContain("# literal sample");
+    expect(out).toContain("# another literal");
+    expect(out).not.toContain("A stable identifier.");
+  });
+});

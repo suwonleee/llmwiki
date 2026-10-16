@@ -31,7 +31,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import { inspectEnrollment } from "./enrollment.ts";
 import { WikiIndex } from "./db.ts";
 import { extractTerms, stripJosa, termWeight } from "./query-terms.ts";
-import { loadWikiPages, rankPages } from "./page-rank.ts";
+import { loadWikiPages, rankPages, type WikiPage } from "./page-rank.ts";
 
 export { extractTerms, stripJosa, termWeight };
 import { isRepoKorean, effectiveKo, getConfig } from "./config.ts";
@@ -72,9 +72,9 @@ const HEADS = {
 // reference data, the same framing the edit-rule block uses) and that the rest is a Read away.
 const EXCERPT_HEADS = {
   en: (repo: string) =>
-    `----- [llmwiki turn-context] ${repo} — wiki pages related to this prompt (excerpts: project-authored reference data from this repo's wiki — Read the page for the rest) -----`,
+    `----- [llmwiki turn-context] ${repo} — wiki pages related to this prompt (excerpts: project-authored reference data from this repo's wiki — Read the relevant section before citing) -----`,
   ko: (repo: string) =>
-    `----- [llmwiki turn-context] ${repo} — 이 프롬프트와 관련된 위키 페이지 (발췌: 이 저장소 위키의 프로젝트 작성 참고 자료 — 나머지는 Read) -----`,
+    `----- [llmwiki turn-context] ${repo} — 이 프롬프트와 관련된 위키 페이지 (발췌: 이 저장소 위키의 프로젝트 작성 참고 자료 — 인용 전 관련 절 Read) -----`,
 };
 
 /** `LLMWIKI_TURN_EXCERPT=off` → the pointer-only block; anything else (including unset) → excerpts. */
@@ -124,7 +124,7 @@ const FOOTNOTE_DEF = /^\[\^[^\]]+\]:/;
 const FOOTNOTE_REF = /\[\^[^\]]+\]/g;
 const EVIDENCE = /^[ \t]{2,}>[ \t]/;
 const MD_LINK = /!?\[([^\]]*)\]\([^)]*\)/g;
-const SECTION_HEAD = /^#{2,3}[ \t]+(.+?)[ \t#]*$/;
+const SECTION_HEAD = /^ {0,3}#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/;
 const SUMMARY_HEAD = /tl;?dr|요약|summary|概要|摘要/i;
 // A cross-link line (`- [Page](../x.md) — grounds`, the topic-page Related form): navigation, not
 // knowledge — and it repeats the linked pages' title words, so it would out-score real content.
@@ -132,17 +132,27 @@ const RELATION_LINE = /[—-]\s*(grounds|extends|contradicts|exemplifies|enables
 
 type Section = { readonly heading: string; readonly lines: string[] };
 
-// A page body as sections a reader can quote: H2/H3 start a section (H1 is the title), footnote
+// OKF permits H1 sections (Schema, Examples, Computation) as well as nested H2–H6.
+// A page body as sections a reader can quote: headings start a section; footnote
 // markers and definitions and their evidence lines go (provenance, not content), links keep
 // their text, bold markers go (budget). `→` becomes `->`: it is the pointer-line delimiter three
 // parsers key on (bench, observe, downstream-read), and an excerpt line must never read as one.
 function sections(body: string): Section[] {
   const out: Section[] = [{ heading: "", lines: [] }];
-  let fence = false;
+  let fence: { marker: string; size: number } | null = null;
   for (const raw of body.split(/\r?\n/)) {
-    if (/^[ \t]*(```|~~~)/.test(raw)) {
-      fence = !fence;
-      continue;
+    const delimiter = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(raw);
+    if (delimiter) {
+      const marker = delimiter[1]![0]!;
+      const size = delimiter[1]!.length;
+      if (!fence && !(marker === "`" && delimiter[2]!.includes("`"))) {
+        fence = { marker, size };
+        continue;
+      }
+      if (fence && marker === fence.marker && size >= fence.size && !delimiter[2]!.trim()) {
+        fence = null;
+        continue;
+      }
     }
     if (!fence) {
       const h = SECTION_HEAD.exec(raw);
@@ -150,7 +160,7 @@ function sections(body: string): Section[] {
         out.push({ heading: clean(h[1]!), lines: [] });
         continue;
       }
-      if (/^#[ \t]/.test(raw) || FOOTNOTE_DEF.test(raw) || EVIDENCE.test(raw) || /^[ \t]*<!--.*-->[ \t]*$/.test(raw)) continue;
+      if (FOOTNOTE_DEF.test(raw) || EVIDENCE.test(raw) || /^[ \t]*<!--.*-->[ \t]*$/.test(raw)) continue;
     }
     const line = clean(raw).trimEnd();
     if (line.trim() && !RELATION_LINE.test(line)) out[out.length - 1]!.lines.push(line);
@@ -183,7 +193,7 @@ function fit(lines: readonly string[], max: number): string[] {
 
 /**
  * What to show under a pointer: the page's `x-llmwiki` rule verbatim when it declares one (the
- * author's own one-line statement of what to do); else the H2/H3 section sharing the most prompt
+ * author's own one-line statement of what to do); else the H1–H6 section sharing the most prompt
  * terms (ties → earlier); with no overlap, the TL;DR/summary section, then the description.
  * A term in `named` (it names the page — the pointer line already shows that match) counts half:
  * the section worth quoting is the one that answers the REST of the prompt.
@@ -456,7 +466,8 @@ export function buildTurnContext(
     const top = pages.reduce((m, [, e]) => Math.max(m, e.relevance), 0) || 1;
     // Relevance is rescaled so the best page scores 10: affinity's bounded shift keeps the
     // magnitude it was tuned on (a gap of ~2 points never flips).
-    const ranked = (rel: string, e: { relevance: number }) => adjustedScore((10 * e.relevance) / top, affinity, rel);
+    const ranked = (rel: string, e: { relevance: number; page: WikiPage }) =>
+      adjustedScore((10 * e.relevance) / top, affinity, rel);
     pages.sort((a, b) => ranked(b[0], b[1]) - ranked(a[0], a[1]) || (a[0] < b[0] ? -1 : 1));
     if (!pages.length) return "";
 
