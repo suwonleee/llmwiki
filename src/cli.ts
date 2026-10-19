@@ -52,7 +52,7 @@ import { ingest } from "./engine/ingest.ts";
 import * as capture from "./engine/capture.ts";
 import * as consolidate from "./engine/consolidate.ts";
 import * as related from "./engine/related.ts";
-import { reconcileReflected } from "./engine/reconcile.ts";
+import { recordReflection, reconcileReflected, type ReflectionReceipt } from "./engine/reconcile.ts";
 import * as quiz from "./engine/quiz.ts";
 import { runBench, writeResults } from "./engine/bench.ts";
 import { runScaleSuite } from "./engine/bench-scale.ts";
@@ -72,7 +72,14 @@ import {
   scanCodexReads,
   scanOpenCodeReads,
 } from "./engine/observe.ts";
+import { freshnessSnapshot, acknowledgeFreshness, type FreshnessSnapshot } from "./engine/source-freshness.ts";
+import { buildLongitudinalReport, type LongitudinalPlan, type TaskReceipt } from "./engine/longitudinal.ts";
+import { checkFeedback, loadFeedbackInput, recordFeedback } from "./engine/work-feedback.ts";
 import { refreshAffinity } from "./engine/affinity.ts";
+import { resetAffinityCache } from "./engine/affinity.ts";
+import { injectedPages, recordInjectedFeedback, recheckQueue, resolveRecheck } from "./engine/injected-feedback.ts";
+import { prepareSessionReview, importSessionReview } from "./engine/session-review.ts";
+import { recordSaveNudgeEvent } from "./engine/save-nudge.ts";
 import { verifyDistillFiles } from "./engine/distill.ts";
 import { runArm, loadArm, judgeArms } from "./engine/compare.ts";
 import { CLONE_ROOT } from "./engine/paths.ts";
@@ -470,6 +477,106 @@ function cmdUpdateNext(p: Parsed) {
   console.log(inc.rendered);
 }
 
+function cmdFreshness(p: Parsed) {
+  const ws = resolve(p.positionals[0] ?? die("freshness <workspace> --page PATH | --source FILE required"));
+  try {
+    const source = p.flags["--source"], page = p.flags["--page"];
+    if (typeof source === "string" && !page) {
+      const input = loadFeedbackInput(source) as { snapshot: FreshnessSnapshot; verification: { verifiedBy: string; evidence: string } };
+      console.log(JSON.stringify(acknowledgeFreshness(ws, input.snapshot, input.verification), null, 2));
+    } else if (typeof page === "string" && !source) {
+      console.log(JSON.stringify({ snapshot: freshnessSnapshot(ws, page) }, null, 2));
+    } else die("choose --page PATH to inspect or --source FILE with {snapshot, verification:{verifiedBy,evidence}} to acknowledge");
+  } catch (e) { die(e instanceof Error ? e.message : String(e)); }
+}
+
+function cmdLongitudinal(p: Parsed) {
+  const source = p.flags["--source"];
+  if (typeof source !== "string") die("longitudinal-report --source FILE containing {plan, receipts} required");
+  try {
+    const input = loadFeedbackInput(source) as { plan: LongitudinalPlan; receipts: TaskReceipt[] };
+    console.log(JSON.stringify(buildLongitudinalReport(input.plan, input.receipts), null, 2));
+  } catch (e) { die(e instanceof Error ? e.message : String(e)); }
+}
+
+function cmdReflectionReceipt(p: Parsed) {
+  const ws = p.positionals[0] ?? die("reflection-receipt <workspace> --source FILE required");
+  const source = p.flags["--source"];
+  if (typeof source !== "string") die("reflection-receipt requires --source FILE");
+  try {
+    if (!recordReflection(resolve(ws), loadFeedbackInput(source) as ReflectionReceipt))
+      die("receipt rejected: exact pending source, byte coverage and accepted page hashes must match");
+    console.log("accepted reflection receipt; run reconcile --commit to apply covered bytes");
+  } catch (e) { die(e instanceof Error ? e.message : String(e)); }
+}
+
+function cmdWorkFeedback(p: Parsed) {
+  const ws = p.positionals[0] ?? die("work-feedback <workspace> --source FILE | --check required");
+  try {
+    if (p.flags["--check"]) {
+      if (p.flags["--source"]) die("choose --check or --source, not both");
+      const report = checkFeedback(resolve(ws));
+      console.log(JSON.stringify(report, null, 2));
+      if (report.results.some(r => r.status !== "pass")) process.exitCode = 1;
+    } else {
+      const source = p.flags["--source"];
+      if (typeof source !== "string") die("work-feedback requires --source FILE or --check");
+      console.log(JSON.stringify(recordFeedback(resolve(ws), loadFeedbackInput(source)), null, 2));
+    }
+  } catch (e) { die(e instanceof Error ? e.message : String(e)); }
+}
+
+function cmdInjected(p: Parsed) {
+  const ws = resolve(p.positionals[0] ?? die("injected <workspace> --session ID required"));
+  const session = p.flags["--session"];
+  if (typeof session !== "string") die("exact --session ID required");
+  try { console.log(JSON.stringify(injectedPages(ws, session), null, 2)); }
+  catch (e) { die(e instanceof Error ? e.message : String(e)); }
+}
+
+function cmdInjectedFeedback(p: Parsed) {
+  const ws = resolve(p.positionals[0] ?? die("injected-feedback <workspace> --source FILE required"));
+  const source = p.flags["--source"];
+  if (typeof source !== "string") die("JSON {session,judgments:[{page,sha256,channel,outcome:used|irrelevant|wrong|unknown,evidence}]} required");
+  try {
+    const result = recordInjectedFeedback(ws, loadFeedbackInput(source));
+    resetAffinityCache();
+    console.log(JSON.stringify(result, null, 2));
+  } catch (e) { die(e instanceof Error ? e.message : String(e)); }
+}
+
+function cmdRecheck(p: Parsed) {
+  const ws = resolve(p.positionals[0] ?? die("recheck <workspace> [--source FILE] required"));
+  const source = p.flags["--source"];
+  try {
+    if (typeof source === "string") console.log(JSON.stringify(resolveRecheck(ws, loadFeedbackInput(source)), null, 2));
+    else console.log(JSON.stringify({ owner: "llm", items: recheckQueue(ws) }, null, 2));
+  } catch (e) { die(e instanceof Error ? e.message : String(e)); }
+}
+
+function cmdSaveEvent(p: Parsed) {
+  const ws = resolve(p.positionals[0] ?? die("save-event <workspace> --session ID --event completed|declined required"));
+  const session = p.flags["--session"], event = p.flags["--event"];
+  if (!isEnrolled(ws)) die("repository not enrolled");
+  if (typeof session !== "string" || !["completed", "declined"].includes(String(event))) die("exact session and completed|declined event required");
+  if (!recordSaveNudgeEvent(ws, session, event as "completed" | "declined")) die("save event could not be recorded");
+  console.log(JSON.stringify({ session, event }));
+}
+
+function cmdReviewInput(p: Parsed) {
+  const ws = resolve(p.positionals[0] ?? die("review-input <workspace> required"));
+  try { console.log(JSON.stringify(prepareSessionReview(ws), null, 2)); }
+  catch (e) { die(e instanceof Error ? e.message : String(e)); }
+}
+
+function cmdReviewImport(p: Parsed) {
+  const ws = resolve(p.positionals[0] ?? die("review-import <workspace> --source FILE required"));
+  const source = p.flags["--source"];
+  if (typeof source !== "string") die("JSON {snapshot:<review-input output>,report:<Markdown with ## Missing concepts and ## Next questions>} required");
+  try { console.log(JSON.stringify(importSessionReview(ws, loadFeedbackInput(source)), null, 2)); }
+  catch (e) { die(e instanceof Error ? e.message : String(e)); }
+}
+
 function cmdUpdateDone(p: Parsed) {
   const ws = p.positionals[0] ?? die("update-done <workspace> <transcript> <offset> required");
   const transcript = p.positionals[1] ?? die("update-done <workspace> <transcript> <offset> required");
@@ -857,6 +964,10 @@ function cmdStatus(p: Parsed) {
   // An inheriting worktree has no marker of its own; naming that absent path reads as a claim.
   if (st.inheritedFrom) console.log(`  inherited from: ${st.inheritedFrom}`);
   else if (st.markerPath) console.log(`  marker: ${st.markerPath}`);
+  if (p.flags["--details"] && st.enabled) {
+    const root = wikiRootFor(resolve(ws), st.worktree);
+    console.log(buildContext(root, { statusBudget: Number.POSITIVE_INFINITY }));
+  }
 }
 
 // One post-install receipt for the only state a person should care about: is the machine wiring
@@ -1824,6 +1935,16 @@ const HANDLERS: Record<CommandName, (p: Parsed) => void | Promise<void>> = {
   search: cmdSearch,
   "update-status": cmdUpdateStatus,
   "save-current": cmdSaveCurrent,
+  "work-feedback": cmdWorkFeedback,
+  injected: cmdInjected,
+  "injected-feedback": cmdInjectedFeedback,
+  recheck: cmdRecheck,
+  "save-event": cmdSaveEvent,
+  "review-input": cmdReviewInput,
+  "review-import": cmdReviewImport,
+  "reflection-receipt": cmdReflectionReceipt,
+  freshness: cmdFreshness,
+  "longitudinal-report": cmdLongitudinal,
   "update-next": cmdUpdateNext,
   related: cmdRelated,
   "update-done": cmdUpdateDone,

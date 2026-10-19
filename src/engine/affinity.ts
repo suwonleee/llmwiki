@@ -40,6 +40,7 @@
 //
 // Missing, corrupt or stale data means exactly today's behavior.
 import { basename } from "node:path";
+import { createHash } from "node:crypto";
 import {
   answeringRead,
   claudeLedgerReads,
@@ -59,7 +60,8 @@ import {
   resolveProjectStateLocation,
   writeProjectStateQuietly,
 } from "./project-state.ts";
-import { repoFileMtime } from "./repo-write.ts";
+import { repoFileMtime, readRepoFileBytes } from "./repo-write.ts";
+import { reportedWrongPages } from "./reported-wrong.ts";
 
 export const AFFINITY_VERSION = 2;
 const AFFINITY_FILE = ["observe", "affinity.json"] as const;
@@ -130,6 +132,7 @@ export interface ChannelAffinity {
   sessions: number; // distinct OBSERVED sessions that were pointed at this page
   opened: number; // of those, sessions in which a read of the page answered the pointer
   days: number; // distinct UTC days those sessions' pointers fell on
+  signal?: "feedback"; // explicit used/irrelevant judgments, never inferred from a missing read
 }
 
 export type PageAffinity = Partial<Record<Channel, ChannelAffinity>>;
@@ -330,8 +333,11 @@ export interface AffinityRefreshOutcome {
  * so the next daily pass retries it. Harness stores are discovered once, lazily, and only when some
  * project is actually due.
  */
-export function refreshDueAffinity(now = Date.now(), sourcesFor: () => ReadSources = discoverReadSources): AffinityRefreshOutcome {
+export function refreshDueAffinity(now = Date.now(), sourcesFor?: () => ReadSources): AffinityRefreshOutcome {
   const out: AffinityRefreshOutcome = { refreshed: 0, failed: [] };
+  // Automatic transcript consumption is disabled. Explicit injected-feedback writes its own
+  // aggregate during /wiki-save; legacy read scans remain available only to explicit callers.
+  if (!sourcesFor) return out;
   let src: ReadSources | null = null;
   for (const entry of listProjectStates()) {
     const worktree = entry.worktree;
@@ -393,9 +399,28 @@ export function loadAffinity(root: string, now = Date.now()): AffinityFile | nul
     if (resolveProjectStateLocation(root)?.central !== true) throw new Error("no engine-held state");
     aff = parseAffinity(readProjectState(root, AFFINITY_FILE.join("/"), AFFINITY_READ_MAX_BYTES));
     if (aff && (now - aff.generatedAt > AFFINITY_MAX_AGE_MS || aff.generatedAt - now > DAY_MS)) aff = null;
+    if (projectStateIsRegularFile(root, "observe", "usage-affinity.json")) {
+      const usage = JSON.parse(readProjectState(root, "observe/usage-affinity.json", AFFINITY_READ_MAX_BYTES) ?? "null");
+      if (usage?.version === 1 && Number.isFinite(usage.generatedAt) && usage.generatedAt <= now &&
+          now - usage.generatedAt <= AFFINITY_WINDOW_DAYS * DAY_MS && usage.pages && typeof usage.pages === "object") {
+        const explicit: Record<string, PageAffinity> = {};
+        for (const [page, raw] of Object.entries(usage.pages).slice(0, AFFINITY_MAX_PAGES)) {
+          const p = raw as { modifiedAt: number; sha256: string; channels: PageAffinity };
+          if (!page.startsWith("docs/wiki/") || repoFileMtime(root, page) !== p?.modifiedAt || !p.channels) continue;
+          const bytes = readRepoFileBytes(root, page);
+          if (bytes === null || createHash("sha256").update(bytes).digest("hex") !== p.sha256) continue;
+          explicit[page] = p.channels;
+        }
+        aff = { version: AFFINITY_VERSION, generatedAt: usage.generatedAt, windowDays: AFFINITY_WINDOW_DAYS,
+          emissions: aff?.emissions ?? 0, observedEmissions: aff?.observedEmissions ?? 0,
+          pages: Object.fromEntries([...new Set([...Object.keys(aff?.pages ?? {}), ...Object.keys(explicit)])].map(page =>
+            [page, { ...aff?.pages[page], ...explicit[page] }])) };
+      }
+    }
   } catch {
     aff = null;
   }
+  if (aff) for (const page of reportedWrongPages(root)) delete aff.pages[page];
   cache.set(root, aff);
   return aff;
 }
@@ -430,7 +455,10 @@ function overtakable(e: ChannelAffinity): boolean {
 /** Per-turn multiplier in [0.9, 1.15] from turn_context evidence only; exactly 1 without enough. */
 export function affinityMultiplier(aff: AffinityFile | null, page: string): number {
   const e = evidence(aff, page, "turn_context");
-  if (demoted(e)) return TURN_DEMOTE_FACTOR;
+  if (demoted(e)) {
+    const excerpts = (process.env.LLMWIKI_TURN_EXCERPT ?? "").trim().toLowerCase() !== "off";
+    return e.signal === "feedback" || !excerpts ? TURN_DEMOTE_FACTOR : 1;
+  }
   if (promotable(e)) return 1 + TURN_BOOST_MAX * Math.min(1, smoothedRate(e));
   return 1;
 }

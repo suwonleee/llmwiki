@@ -23,6 +23,7 @@
 // turn-context silence — structural, language-neutral; no English phrase lists) plus
 // structural health (lint error/warn → lintHealth, dangling links → linkIntegrity).
 // Judgement gates run regression-block first, then adopt.
+import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -31,9 +32,17 @@ import { Linter } from "./lint.ts";
 import { updateReferences, autoRegisterCitedTranscripts } from "./refs.ts";
 import { ingest } from "./ingest.ts";
 import * as consolidate from "./consolidate.ts";
-import { runBench, type BenchReport } from "./bench.ts";
+import { EVALUATION_CONTRACT, runBench, type BenchReport } from "./bench.ts";
+
+export interface ArmProvenance {
+  corpus_sha256: string; // input bytes + relative names, never generated wiki output
+  evaluator_sha256: string; // scorer source must match; retrieval/generation are the treatment
+  engine_sha256: string; // recorded treatment; may differ between arms
+  generation: { topic: boolean; write_model: string; verify_model: string }; // topic model overrides; ingest uses harness defaults
+}
 
 export interface ArmResult {
+  provenance?: ArmProvenance; // legacy reports remain readable, but cannot authorize adoption
   schema_version: 1;
   label: string;
   corpus_files: number;
@@ -57,7 +66,7 @@ export interface Verdict {
 
 // ---- deterministic scoring -----------------------------------------------------------
 
-export function scoreArm(root: string, label: string, buildStats: { corpus: number; failures: number }): ArmResult {
+export function scoreArm(root: string, label: string, buildStats: { corpus: number; failures: number; provenance?: ArmProvenance }): ArmResult {
   const w = new WikiIndex(root);
   w.indexAll();
   autoRegisterCitedTranscripts(w);
@@ -102,6 +111,7 @@ export function scoreArm(root: string, label: string, buildStats: { corpus: numb
 
   return {
     schema_version: 1,
+    provenance: buildStats.provenance,
     label,
     corpus_files: buildStats.corpus,
     build_failures: buildStats.failures,
@@ -274,6 +284,38 @@ export function judgeArms(current: ArmResult, challenger: ArmResult): Verdict {
     );
   }
 
+  // Legacy snapshots are inspectable, but absent input provenance is not evidence of a fair A/B.
+  const validHash = (value: unknown) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+  for (const arm of [current, challenger]) {
+    if (!validHash(arm.provenance?.corpus_sha256) || !validHash(arm.provenance?.engine_sha256) || !validHash(arm.provenance?.evaluator_sha256) ||
+        typeof arm.provenance?.generation?.topic !== "boolean" ||
+        !arm.provenance?.generation?.write_model || !arm.provenance?.generation?.verify_model) {
+      return v("keep", "missing or invalid input provenance; regenerate both arms", null, {}, structural);
+    }
+    if (arm.bench!.evaluation_contract !== EVALUATION_CONTRACT || arm.bench!.search_path !== "page-rank") {
+      return v("keep", "incompatible evaluation contract or search path; regenerate both arms", null, {}, structural);
+    }
+  }
+  if (current.provenance!.evaluator_sha256 !== challenger.provenance!.evaluator_sha256) {
+    return v("keep", "incompatible evaluator source; rescore both arms with the same evaluator", null, {}, structural);
+  }
+  if (current.corpus_files !== challenger.corpus_files ||
+      current.provenance!.corpus_sha256 !== challenger.provenance!.corpus_sha256) {
+    return v("keep", "incompatible input corpus (content or file count differs)", null, {}, structural);
+  }
+  // A better rank cannot compensate for losing the actual context channel.
+  for (const arm of [current, challenger]) {
+    const rows = arm.bench!.per_query.filter((q) => "r@5" in q);
+    if (rows.some((q) => typeof q.tc_hit !== "boolean") ||
+        Math.abs(arm.bench!.tc_pointer_hit - (rows.length ? rows.filter((q) => q.tc_hit).length / rows.length : 0)) > 1e-12) {
+      return v("keep", "incomplete or inconsistent per-query context evidence", null, {}, structural);
+    }
+  }
+  const challengerRows = new Map(challenger.bench.per_query.map((q) => [q.id, q]));
+  if (current.bench.per_query.some((q) => q.tc_hit === true && challengerRows.get(q.id)?.tc_hit !== true)) {
+    return v("keep", "turn-context regression (an expected pointer was lost)", null, {}, structural);
+  }
+
   // per-query deltas (only ids scored on both arms)
   const deltas: Record<string, number> = {};
   const a = queryScores(current.bench);
@@ -370,7 +412,12 @@ export async function runArm(opts: ArmOpts): Promise<{ result: ArmResult; worksp
     failures += results.filter((r) => String(r.verdict ?? "").startsWith("fail")).length;
   }
 
-  const result = scoreArm(ws, opts.label, { corpus: files.length, failures });
+  const result = scoreArm(ws, opts.label, { corpus: files.length, failures, provenance: {
+    corpus_sha256: fingerprintFiles(corpusCopy, files.map((f) => f.split("/").pop()!)),
+    evaluator_sha256: fingerprintFiles(import.meta.dir, ["bench.ts", "compare.ts"]),
+    engine_sha256: fingerprintFiles(import.meta.dir, readdirSync(import.meta.dir).filter((f) => f.endsWith(".ts"))),
+    generation: { topic: opts.topic === true, write_model: opts.writeModel ?? "harness-default", verify_model: opts.verifyModel ?? "harness-default" },
+  } });
   const out = join(process.cwd(), `compare_${opts.label}.json`);
   writeFileSync(out, JSON.stringify(result, null, 2));
   if (!opts.keep) rmSync(ws, { recursive: true, force: true });
@@ -379,4 +426,10 @@ export async function runArm(opts: ArmOpts): Promise<{ result: ArmResult; worksp
 
 export function loadArm(path: string): ArmResult {
   return JSON.parse(readFileSync(resolve(path), "utf-8")) as ArmResult;
+}
+
+// Length-delimited JSON records avoid filename/content boundary collisions; paths are root-relative.
+export function fingerprintFiles(root: string, paths: readonly string[]): string {
+  const records = [...paths].sort().map((path) => [path, createHash("sha256").update(readFileSync(join(root, path))).digest("hex")]);
+  return createHash("sha256").update(JSON.stringify(records)).digest("hex");
 }

@@ -50,7 +50,7 @@ export const INDEX_STORE_POLICY: DatabaseCompactionPolicy = {
 export const DEFAULT_EVICT_AFTER_DAYS = 60;
 /**
  * A vanished worktree's state is collected only after this long without use. Git worktrees are
- * created and deleted within a day, so the
+ * created and deleted within a day (measured: a 95MB index for a same-day Orca worktree), so the
  * window only has to outlast a moved or briefly detached checkout. `LLMWIKI_ORPHAN_GRACE_DAYS`.
  */
 export const DEFAULT_ORPHAN_GRACE_DAYS = 7;

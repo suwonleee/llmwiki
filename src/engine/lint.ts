@@ -24,7 +24,7 @@ import {
 } from "./refs.ts";
 import { parseExcerpts, verifyExcerpt } from "./excerpt.ts";
 import { hasSecret } from "./screen.ts";
-import { L0_BUDGET, L0_LINT_BUDGET } from "./budgets.ts";
+import { L0_BUDGET, L0_LINT_BUDGET, TOPIC_BUDGET } from "./budgets.ts";
 import { effectiveKo, getConfig, type WikiConfig } from "./config.ts";
 import { parseFrontmatter as parseFrontmatterBoundary, type Frontmatter } from "./frontmatter.ts";
 import { checkConcept, checkIndex, checkLog, isRetired, linkTextOnly, parseYamlBlock, splitFrontmatter, type OkfIssue } from "./okf.ts";
@@ -109,10 +109,7 @@ const MAX_PER_GROUP = 40;
 // future merge must re-read all of it. Past this budget we surface advisory debt pointing
 // at the sanctioned fix (re-distill from the page's cited transcripts; see the warn text).
 // Env-overridable; floored so a typo'd env can't spam every topic page.
-export const TOPIC_BUDGET = Math.max(
-  2000,
-  parseInt(process.env.LLMWIKI_TOPIC_BUDGET ?? "10000", 10) || 10000,
-);
+export { TOPIC_BUDGET };
 
 // Body-shape advisory thresholds. Deliberately generous: a page only gets nagged once it is long
 // enough that a human genuinely needs grouping, or once one line has clearly swallowed a list.

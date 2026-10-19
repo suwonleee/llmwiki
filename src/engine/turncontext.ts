@@ -28,10 +28,15 @@ import { closeSync, constants as fsConstants, existsSync, mkdirSync, openSync, r
 import { homedir, tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { observeSaveNudge } from "./save-nudge.ts";
 import { inspectEnrollment } from "./enrollment.ts";
+import { sourceChangedPages } from "./source-freshness.ts";
 import { WikiIndex } from "./db.ts";
-import { extractTerms, stripJosa, termWeight } from "./query-terms.ts";
+import { extractTerms, stripJosa, subFloorTerms, termWeight } from "./query-terms.ts";
+import { commitLines, commitsEnabled, readLog, relevantCommits, type CommitHit } from "./commit-context.ts";
+import { absenceLine, absentNames, isQuestion, writtenNames } from "./absent-subject.ts";
 import { loadWikiPages, rankPages, type WikiPage } from "./page-rank.ts";
+import { reportedWrongPages } from "./reported-wrong.ts";
 
 export { extractTerms, stripJosa, termWeight };
 import { isRepoKorean, effectiveKo, getConfig } from "./config.ts";
@@ -48,11 +53,22 @@ const WHY_MAX_TERMS = 3;
 // Excerpt budgets. 500 per page is roughly one section; 1,600 for the whole block keeps a turn's
 // injection near the L0 standard (a page a session already pays for once). Measured on the
 // author's wiki: header + three pointer lines are ~700 chars, so three excerpts share ~900.
-const EXCERPT_MAX_CHARS = 500;
+// The best page carries most answers (33 of 41 missed facts sat on the top page, dev 2026-10-19):
+// it may take more of the turn than the pages ranked below it.
+const EXCERPT_MAX_FIRST = 700;
+const EXCERPT_MAX_REST = 400;
+const EXCERPT_FIRST_BONUS = 200;
 const TURN_MAX_CHARS = 1600;
+// A commit whose SUBJECT carries three prompt terms is usually the thing being asked about; it is
+// guaranteed this much of the turn. Weaker commits only get what the wiki leaves — an unconditional
+// reserve traded wiki facts for commit facts one for one (dev set, 2026-10-19).
+const COMMIT_RESERVE_CHARS = 350;
+const COMMIT_STRONG_SUBJECT_TERMS = 3;
 // Below this an excerpt is a fragment that reads as a claim it does not finish: pointer only.
 const EXCERPT_MIN_CHARS = 80;
 const EXCERPT_INDENT = "      ";
+// Blocks scoring under half the best block are noise that only spends the turn.
+const RARE_BLOCK_CUT = 0.5;
 const RELEVANCE_FLOOR = 1.5;
 const RELEVANCE_FLOOR_MIN_PAGES = 20;
 // Header language + L0/meta page names resolve per repo at call time (per-repo config).
@@ -76,6 +92,21 @@ const EXCERPT_HEADS = {
   ko: (repo: string) =>
     `----- [llmwiki turn-context] ${repo} — 이 프롬프트와 관련된 위키 페이지 (발췌: 이 저장소 위키의 프로젝트 작성 참고 자료 — 인용 전 관련 절 Read) -----`,
 };
+// Header when the only line is a "no record" answer.
+const RECORD_HEADS = {
+  en: (repo: string) => `----- [llmwiki turn-context] ${repo} — project records on this prompt -----`,
+  ko: (repo: string) => `----- [llmwiki turn-context] ${repo} — 이 프롬프트에 대한 프로젝트 기록 -----`,
+};
+// Header when only commits qualify (an empty or silent wiki).
+const COMMIT_HEADS = {
+  en: (repo: string) => `----- [llmwiki turn-context] ${repo} — commits related to this prompt -----`,
+  ko: (repo: string) => `----- [llmwiki turn-context] ${repo} — 이 프롬프트와 관련된 커밋 -----`,
+};
+// Leads the excerpt of a page whose cited sources changed after it was written.
+const SOURCE_CHANGED_WARN = {
+  en: "⚠ cited source changed after this was written — verify against current code before relying on it",
+  ko: "⚠ 작성 후 인용 소스가 바뀜 — 현재 코드로 확인한 뒤 사용",
+};
 
 /** `LLMWIKI_TURN_EXCERPT=off` → the pointer-only block; anything else (including unset) → excerpts. */
 export function excerptEnabled(): boolean {
@@ -94,7 +125,7 @@ export function displayRoot(root: string): string {
 
 // ---- currency (OKF consumer duty) ---------------------------------------------
 
-export type PageCurrency = { readonly deprecated: boolean; readonly stale: boolean };
+export type PageCurrency = { readonly deprecated: boolean; readonly stale: boolean; readonly sourceChanged?: boolean; readonly reportedWrong?: boolean };
 
 /**
  * Is this page still current? An OKF consumer must not present `deprecated` (llmwiki's
@@ -107,7 +138,9 @@ export function pageCurrency(root: string, rel: string): PageCurrency {
     const text = readRepoFile(root, rel);
     if (text === null) return { deprecated: false, stale: false };
     const fm = parseFrontmatter(text);
-    return { deprecated: isRetired(fm.data), stale: fm.stale };
+    return { deprecated: isRetired(fm.data), stale: fm.stale,
+      ...(sourceChangedPages(root).has(rel) ? { sourceChanged: true } : {}),
+      ...(reportedWrongPages(root).has(rel) ? { reportedWrong: true } : {}) };
   } catch {
     return { deprecated: false, stale: false };
   }
@@ -115,7 +148,9 @@ export function pageCurrency(root: string, rel: string): PageCurrency {
 
 /** ` (deprecated)` / ` (stale)` — the suffix a pointer carries so it is never read as current. */
 export function currencyMark(c: PageCurrency): string {
-  return c.deprecated ? " (deprecated)" : c.stale ? " (stale)" : "";
+  return (c.deprecated ? " (deprecated)" : c.stale ? " (stale)" : "") +
+    (c.sourceChanged ? " (source changed; recheck required)" : "") +
+    (c.reportedWrong ? " (reported wrong; recheck required)" : "");
 }
 
 // ---- excerpt -----------------------------------------------------------------------------
@@ -130,7 +165,8 @@ const SUMMARY_HEAD = /tl;?dr|요약|summary|概要|摘要/i;
 // knowledge — and it repeats the linked pages' title words, so it would out-score real content.
 const RELATION_LINE = /[—-]\s*(grounds|extends|contradicts|exemplifies|enables)\s*$/;
 
-type Section = { readonly heading: string; readonly lines: string[] };
+type ExcerptBlock = { readonly lines: string[]; atomic: boolean };
+type Section = { readonly heading: string; readonly lines: string[]; readonly blocks: ExcerptBlock[] };
 
 // OKF permits H1 sections (Schema, Examples, Computation) as well as nested H2–H6.
 // A page body as sections a reader can quote: headings start a section; footnote
@@ -138,7 +174,9 @@ type Section = { readonly heading: string; readonly lines: string[] };
 // their text, bold markers go (budget). `→` becomes `->`: it is the pointer-line delimiter three
 // parsers key on (bench, observe, downstream-read), and an excerpt line must never read as one.
 function sections(body: string): Section[] {
-  const out: Section[] = [{ heading: "", lines: [] }];
+  const out: Section[] = [{ heading: "", lines: [], blocks: [] }];
+  let block: ExcerptBlock | null = null;
+  let blank = false;
   let fence: { marker: string; size: number } | null = null;
   for (const raw of body.split(/\r?\n/)) {
     const delimiter = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(raw);
@@ -146,24 +184,49 @@ function sections(body: string): Section[] {
       const marker = delimiter[1]![0]!;
       const size = delimiter[1]!.length;
       if (!fence && !(marker === "`" && delimiter[2]!.includes("`"))) {
+        block = null;
         fence = { marker, size };
         continue;
       }
       if (fence && marker === fence.marker && size >= fence.size && !delimiter[2]!.trim()) {
         fence = null;
+        block = null;
         continue;
       }
     }
     if (!fence) {
       const h = SECTION_HEAD.exec(raw);
       if (h) {
-        out.push({ heading: clean(h[1]!), lines: [] });
+        out.push({ heading: clean(h[1]!), lines: [], blocks: [] });
+        block = null;
         continue;
       }
       if (FOOTNOTE_DEF.test(raw) || EVIDENCE.test(raw) || /^[ \t]*<!--.*-->[ \t]*$/.test(raw)) continue;
     }
     const line = clean(raw).trimEnd();
-    if (line.trim() && !RELATION_LINE.test(line)) out[out.length - 1]!.lines.push(line);
+    if (!line.trim()) {
+      // Blank lines inside list items/code do not detach an exception or code tail.
+      if (!fence && !block?.atomic) block = null;
+      blank = true;
+      continue;
+    }
+    if (RELATION_LINE.test(line)) continue;
+    const listItem = /^( {0,3})(?:[-+*]|\d+[.)])[ \t]+/.exec(line);
+    // Nested list items and wrapped continuation lines belong to their parent item.
+    // A fresh unindented paragraph after a blank line is a new block, even after a list.
+    if (!fence && blank && !/^[ \t]/.test(line)) block = null;
+    const parentIndent = block?.lines[0]?.match(/^[ \t]*/)?.[0].length ?? 0;
+    if (!fence && listItem && listItem[1]!.length <= parentIndent) block = null;
+    blank = false;
+    const atomic = !!fence || !!listItem || /^[ \t]/.test(line);
+    const sec = out[out.length - 1]!;
+    if (!block) {
+      block = { lines: [], atomic };
+      sec.blocks.push(block);
+    }
+    block.atomic ||= atomic;
+    block.lines.push(line);
+    sec.lines.push(line);
   }
   return out.filter((s) => s.heading || s.lines.length);
 }
@@ -172,7 +235,7 @@ function clean(s: string): string {
   return s.replace(FOOTNOTE_REF, "").replace(MD_LINK, "$1").replaceAll("**", "").replaceAll("→", "->");
 }
 
-/** Lines that fit `max` characters once indented and newline-joined; the last one cut with `…`. */
+/** Whole lines or sentence prefixes that fit. Never split an identifier, unit or condition. */
 function fit(lines: readonly string[], max: number): string[] {
   const out: string[] = [];
   let used = 0;
@@ -183,12 +246,20 @@ function fit(lines: readonly string[], max: number): string[] {
       used += cost;
       continue;
     }
-    const room = max - used - EXCERPT_INDENT.length - 2;
-    // Cut a line only when a useful part of it fits; otherwise stop at the last whole line.
-    if (room >= 40 || !out.length) out.push(`${line.slice(0, Math.max(room, 1)).trimEnd()}…`);
+    const room = max - used - EXCERPT_INDENT.length - 1;
+    // Sentence segmentation understands abbreviations and decimal points better than a punctuation
+    // regex. Keep only completed sentences; an unfinished final sentence is not a usable claim.
+    let prefix = "";
+    for (const part of new Intl.Segmenter(undefined, { granularity: "sentence" }).segment(line)) {
+      const candidate = (prefix + part.segment).trimEnd();
+      if (candidate.length > room) break;
+      if (!/[.!?。！？]["'”’)]*$/.test(candidate)) break;
+      prefix += part.segment;
+    }
+    if (prefix.trim()) out.push(prefix.trimEnd());
     break;
   }
-  return out;
+  return out.length === 1 && out[0]!.startsWith("§ ") ? [] : out;
 }
 
 /**
@@ -201,13 +272,21 @@ function fit(lines: readonly string[], max: number): string[] {
  */
 export function pageExcerpt(
   body: string,
-  opts: { rule?: string; description?: string; terms: readonly string[]; named?: readonly string[]; max: number; ko?: boolean },
+  opts: { rule?: string; description?: string; terms: readonly string[]; named?: readonly string[]; max: number; ko?: boolean; weights?: ReadonlyMap<string, number> },
 ): string[] {
   if (opts.max < EXCERPT_MIN_CHARS) return [];
-  if (opts.rule) return fit([`${opts.ko ? "규칙" : "rule"}: ${opts.rule.replaceAll("→", "->")}`], opts.max);
+  if (opts.rule) {
+    const rule = `${opts.ko ? "규칙" : "rule"}: ${opts.rule.replaceAll("→", "->")}`;
+    // A rule is atomic: dropping a later exception can reverse its meaning.
+    return EXCERPT_INDENT.length + rule.length + 1 <= opts.max ? [rule] : [];
+  }
   const terms = [...new Set(opts.terms.map((t) => t.toLowerCase()))].filter(Boolean);
   const named = new Set((opts.named ?? []).map((t) => t.toLowerCase()));
   const secs = sections(body);
+  if (opts.weights) {
+    const picked = rarestBlocks(secs, terms, named, opts.weights, opts.max);
+    if (picked.length) return picked;
+  }
   let best: Section | null = null;
   let bestHits = 0;
   for (const sec of secs) {
@@ -225,7 +304,81 @@ export function pageExcerpt(
     best = secs.find((s) => s.lines.length) ?? null;
   }
   if (!best) return [];
-  return fit([...(best.heading ? [`§ ${best.heading}`] : []), ...best.lines.map((l) => l.replace(/\t/g, "  "))], opts.max);
+  const heading = best.heading ? [`§ ${best.heading}`] : [];
+  const normalize = (lines: readonly string[]) => lines.map((l) => l.replace(/\t/g, "  "));
+  const cost = (lines: readonly string[]) => lines.reduce((n, line) => n + EXCERPT_INDENT.length + line.length + 1, 0);
+  const full = [...heading, ...normalize(best.lines)];
+  if (cost(full) <= opts.max) return full;
+
+  // Rank complete blocks inside the winning section: fitting its prefix can otherwise omit
+  // the very passage that earned the page a place. Heading matches cannot discriminate blocks.
+  // Ties keep document order. A list item (including nested exceptions), wrapped paragraph,
+  // or fenced sample is indivisible; do not turn its first line into an unconditional claim.
+  let start = 0;
+  let blockHits = 0;
+  best.blocks.forEach((block, i) => {
+    const text = block.lines.join("\n").toLowerCase();
+    const hits = terms.filter((t) => text.includes(t)).reduce((n, t) => n + (named.has(t) ? 1 : 2), 0);
+    if (hits > blockHits) { start = i; blockHits = hits; }
+  });
+  const result = [...heading];
+  for (const block of best.blocks.slice(start)) {
+    const lines = normalize(block.lines);
+    if (cost([...result, ...lines]) <= opts.max) {
+      result.push(...lines);
+      continue;
+    }
+    // Preserve the legacy section-prefix fallback only when starting at the first block.
+    // Newly selected later passages must fit whole: even a single prose line can place a
+    // qualification after its first sentence. Structural/multi-line blocks are always atomic.
+    if (start === 0 && !block.atomic && lines.length === 1) result.push(...fit(lines, opts.max - cost(result)));
+    break;
+  }
+  return result.length === heading.length ? [] : result;
+}
+
+/**
+ * The page's best blocks by the RARITY of the prompt terms they hold, from any section, in
+ * document order under their headings. One section was the old unit: a question asking for a cause
+ * and its fix found the cause section and lost the fix, and everyday words (결과 · 실행) outvoted the
+ * one rare name the question was about. Blocks stay indivisible; a block that does not fit is skipped
+ * whole, never cut.
+ */
+function rarestBlocks(
+  secs: readonly Section[], terms: readonly string[], named: ReadonlySet<string>, weights: ReadonlyMap<string, number>, max: number,
+): string[] {
+  const w = (t: string) => (weights.get(t) ?? 1) * (named.has(t) ? 0.5 : 1);
+  const score = (text: string) => terms.filter((t) => text.includes(t)).reduce((n, t) => n + w(t), 0);
+  const cands: { si: number; bi: number; s: number }[] = [];
+  secs.forEach((sec, si) => {
+    const head = score(sec.heading.toLowerCase()) / 2; // a matching heading lends its blocks half its weight
+    sec.blocks.forEach((b, bi) => {
+      const s = score(b.lines.join("\n").toLowerCase());
+      if (s > 0) cands.push({ si, bi, s: s + head });
+    });
+  });
+  if (!cands.length) return [];
+  cands.sort((a, b) => b.s - a.s || a.si - b.si || a.bi - b.bi);
+  const lineCost = (l: string) => EXCERPT_INDENT.length + l.length + 1;
+  const blockLines = (si: number, bi: number) => secs[si]!.blocks[bi]!.lines.map((l) => l.replace(/\t/g, "  "));
+  const chosen = new Map<number, Set<number>>();
+  let used = 0;
+  const cut = cands[0]!.s * RARE_BLOCK_CUT;
+  for (const { si, bi, s } of cands) {
+    if (s < cut) break;
+    const heading = secs[si]!.heading && !chosen.has(si) ? lineCost(`§ ${secs[si]!.heading}`) : 0;
+    const add = heading + blockLines(si, bi).reduce((n, l) => n + lineCost(l), 0);
+    if (used + add > max) continue;
+    used += add;
+    if (!chosen.has(si)) chosen.set(si, new Set());
+    chosen.get(si)!.add(bi);
+  }
+  const out: string[] = [];
+  for (const si of [...chosen.keys()].sort((a, b) => a - b)) {
+    if (secs[si]!.heading) out.push(`§ ${secs[si]!.heading}`);
+    for (const bi of [...chosen.get(si)!].sort((a, b) => a - b)) out.push(...blockLines(si, bi));
+  }
+  return out;
 }
 
 // FTS5 query: every term as a quoted phrase (raw prompt text must never reach the MATCH
@@ -375,6 +528,83 @@ export function buildTurnContext(
   sessionId = "",
   opts: { affinity?: AffinityFile | null } = {},
 ): string {
+  // Hook adapters retain their enrollment gate. No transcript reads or project-state writes.
+  // Reserve the reminder before retrieval so it never pushes a turn over the shared cap.
+  const hint = observeSaveNudge(repo, prompt ?? "", sessionId, { ko: isRepoKorean(repo) });
+  const room = TURN_MAX_CHARS - (hint ? hint.length + 1 : 0);
+  const records = recordsTurnContext(repo, prompt, sessionId, opts, room);
+  // An exceptionally long absence-name list may exceed its channel's allowance. Omit that
+  // block whole rather than clipping a factual sentence or an exception inside an excerpt.
+  const bounded = records.length <= room ? records : "";
+  return [bounded, hint].filter(Boolean).join("\n");
+}
+
+function recordsTurnContext(
+  repo: string,
+  prompt: string,
+  sessionId = "",
+  opts: { affinity?: AffinityFile | null } = {},
+  maxChars = TURN_MAX_CHARS,
+): string {
+  const absent = absentEnabled(), commits = commitsEnabled();
+  if (!absent && !commits) return wikiTurnContext(repo, prompt, sessionId, opts, {}, maxChars);
+  const seen: { pages?: WikiPage[] } = {};
+  let wiki = "";
+  try {
+    const terms = extractTerms(prompt ?? "");
+    const ko = isRepoKorean(repo);
+    let log: CommitHit[] | undefined;
+    let hits: CommitHit[] = [];
+    if (commits) {
+      log = readLog(repo);
+      hits = relevantCommits(repo, [...terms, ...subFloorTerms(prompt ?? "", terms)], undefined, log);
+    }
+    // A qualifying commit gets its share up front; left to what the wiki leaves, it got nothing
+    // whenever three excerpts filled the turn.
+    const strong = hits.length > 0 && (hits[0]!.subjectTerms ?? 0) >= COMMIT_STRONG_SUBJECT_TERMS;
+    wiki = wikiTurnContext(repo, prompt, sessionId, opts, seen, strong ? maxChars - COMMIT_RESERVE_CHARS : maxChars);
+    if (absent) {
+      // A question about something this project never mentions gets that fact, not near-miss
+      // pages; an instruction may name what it is about to create, so it keeps the pages.
+      const pages = seen.pages ?? loadWikiPages(repo);
+      const inWiki = (t: string) => pages.some((p) => p.identity.includes(t) || p.trigger.includes(t) || p.body.includes(t));
+      const unknown = writtenNames(prompt ?? "").filter((t) => !inWiki(t.toLowerCase()));
+      if (unknown.length) {
+        log ??= readLog(repo);
+        const names = absentNames(repo, unknown, inWiki, log.map((c) => `${c.subject}\n${c.body}`).join("\n"));
+        if (names.length) {
+          const line = absenceLine(names, ko);
+          if (isQuestion(prompt ?? "")) return [RECORD_HEADS[ko ? "ko" : "en"](displayRoot(repo)), line].join("\n");
+          wiki = wiki ? `${wiki}\n${line}` : [RECORD_HEADS[ko ? "ko" : "en"](displayRoot(repo)), line].join("\n");
+        }
+      }
+    }
+    if (!hits.length) return wiki;
+    const head = wiki ? "" : COMMIT_HEADS[ko ? "ko" : "en"](displayRoot(repo));
+    const used = wiki ? wiki.length + 1 : head.length + 1;
+    const lines = commitLines(hits, terms, maxChars - used, ko);
+    if (!lines.length) return wiki;
+    return [wiki || head, ...lines].join("\n");
+  } catch {
+    return wiki || wikiTurnContext(repo, prompt, sessionId, opts, {}, maxChars); // fail-safe: extra channels never cost the wiki block
+  }
+}
+
+/** Report a question's subject that the project never mentions; `LLMWIKI_TURN_ABSENT=off` disables.
+ * Sealed test across 7 repositories (2026-10-19): misleading context on unanswerable questions
+ * 21/44 → 8/44, no answerable question lost a page. */
+export function absentEnabled(): boolean {
+  return (process.env.LLMWIKI_TURN_ABSENT ?? "").trim().toLowerCase() !== "off";
+}
+
+function wikiTurnContext(
+  repo: string,
+  prompt: string,
+  sessionId: string,
+  opts: { affinity?: AffinityFile | null },
+  seen: { pages?: WikiPage[] } = {},
+  maxChars = TURN_MAX_CHARS,
+): string {
   try {
     const cfg = getConfig(repo);
     // L0 / meta pages are already injected whole at session start — never re-suggest them.
@@ -385,7 +615,7 @@ export function buildTurnContext(
     // Korean technical prompt is made of — 토큰·만료·검사·배포 — so dropping them entirely made the
     // per-turn loop silent on exactly the prompts it exists to answer. Carried separately: the
     // substring pass below can see them, and scoring compares by substring anyway.
-    const subFloor = extractTerms(prompt ?? "", 2).filter((t) => !terms.includes(t));
+    const subFloor = subFloorTerms(prompt ?? "", terms);
     if (!terms.length && !subFloor.length) return "";
 
     let w = new WikiIndex(repo);
@@ -429,10 +659,16 @@ export function buildTurnContext(
     const scoreTerms = [...queryTerms, ...subFloor];
     const curSet = new Set([...terms, ...subFloor].map((t) => t.toLowerCase()));
     const wikiPages = loadWikiPages(root, cfg, l0Basenames);
+    seen.pages = wikiPages; // the extra channels reuse this read instead of walking the wiki again
     // Retired knowledge is never pushed (okf.ts isRetired). Withheld, not demoted: a `deprecated`
     // mark still let 27% of runs follow the stale page (okf-skills, measured). It still counts
     // toward rarity below — it is part of the wiki, just not an answer.
     const ranked0 = rankPages(wikiPages, scoreTerms).filter((r) => !r.page.retired);
+    // Session history may reorder eligible pages, but it is not evidence that a page answers
+    // this prompt. Evaluate both admission thresholds against current terms alone.
+    const currentRanks = new Map(
+      (carried.length ? rankPages(wikiPages, [...curSet]) : ranked0).map((r) => [r.page.rel, r]),
+    );
     // Relevance floor, scaled to the wiki's size (idf grows with ln N). The coverage gate alone let
     // everyday words that run through a focused wiki (테스트 · 커밋 · 로그) qualify a page; measured
     // on 4 project wikis: filler prompts fired 19/80 before, 8/80 with this floor, while 119/120
@@ -448,6 +684,8 @@ export function buildTurnContext(
           idTerms: new Set(r.idTerms),
           shownIdTerms: new Set(r.shownIdTerms),
           cur: [...r.terms].filter((t) => curSet.has(t)).length,
+          currentRelevance: currentRanks.get(r.page.rel)?.relevance ?? 0,
+          currentCoverage: currentRanks.get(r.page.rel)?.coverage ?? 0,
           rule: r.page.rule,
           relevance: r.relevance,
           coverage: r.coverage,
@@ -461,7 +699,7 @@ export function buildTurnContext(
     // relevant Korean prompts 1/7 → 5/7, filler 0/5 → 1/5. Relevance only ORDERS what passed.
     // Page affinity (affinity.ts) is a bounded correction applied AFTER the gate: it can reorder
     // near-ties among pages that already earned a place on relevance, never admit one that did not.
-    let pages = [...byPage.entries()].filter(([, e]) => e.cur >= 1 && e.coverage >= 2 && e.relevance >= floor);
+    let pages = [...byPage.entries()].filter(([, e]) => e.cur >= 1 && e.currentCoverage >= 2 && e.currentRelevance >= floor);
     const affinity = pages.length < 2 ? null : opts.affinity !== undefined ? opts.affinity : loadAffinity(repo);
     const top = pages.reduce((m, [, e]) => Math.max(m, e.relevance), 0) || 1;
     // Relevance is rescaled so the best page scores 10: affinity's bounded shift keeps the
@@ -506,19 +744,33 @@ export function buildTurnContext(
       return shown.length ? `  (${koRepo ? "제목" : "titled"}: ${shown.join("·")})` : "";
     };
     const pointer = ([rel, e]: (typeof pages)[number]) =>
-      `  • ${e.title}${currencyMark({ deprecated: false, stale: e.page.stale })}  →  ${rel}${why(e)}`;
+      `  • ${e.title}${currencyMark({ deprecated: false, stale: e.page.stale, sourceChanged: e.page.sourceChanged, reportedWrong: e.page.reportedWrong })}  →  ${rel}${why(e)}`;
     if (!excerptEnabled()) return [head, ...pages.map(pointer)].join("\n");
 
     // Excerpts share what the header and pointer lines leave of TURN_MAX_CHARS, in rank order: each
-    // page may take an equal share of the remainder (≤ EXCERPT_MAX_CHARS), and what a short excerpt
+    // page may take an equal share of the remainder (≤ EXCERPT_MAX_FIRST / _REST), and what a short excerpt
     // leaves passes to the next. Body text is read only for the ≤ MAX_PAGES pages shown.
     const xhead = EXCERPT_HEADS[koRepo ? "ko" : "en"](displayRoot(root));
-    let left = TURN_MAX_CHARS - xhead.length - pages.reduce((n, p) => n + 1 + pointer(p).length, 0);
+    // Rarity of each current term across this wiki — the same idf the ranker scores with.
+    const rarity = new Map([...curSet].map((t) => {
+      const df = wikiPages.filter((p) => p.identity.includes(t) || p.trigger.includes(t) || p.body.includes(t)).length;
+      return [t, Math.log(1 + wikiPages.length / (1 + df))] as const;
+    }));
+    let left = maxChars - xhead.length - pages.reduce((n, p) => n + 1 + pointer(p).length, 0);
     const L = [xhead];
     pages.forEach((p, i) => {
       const [rel, e] = p;
       L.push(pointer(p));
-      const share = Math.min(EXCERPT_MAX_CHARS, Math.floor(left / (pages.length - i)));
+      // A source change does not prove this page false, and silencing it hid nearly every page of
+      // a code-citing wiki. Its claims still come through, behind a recheck warning; a declared
+      // rule does not, because a rule is injected as an instruction to follow.
+      if ((e.page.sourceChanged || e.page.reportedWrong) && e.rule) return;
+      const warn = e.page.reportedWrong
+        ? (koRepo ? "⚠ 이전 세션이 틀림으로 보고함 — 원자료 재확인 전 현재 지침으로 사용하지 말 것" : "⚠ reported wrong by a prior session — recheck raw evidence before using as current guidance")
+        : e.page.sourceChanged ? SOURCE_CHANGED_WARN[koRepo ? "ko" : "en"] : null;
+      const warnCost = warn ? EXCERPT_INDENT.length + warn.length + 1 : 0;
+      const cap = i === 0 ? EXCERPT_MAX_FIRST : EXCERPT_MAX_REST;
+      const share = Math.min(cap, Math.floor((left - warnCost) / (pages.length - i)) + (i === 0 ? EXCERPT_FIRST_BONUS : 0));
       const text = e.rule ? "" : (readRepoFile(root, rel) ?? "");
       const lines = pageExcerpt(splitFrontmatter(text).body, {
         rule: e.rule,
@@ -527,7 +779,13 @@ export function buildTurnContext(
         named: [...e.shownIdTerms],
         max: share,
         ko: koRepo,
+        weights: rarity,
       });
+      // The warning qualifies text; with no excerpt it would only spend budget.
+      if (warn && lines.length) {
+        L.push(`${EXCERPT_INDENT}${warn}`);
+        left -= warnCost;
+      }
       for (const l of lines) {
         L.push(`${EXCERPT_INDENT}${l}`);
         left -= EXCERPT_INDENT.length + l.length + 1;

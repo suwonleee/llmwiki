@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 // Tests for the L0 injection budget, the oversized-l0 lint, and capture reconcile.
 import { test, expect, beforeAll } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { buildContext } from "../src/engine/context.ts";
@@ -13,7 +14,7 @@ function enrolledRepo(prefix: string): string {
 }
 import { Linter } from "../src/engine/lint.ts";
 import * as capture from "../src/engine/capture.ts";
-import { reconcileReflected, citedTranscripts, uncitedPending } from "../src/engine/reconcile.ts";
+import { reconcileReflected, citedTranscripts, uncitedPending, recordReflection } from "../src/engine/reconcile.ts";
 
 // UI-string assertions below expect English output; pin the language so a shell
 // exporting LLMWIKI_LANG=ko does not fail the suite.
@@ -130,7 +131,7 @@ beforeAll(() => {
   capture.setStateDir(mkdtempSync(join(tmpdir(), "llmwiki-f3-state-")));
 });
 
-test("reconcile marks cited sessions distilled, leaves un-cited as backlog", () => {
+test("reconcile requires exact accepted coverage, leaves un-cited as backlog", () => {
   const repo = enrolledRepo("llmwiki-f3-repo-");
   mkdirSync(join(repo, "docs", "wiki", "2_milestone"), { recursive: true });
 
@@ -151,6 +152,13 @@ test("reconcile marks cited sessions distilled, leaves un-cited as backlog", () 
 
   expect(citedTranscripts(repo).has(basename(tA).toLowerCase())).toBe(true);
 
+  expect(reconcileReflected(repo, true).deferred).toContain(basename(tA));
+  const hash = (text: string) => createHash("sha256").update(text).digest("hex");
+  expect(recordReflection(repo, { version: 1, transcript_path: tA,
+    page: "docs/wiki/2_milestone/p.md", start: 0, end: Buffer.byteLength('{"type":"user"}\n'),
+    prefix_sha256: hash('{"type":"user"}\n'),
+    page_sha256: hash(readFileSync(join(repo, "docs/wiki/2_milestone/p.md"), "utf8")),
+  })).toBe(true);
   const r = reconcileReflected(repo, true);
   expect(r.reconciled).toContain(basename(tA));
   expect(r.backlog).toContain(basename(tB));
@@ -175,7 +183,8 @@ test("reconcile dry-run reports without advancing the watermark", () => {
   );
 
   const r = reconcileReflected(repo, false); // dry-run
-  expect(r.reconciled).toContain(basename(tC));
+  expect(r.reconciled).not.toContain(basename(tC));
+  expect(r.deferred).toContain(basename(tC));
   // not committed → still pending
   expect(capture.pending(repo).map((x) => basename(x.transcript_path))).toContain(basename(tC));
 });

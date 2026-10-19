@@ -9,13 +9,14 @@ const roots: string[] = [];
 function arm(scores: Record<string, number>) {
   return {
     schema_version: 1,
+    provenance: { corpus_sha256: "a".repeat(64), engine_sha256: "b".repeat(64), evaluator_sha256: "e".repeat(64), generation: { topic: false, write_model: "fixture", verify_model: "fixture" } },
     label: "fixture",
     corpus_files: 1,
     build_failures: 0,
     pages: 2,
     topic_pages: 1,
     bench: {
-      subset: "all",
+      evaluation_contract: "page-search-context-v2", search_path: "page-rank", subset: "all",
       n: Object.keys(scores).length,
       recall: {
         "r@5": Object.keys(scores).length
@@ -29,7 +30,7 @@ function arm(scores: Record<string, number>) {
       query_set_fingerprint: "fixture-query-set",
       passive: {},
       downstream_read: null,
-      per_query: Object.entries(scores).map(([id, score]) => ({ id, "r@5": score })),
+      per_query: Object.entries(scores).map(([id, score]) => ({ id, "r@5": score, tc_hit: false })),
     },
     lint_errors: 0,
     lint_warns: 0,
@@ -95,12 +96,12 @@ describe("compare-verdict CLI", () => {
     current.bench.n_content = 1;
     current.bench.n_refusal = 1;
     current.bench.tc_refusal_ok = 1;
-    current.bench.per_query = [{ id: "q1", "r@5": 1 }, { id: "q2", refusal_ok: true }] as any;
+    current.bench.per_query = [{ id: "q1", "r@5": 1, tc_hit: true }, { id: "q2", refusal_ok: true }] as any;
     const challenger = arm({ q1: 1, q2: 1 });
     challenger.bench.n_content = 1;
     challenger.bench.n_refusal = 1;
     challenger.bench.tc_refusal_ok = 1;
-    challenger.bench.per_query = [{ id: "q1", refusal_ok: true }, { id: "q2", "r@5": 1 }] as any;
+    challenger.bench.per_query = [{ id: "q1", refusal_ok: true }, { id: "q2", "r@5": 1, tc_hit: true }] as any;
     writeFileSync(currentPath, JSON.stringify(current));
     writeFileSync(challengerPath, JSON.stringify(challenger));
 

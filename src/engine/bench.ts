@@ -20,6 +20,9 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { WikiIndex, dedupeByPage } from "./db.ts";
+import { searchWiki } from "./page-rank.ts";
+
+export const EVALUATION_CONTRACT = "page-search-context-v2";
 import { ensureProjectStateDir } from "./project-state.ts";
 import { buildTurnContext } from "./turncontext.ts";
 import { buildContext } from "./context.ts";
@@ -94,7 +97,19 @@ function mulberry32(seed: number): () => number {
 
 export function ensureSplit(root: string, queries: BenchQuery[], seed = 42): BenchSplit {
   const p = join(benchDir(root), "split.json");
-  if (existsSync(p)) return JSON.parse(readFileSync(p, "utf-8")) as BenchSplit;
+  if (existsSync(p)) {
+    const split = JSON.parse(readFileSync(p, "utf-8")) as BenchSplit;
+    if (!split || !Array.isArray(split.tune) || !Array.isArray(split.sealed) || !Number.isInteger(split.seed)) {
+      throw new Error("benchmark split does not match golden ids; invalid split shape");
+    }
+    const assigned = [...split.tune, ...split.sealed];
+    const expected = queries.map((q) => q.id).sort();
+    if (new Set(assigned).size !== assigned.length ||
+        JSON.stringify([...assigned].sort()) !== JSON.stringify(expected)) {
+      throw new Error("benchmark split does not match golden ids; review the split explicitly (never silently reshuffle held-out queries)");
+    }
+    return split;
+  }
   const ids = queries.map((q) => q.id).sort(); // sort first: split independent of file order
   const rnd = mulberry32(seed);
   for (let i = ids.length - 1; i > 0; i--) {
@@ -115,8 +130,7 @@ export function hitAtK(expected: string[], ranked: string[], k: number): number 
 }
 
 // Ranked unique page paths from chunk-level search rows (best-rank order preserved).
-// Chunk hits → ranked distinct page paths. Shares dedupeByPage with the `search` CLI so the
-// bench measures the same page ordering a reader actually sees.
+// Used only for the explicit historical FTS baseline; live wiki search ranks whole pages.
 function rankedPages(rows: any[]): string[] {
   return dedupeByPage(rows).map((r) => String(r.relative_path ?? ""));
 }
@@ -142,6 +156,8 @@ export interface PassiveReport {
 }
 
 export interface BenchReport {
+  evaluation_contract?: string;
+  search_path?: "page-rank" | "fts";
   subset: string;
   query_set_fingerprint: string; // selected golden definitions, not just ids
   n: number;
@@ -230,6 +246,8 @@ export function toBenchBaseline(report: BenchReport): BenchBaseline {
 }
 
 export interface BenchOptions {
+  // Explicit historical baseline; default matches search --kind wiki.
+  searchPath?: "page-rank" | "fts";
   // Measure pointer→Read follow-through from captured transcripts. Off by default.
   downstreamRead?: boolean;
   // Explicit transcript files; when absent, the newest `transcriptLimit` Claude sessions.
@@ -299,9 +317,11 @@ export function runBench(
         continue;
       }
       nContent += 1;
-      // search() returns CHUNK rows — fetch 5× the deepest k so page-level dedup still
-      // yields a full top-10 page list (10 chunks can collapse into 3-8 pages).
-      const ranked = rankedPages(idx.search(conn, q.question, Math.max(...KS) * 5, "wiki"));
+      // Match live wiki search by default. The historical FTS baseline over-fetches
+      // chunks so page-level dedup can still yield a full top-10 list.
+      const ranked = options.searchPath === "fts"
+        ? rankedPages(idx.search(conn, q.question, Math.max(...KS) * 5, "wiki"))
+        : searchWiki(root, q.question, Math.max(...KS)).map((hit) => `docs/wiki/${hit.page.rel}`);
       const row: Record<string, any> = { id: q.id, top: ranked.slice(0, 3) };
       for (const k of KS) {
         const v = hitAtK(q.target_pages, ranked, k);
@@ -330,6 +350,8 @@ export function runBench(
   const silence = nRefusal ? refusalOk / nRefusal : 0;
   return {
     subset,
+    evaluation_contract: EVALUATION_CONTRACT,
+    search_path: options.searchPath ?? "page-rank",
     query_set_fingerprint: querySetFingerprint(selected),
     n: selected.length,
     recall,

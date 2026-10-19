@@ -32,8 +32,8 @@ test("gap-queue.md and semantic-review reports do not count as 0_review pending"
 
   const out = buildContext(repo);
   expect(out).not.toContain("0_review pending"); // no human-pending block at all
-  expect(out).toMatch(/gap backlog|갭 백로그/); // …but the backlog is visible as one bounded line
-  expect(out).toMatch(/2 open|open 2건/); // open count only (resolved excluded)
+  expect(out).toMatch(/wiki-deep recommended|wiki-deep 권장/); // …but the backlog is visible as one bounded line
+  expect(out).toMatch(/gaps 2|갭 2/); // open count only (resolved excluded)
 });
 
 test("real 0_review items still surface, counted without the managed files", () => {
@@ -44,7 +44,7 @@ test("real 0_review items still surface, counted without the managed files", () 
   const out = buildContext(repo);
   expect(out).toContain("0_review pending 1"); // only the human question counts
   expect(out).toContain("Direction?");
-  expect(out).toMatch(/gap backlog|갭 백로그/);
+  expect(out).toMatch(/wiki-deep recommended|wiki-deep 권장/);
 });
 
 test("empty/fully-resolved gap queue emits no backlog line", () => {
@@ -55,7 +55,7 @@ test("empty/fully-resolved gap queue emits no backlog line", () => {
   writeFileSync(join(review, "gap-queue.md"), resolvedOnly, "utf-8");
 
   const out = buildContext(repo);
-  expect(out).not.toMatch(/gap backlog|갭 백로그/);
+  expect(out).not.toMatch(/wiki-deep recommended|wiki-deep 권장/);
   expect(out).not.toContain("0_review pending");
 });
 

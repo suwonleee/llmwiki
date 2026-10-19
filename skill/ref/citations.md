@@ -14,10 +14,7 @@ Use this when writing a page's footnotes and evidence lines, and whenever lint f
     - `verified: { by: human:<owner login>, at: <ISO> }` only for a human's `0_review` direction answer — never your own confirmation.
 - No `domain:`, `source:`, or `updated:` on new pages. The close-out's `llmwiki okf` fills missing `sources`/`generated`.
 - Links: relative markdown `[Label](../5_topic/x.md)`, never `[[wikilinks]]`. Cross-link related pages.
-- **Never add `author:`** — authorship is read from git, never cached in frontmatter.
-    - A stamped author goes stale the moment a teammate edits the page, and git already knows.
-    - `llmwiki digest` renders contributors from git history (mailmap-aware; `ensureSkeleton` seeds a `.mailmap` so one person's several git identities count once).
-    - Legacy pages that still carry `author:` are left as-is — historical records, not a format to continue.
+- **Never add `author:`** — git owns authorship (`llmwiki digest` renders contributors, mailmap-aware); a stamped author goes stale on the next teammate edit. Legacy `author:` lines stay as historical records.
 - `0_review` items also stamp `owner:`: `llmwiki conventions <repo> --section review-item`.
 
 ## 2. Evidence excerpts (page format v3)
@@ -37,5 +34,4 @@ If lint flags `unresolved-citation`, **fix** the footnote — never delete it (d
     - **a human decision / judgment / statement** → the source is the **session transcript**, NOT code (normally already citable via `update-next`; else `llmwiki register-transcript <repo>`), cite `[^n]: <transcript>.jsonl` — **never repoint a decision to a code file**;
     - **a factual claim about code** → cite **one repo-relative path that exists**.
 - One path per footnote (no globs/commas/parentheticals); one footnote per source.
-- **Keep the definition LINE to the bare source** — an evidence excerpt belongs on the indented line below it (v3), never appended to the definition, which would break teammate citations.
 - Only if no real source exists, drop the underlying claim.

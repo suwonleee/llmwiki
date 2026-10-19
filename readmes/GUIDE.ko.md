@@ -15,7 +15,7 @@
 claude plugin marketplace add suwonleee/llmwiki
 claude plugin install llmwiki@llmwiki
 
-# Codex (설치 후 /hooks 에서 훅 2개를 한 번 승인)
+# Codex (설치 후 /hooks 에서 llmwiki 훅 검토·승인)
 codex plugin marketplace add https://github.com/suwonleee/llmwiki
 codex plugin add llmwiki@llmwiki
 ```
@@ -41,7 +41,7 @@ codex plugin add llmwiki@llmwiki
     - macOS·Linux·WSL2의 모든 하네스: 사용자 `llmwiki …`
     - 네이티브 Windows의 모든 하네스: 명시적 `bun <clone>/src/cli.ts …`; 선택형 `llmwiki` 런처는 Git Bash 전용이고 Codex/OpenCode는 PowerShell을 사용
 - 출력된 수동 단계 완료
-    - Codex만: `/hooks`에서 현재 llmwiki 훅 2개 검토·신뢰
+    - Codex만: `/hooks`에서 현재 llmwiki 훅 검토·신뢰
     - OpenCode: 최초 설치 또는 clone 경로 변경 후 재시작
 - 전체 분기·복구 기준: [`reference/INSTALLATION_FLOW.md`](../reference/INSTALLATION_FLOW.md)
 - `./setup.sh --dry-run`은 파일·서비스를 바꾸지 않고 계획만 출력합니다.
@@ -55,17 +55,24 @@ codex plugin add llmwiki@llmwiki
 
 1. **캡처** (자동) — 백그라운드 데몬이 모든 세션 transcript를 큐에 넣습니다. 폴더·터미널과 무관합니다.
 2. **업데이트** (`/wiki-save`) — 큐의 새 부분을 프로젝트의 로그층(`2_milestone`, `3_decision`, `4_insight`)에 덧붙입니다.
-3. **통합** (`/wiki-save`, `/wiki-deep`) — 로그를 개념별 페이지(`5_topic/`)로 합칩니다.
+3. **통합** (`/wiki-deep`) — 로그를 개념별 페이지(`5_topic/`)로 합치고 overview를 갱신합니다.
 4. **읽기** (자동) — 세션 시작 시 L0와 페이지 포인터, 프롬프트마다 관련 포인터·발췌 최대 3개, 규칙이 걸린 파일을 고치기 전에는 그 규칙(Claude Code).
 5. **퀴즈** (`/wiki-quiz`) — 위키의 결정에서 뽑은 간격 반복 질문. 사람을 위한 단계입니다.
-6. **자가치유** (`/wiki-save`, `/wiki-deep`) — `lint`가 구조를, `review`가 의미를 점검하고, `gaps`가 빠진 것을 추적합니다.
+6. **자가치유** — `/wiki-save`는 구조 lint를 수행합니다. `/wiki-deep`이 의미 리뷰와 갭 큐를 처리합니다. 리뷰 provider가 없으면 현재 세션이 `review-input`을 검토하고 `review-import`로 변경되지 않은 페이지에 결박된 자문 초안을 제출합니다.
 
 역할 분담:
 
-- **사실** — AI가 무인으로 작성.
-- **판단**(방향·결정·모순) — 항상 사람.
+- **사실과 일상 결정** — 위키 명령을 실행할 때 AI가 근거를 확인해 작성.
+- **방향과 미해결 모순** — 사람이 판단.
 - **내 결정에 대한 내 기억** — `/wiki-quiz`로 유지.
 - 페이지는 raw transcript에서만 만들고, 다른 위키 페이지에서 다시 만들지 않습니다.
+
+위키 발췌와 커밋 메시지는 정해진 턴 예산을 나눠 씁니다. `LLMWIKI_TURN_COMMITS=off`,
+`LLMWIKI_TURN_ABSENT=off`, `LLMWIKI_PAGE_CACHE=off`, `LLMWIKI_SAVE_NUDGE=off`로 각각 커밋 검색,
+주제 기록 없음 안내, 비공개 파싱 캐시, 세션당 한 번의 저장 힌트를 끌 수 있습니다.
+선택형 `injected`/`injected-feedback`은 명시적인 마감 때 페이지 버전에 묶인 자기평가를 남깁니다.
+피드백 누락·판단 불가는 중립이고, 틀린 주장은 `recheck`에서 원자료 근거로 재확인합니다.
+`llmwiki status <repo> --details`로 접힌 정비 상태를 펼쳐 볼 수 있습니다.
 
 transcript는 llmwiki가 아니라 에이전트의 파일입니다.
 

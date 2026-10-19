@@ -29,6 +29,7 @@ import {
   fstatSync,
   fsyncSync,
   lstatSync,
+  linkSync,
   mkdirSync,
   openSync,
   readdirSync,
@@ -270,6 +271,31 @@ export function writeRepoFile(root: string, relativePath: string, content: strin
   } catch (e) {
     rmSync(temp, { force: true });
     throw e;
+  }
+}
+
+/** Atomically publish a new file only. A concurrent creator (including a symlink) wins.
+ * The complete fsynced temporary file is linked into place without an overwrite window. */
+export function createRepoFile(root: string, relativePath: string, content: string, mode = 0o644): boolean {
+  const path = repoPath(root, relativePath);
+  const temp = join(path, "..", `.llmwiki-tmp-${randomUUID()}`);
+  try {
+    const fd = openSync(temp, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, mode);
+    try {
+      writeSync(fd, content);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    try {
+      linkSync(temp, path);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+      throw error;
+    }
+  } finally {
+    rmSync(temp, { force: true });
   }
 }
 

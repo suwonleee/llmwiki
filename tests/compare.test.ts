@@ -4,7 +4,7 @@ import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { scoreArm, judgeArms, type ArmResult } from "../src/engine/compare.ts";
+import { scoreArm, judgeArms, fingerprintFiles, type ArmResult } from "../src/engine/compare.ts";
 
 function makeWiki(root: string, opts: { withBench?: boolean; goodPage?: boolean } = {}) {
   mkdirSync(join(root, "docs", "wiki"), { recursive: true });
@@ -27,6 +27,16 @@ describe("compare scoreArm", () => {
     root = mkdtempSync(join(tmpdir(), "llmwiki-cmp-"));
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  test("input fingerprint is order-independent and sensitive to bytes and names", () => {
+    writeFileSync(join(root, "a.txt"), "same");
+    writeFileSync(join(root, "b.txt"), "same");
+    const original = fingerprintFiles(root, ["a.txt", "b.txt"]);
+    expect(fingerprintFiles(root, ["b.txt", "a.txt"])).toBe(original);
+    expect(fingerprintFiles(root, ["a.txt"])).not.toBe(fingerprintFiles(root, ["b.txt"]));
+    writeFileSync(join(root, "b.txt"), "changed");
+    expect(fingerprintFiles(root, ["a.txt", "b.txt"])).not.toBe(original);
+  });
 
   test("scores a healthy arm with bench", () => {
     makeWiki(root, { withBench: true, goodPage: true });
@@ -52,16 +62,17 @@ describe("compare scoreArm", () => {
 describe("compare judgeArms (sequential gates, regression-block first)", () => {
   const arm = (over: Partial<ArmResult>): ArmResult => ({
     schema_version: 1,
+    provenance: { corpus_sha256: "a".repeat(64), engine_sha256: "b".repeat(64), evaluator_sha256: "e".repeat(64), generation: { topic: false, write_model: "fixture", verify_model: "fixture" } },
     label: "x",
     corpus_files: 3,
     build_failures: 0,
     pages: 5,
     topic_pages: 2,
     bench: {
-      subset: "all", n: 2, recall: { "r@5": 1 }, tc_pointer_hit: 1, tc_refusal_ok: 1,
+      evaluation_contract: "page-search-context-v2", search_path: "page-rank", subset: "all", n: 2, recall: { "r@5": 1 }, tc_pointer_hit: 1, tc_refusal_ok: 1,
       n_content: 1, n_refusal: 1,
       query_set_fingerprint: "fixture-query-set",
-      per_query: [{ id: "q1", "r@5": 1 }, { id: "q2", refusal_ok: true }],
+      per_query: [{ id: "q1", "r@5": 1, tc_hit: true }, { id: "q2", refusal_ok: true }],
     } as any,
     lint_errors: 0,
     lint_warns: 0,
@@ -72,12 +83,12 @@ describe("compare judgeArms (sequential gates, regression-block first)", () => {
   const withScores = (s: Record<string, number>, over: Partial<ArmResult> = {}): ArmResult =>
     arm({
       bench: {
-        subset: "all", n: Object.keys(s).length,
+        evaluation_contract: "page-search-context-v2", search_path: "page-rank", subset: "all", n: Object.keys(s).length,
         recall: { "r@5": Object.values(s).reduce((sum, value) => sum + value, 0) / Object.keys(s).length },
         tc_pointer_hit: 0, tc_refusal_ok: 0,
         n_content: Object.keys(s).length, n_refusal: 0,
         query_set_fingerprint: "fixture-query-set",
-        per_query: Object.entries(s).map(([id, v]) => ({ id, "r@5": v })),
+        per_query: Object.entries(s).map(([id, v]) => ({ id, "r@5": v, tc_hit: false })),
       } as any,
       ...over,
     });
@@ -136,7 +147,7 @@ describe("compare judgeArms (sequential gates, regression-block first)", () => {
     const challenger = arm({
       bench: {
         ...arm({}).bench!,
-        per_query: [{ id: "q1", refusal_ok: true }, { id: "q2", "r@5": 1 }],
+        per_query: [{ id: "q1", refusal_ok: true }, { id: "q2", "r@5": 1, tc_hit: true }],
       } as any,
     });
 
@@ -183,6 +194,45 @@ describe("compare judgeArms (sequential gates, regression-block first)", () => {
     const unversioned = withScores({ shared: 1 }) as any;
     delete unversioned.schema_version;
     expect(judgeArms(withScores({ shared: 0 }), unversioned).reason).toContain("schema_version");
+  });
+
+  test("lost context blocks a ranking improvement", () => {
+    const current = withScores({ shared: 0 });
+    current.bench!.per_query[0]!.tc_hit = true;
+    current.bench!.tc_pointer_hit = 1;
+    const result = judgeArms(current, withScores({ shared: 1 }));
+    expect(result.verdict).toBe("keep");
+    expect(result.reason).toContain("turn-context regression");
+  });
+
+  test("different corpus and legacy provenance fail closed", () => {
+    const current = withScores({ shared: 0 });
+    const candidate = withScores({ shared: 1 });
+    candidate.provenance!.corpus_sha256 = "c".repeat(64);
+    expect(judgeArms(current, candidate).reason).toContain("incompatible input corpus");
+    candidate.provenance = current.provenance;
+    candidate.corpus_files = 999;
+    expect(judgeArms(current, candidate).reason).toContain("incompatible input corpus");
+    delete candidate.provenance;
+    expect(judgeArms(current, candidate).reason).toContain("provenance");
+  });
+
+  test("different scorer source fails closed while recorded engine treatments may differ", () => {
+    const current = withScores({ shared: 0 });
+    const candidate = withScores({ shared: 1 });
+    candidate.provenance!.engine_sha256 = "f".repeat(64);
+    expect(judgeArms(current, candidate).verdict).toBe("adopt");
+    candidate.provenance!.evaluator_sha256 = "d".repeat(64);
+    expect(judgeArms(current, candidate).reason).toContain("incompatible evaluator");
+  });
+
+  test("missing context rows and historical FTS reports cannot authorize adoption", () => {
+    const current = withScores({ shared: 0 });
+    const candidate = withScores({ shared: 1 });
+    delete candidate.bench!.per_query[0]!.tc_hit;
+    expect(judgeArms(current, candidate).reason).toContain("context evidence");
+    candidate.bench!.search_path = "fts";
+    expect(judgeArms(current, candidate).reason).toContain("search path");
   });
 
   test("avg > +0.10 → adopt", () => {

@@ -3,6 +3,7 @@ import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { searchWiki } from "../src/engine/page-rank.ts";
 import { WikiIndex } from "../src/engine/db.ts";
 import { loadQueries, ensureSplit, hitAtK, runBench, benchDir, toBenchBaseline } from "../src/engine/bench.ts";
 
@@ -69,6 +70,27 @@ must_refuse = true
     expect(s1).toEqual(s2);
     expect(s1.tune.length + s1.sealed.length).toBe(3);
     expect(s1.seed).toBe(42);
+  });
+
+  test("stale or duplicated split assignments require explicit review", () => {
+    const qs = loadQueries(root);
+    const split = ensureSplit(root, qs);
+    writeFileSync(join(benchDir(root), "split.json"), JSON.stringify({ ...split, tune: [...split.tune, split.sealed[0]] }));
+    expect(() => ensureSplit(root, qs)).toThrow(/split does not match/);
+    writeFileSync(join(benchDir(root), "split.json"), JSON.stringify(split));
+    expect(() => ensureSplit(root, [...qs, { id: "new", question: "new", target_pages: [] }])).toThrow(/split does not match/);
+  });
+
+  test("default benchmark follows live page search even before indexing a new page", () => {
+    writeFileSync(join(root, "docs/wiki/fresh.md"), "---\ntitle: 캡처데몬 재시작 방법\n---\n캡처데몬 재시작 방법");
+    const report = runBench(root);
+    const expected = searchWiki(root, loadQueries(root)[0]!.question, 10).map((h) => `docs/wiki/${h.page.rel}`);
+    expect(report.per_query[0]!.top).toEqual(expected.slice(0, 3));
+    expect(report.per_query[0]!.top).toContain("docs/wiki/fresh.md");
+    expect(report.search_path).toBe("page-rank");
+    const historical = runBench(root, "all", { searchPath: "fts" });
+    expect(historical.search_path).toBe("fts");
+    expect(historical.per_query[0]!.top).not.toContain("docs/wiki/fresh.md");
   });
 
   test("hitAtK", () => {

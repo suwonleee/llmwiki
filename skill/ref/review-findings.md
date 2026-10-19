@@ -15,7 +15,7 @@ Use this when `llmwiki review` output reaches the session (a backgrounded `/wiki
 - `llmwiki gaps <repo>` (fast, deterministic) folds committed reviews to date into the tracked, self-closing `0_review/gap-queue.md`.
     - Today's backgrounded findings get folded on the next pass.
     - A `semantic-review-*.md` report is deleted only after its gaps have been folded into the queue.
-    - A gap auto-closes once review stops re-flagging it for 2 runs (review is bounded + cached).
+    - A gap auto-closes only after 2 independent complete-scope reviews omit it. Replaying the same report or a partial/unknown-scope review never advances absence counts.
 - Filling a gap:
     - a `next-question` cross-link gap → add relative markdown links (never `[[wikilinks]]`), each with an explicit relation word;
     - a contradiction gap → the `> [conflict]` callout;

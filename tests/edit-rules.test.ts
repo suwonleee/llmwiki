@@ -25,6 +25,7 @@ import { okfApply } from "../src/engine/okf-bundle.ts";
 import { _resetForTests, defaults } from "../src/engine/config.ts";
 import { WikiIndex } from "../src/engine/db.ts";
 import { Linter } from "../src/engine/lint.ts";
+import { freshnessSnapshot, acknowledgeFreshness } from "../src/engine/source-freshness.ts";
 import { rebuildReferenceGraph } from "../src/engine/refs.ts";
 import { enrollRepo, makeGitRepo, tempDir } from "./support/git-repo.ts";
 
@@ -392,4 +393,26 @@ describe("stale marker and cache sweep", () => {
       else process.env.LLMWIKI_EDITRULES_TMPDIR = prev;
     }
   });
+});
+
+
+test("source-only changes withhold cached edit rules until revision-bound verification", async () => {
+  const root = wikiRoot();
+  mkdirSync(join(root, "src"));
+  writeFileSync(join(root, "src/policy.ts"), "export const LIMIT = 1;\n");
+  page(root, "3_decision/retry.md", ruleFm(["src/**"], "Allow exactly ONE_ATTEMPT.",
+    "status: stable\nsources:\n  - id: policy\n    resource: src/policy.ts"), "Retry policy.[^policy]\n\n[^policy]: implementation\n");
+  const index = new WikiIndex(root);
+  index.indexAll(); rebuildReferenceGraph(index);
+  expect(await rulesFor(root, "src/worker.ts")).toHaveLength(1); // primes unchanged-wiki cache
+  expect(await build(root, "src/worker.ts", sid())).not.toBeNull();
+  writeFileSync(join(root, "src/policy.ts"), "export const LIMIT = 100;\n");
+  index.indexAll();
+  expect(await loadEditRules(root)).toEqual([]);
+  expect(await rulesFor(root, "src/worker.ts")).toEqual([]);
+  expect(await build(root, "src/worker.ts", sid())).toBeNull();
+  const snapshot = freshnessSnapshot(root, "docs/wiki/3_decision/retry.md");
+  acknowledgeFreshness(root, snapshot, { verifiedBy: "test", evidence: "Policy rule remains the intended constraint after source review" });
+  expect(await rulesFor(root, "src/worker.ts")).toHaveLength(1); // cache kept raw declarations
+  expect(await build(root, "src/worker.ts", sid())).not.toBeNull();
 });

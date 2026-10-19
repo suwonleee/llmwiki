@@ -452,7 +452,8 @@ export async function review(ws: string, opts: ReviewOpts): Promise<Record<strin
   ensureRepoDir(root, join("docs", "wiki", getConfig(root).queueDir));
   const report = okfStamp(root, reportRel, page, getConfig(root), {
     actor: modelActor("llmwiki-review", model),
-    set: { type: "Review Report", status: "draft", sources: [{ resource: "semantic-lint" }] },
+    set: { type: "Review Report", status: "draft", sources: [{ resource: "semantic-lint" }],
+      "x-llmwiki-review": { total: briefs.length, included: scoped.length, bounded: scoped.length < briefs.length, scope_sha256: runHash } },
   });
   writeRepoFile(root, destRel, report + (report.endsWith("\n") ? "" : "\n"));
   _writeState(root, { hash: runHash, date, dest: result.dest as string });

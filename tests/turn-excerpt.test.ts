@@ -98,18 +98,26 @@ describe("pageExcerpt", () => {
     expect(pageExcerpt(BODY, { terms: ["없는말"], description: "설명 문장", max: 500 })).toEqual(["설명 문장"]);
   });
 
-  test("the budget counts indentation and newlines; the last line is cut with …", () => {
+  test("oversized lines end at a complete sentence, never inside a technical chain", () => {
+    const first = "Retry timeout is 3.5 seconds.";
+    const chain = " The execution chain is Unit->bridge->worker->" + "very_long_identifier".repeat(20) + ".";
+    const lines = pageExcerpt(first + chain, { terms: ["retry"], max: 120 });
+    expect(lines).toEqual([first]);
+    expect(pageExcerpt("", { terms: [], max: 100, rule: first + chain })).toEqual([]);
+  });
+
+  test("the budget counts indentation and newlines; an oversized unfinished claim is withheld", () => {
     const long = `## A\n\n${"가".repeat(300)}\n${"나".repeat(300)}\n`;
     const lines = pageExcerpt(long, { terms: ["가가가"], max: 200 });
     const cost = lines.reduce((n, l) => n + 6 + l.length + 1, 0);
     expect(cost).toBeLessThanOrEqual(200);
-    expect(lines.at(-1)!.endsWith("…")).toBe(true);
+    expect(lines).toEqual([]);
     expect(pageExcerpt(long, { terms: ["가가가"], max: 50 })).toEqual([]); // a fragment is worse than none
   });
 });
 
 describe("buildTurnContext excerpts", () => {
-  test("three long pages: each excerpt ≤ 500 chars, the block ≤ 1,600", () => {
+  test("three long pages: the first excerpt ≤ 700 chars, the others ≤ 400, the block ≤ 1,600", () => {
     const long = (w: string) => `## 개요\n\n${`${w} 캡처 데몬 트랜스크립트 큐 처리 내용을 길게 설명한다. `.repeat(40)}`;
     const root = wiki({
       ...filler(),
@@ -123,12 +131,15 @@ describe("buildTurnContext excerpts", () => {
     expect(out.length).toBeLessThanOrEqual(1600);
     // per-page block: the excerpt lines between one pointer and the next
     let block = 0;
+    let rank = -1;
+    const excerpted = new Set<number>();
     for (const l of lines.slice(1)) {
-      if (l.startsWith("  • ")) block = 0;
-      else block += l.length + 1;
-      expect(block).toBeLessThanOrEqual(500);
+      if (l.startsWith("  • ")) { block = 0; rank += 1; continue; }
+      block += l.length + 1;
+      excerpted.add(rank);
+      expect(block).toBeLessThanOrEqual(rank === 0 ? 700 : 400);
     }
-    expect(lines.filter((l) => l.startsWith("      ")).length).toBeGreaterThanOrEqual(3);
+    expect(excerpted.size).toBe(3);
   });
 });
 

@@ -23,6 +23,7 @@ import { CLONE_ROOT } from "../engine/paths.ts";
 const PRIVATE_SURFACE: readonly RegExp[] = [
   /^docs\/wiki\//, // this project's own working wiki
   /^docs\/eval-results\//, // measurement artefacts
+  /^docs\/llmwiki-improvement-/, // private implementation plans and run evidence
   /^githooks\//, // team-only hooks
   /^\.mailmap$/, // real names and company e-mail
   /^reference\//, // internal notes — only exact reviewed public contracts ship, see PRIVATE_ALLOW
@@ -34,6 +35,7 @@ const PRIVATE_SURFACE: readonly RegExp[] = [
   /^\.idea\//, // IDE state
   /^\.env/, // never, under any spelling
   /^HANDOFF-/, // session handoff notes
+  /^HANDOFF\.md$/, // private runtime entrypoint
 ];
 
 /** Exact reviewed public contracts inside reference/. Everything else remains private by default. */

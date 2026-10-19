@@ -169,3 +169,21 @@ test("a direction draft lands in the queue as an OKF Review Item, unverified unt
   expect(item).not.toContain("verified:");
   expect(existsSync(join(repo, "docs", "wiki", "1_direction", "2026-07-08-local-first-storage.md"))).toBe(false);
 });
+
+for (const verdict of ["VERIFIED", "REJECTED: unsupported claim"]) {
+  test(`a ${verdict.startsWith("VERIFIED") ? "verified" : "rejected"} candidate never replaces a preexisting destination`, async () => {
+    const { repo, transcript } = repoWithTranscript();
+    const candidate = "---\ntype: Decision\ntitle: Keep storage local\ndescription: Storage stays local-only.\ndate: 2026-07-08\ntags: [storage, privacy]\nstatus: stable\n---\n\nStorage stays local-only.[^s1]\n\n[^s1]: session.md\n";
+    const dest = join(repo, `docs/wiki/3_decision/${new Date().toISOString().slice(0, 10)}-keep-storage-local.md`);
+    const original = "Existing carefully reviewed content.\n";
+    writeFileSync(dest, original);
+    fakeProvider(candidate, verdict);
+    const result = await updateOne(repo, transcript, true, "light-test", "heavy-test");
+    expect(result.accepted).toBe(false);
+    expect(readFileSync(dest, "utf8")).toBe(original);
+    if (verdict === "VERIFIED") {
+      expect(result.verdict).toBe("conflict");
+      expect(capture.getOffset(transcript)).toBe(0);
+    }
+  });
+}

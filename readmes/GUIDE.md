@@ -15,7 +15,7 @@ The repository is also a Claude Code / Codex plugin marketplace.
 claude plugin marketplace add suwonleee/llmwiki
 claude plugin install llmwiki@llmwiki
 
-# Codex (approve the two hooks once in /hooks afterwards)
+# Codex (review the llmwiki hooks in /hooks afterwards)
 codex plugin marketplace add https://github.com/suwonleee/llmwiki
 codex plugin add llmwiki@llmwiki
 ```
@@ -41,7 +41,7 @@ Use this only when you want to install without an agent. Pick one harness. `auto
     - macOS, Linux, or WSL2: user-level `llmwiki …` for every harness
     - Native Windows, every harness: explicit `bun <clone>/src/cli.ts …`; the optional `llmwiki` launcher is a Git Bash-only shell script, while Codex/OpenCode use PowerShell
 - Complete any printed manual action
-    - Codex only: review and trust the two current llmwiki hooks in `/hooks`
+    - Codex only: review and trust the current llmwiki hooks in `/hooks`
     - OpenCode: restart it after initial setup or clone re-pointing
 - Full branch and recovery reference: [`reference/INSTALLATION_FLOW.md`](../reference/INSTALLATION_FLOW.md)
 - `./setup.sh --dry-run` prints the plan without changing files or services.
@@ -55,17 +55,24 @@ The loop has six stages. Two run on their own; the rest are one command each.
 
 1. **Capture** (automatic) — a background daemon queues every session transcript, in any folder or terminal.
 2. **Update** (`/wiki-save`) — new parts of the queue are appended to the project's log layer: `2_milestone`, `3_decision`, `4_insight`.
-3. **Consolidate** (`/wiki-save`, `/wiki-deep`) — the log is merged into one page per concept in `5_topic/`.
+3. **Consolidate** (`/wiki-deep`) — the log is merged into one page per concept in `5_topic/`; overview updates also belong to this pass.
 4. **Read** (automatic) — session start gets L0 and page pointers; each prompt gets up to three related pointers or excerpts; an edit to a governed file gets its rule first (Claude Code).
 5. **Quiz** (`/wiki-quiz`) — spaced-repetition questions for you, drawn from the wiki's decisions.
-6. **Self-healing** (`/wiki-save`, `/wiki-deep`) — `lint` checks structure, `review` checks meaning, and `gaps` tracks what is missing.
+6. **Self-healing** — `/wiki-save` runs structural `lint`; `/wiki-deep` reviews meaning and works the gap queue. Without a review provider, the current session uses `review-input` and `review-import` to submit an advisory draft bound to unchanged pages.
 
 Who does what:
 
-- **Facts** — written by the AI, unattended.
-- **Judgment** (direction, decisions, contradictions) — always a person.
+- **Facts and routine decisions** — grounded and filed by the AI when you invoke a wiki command.
+- **Direction and unresolved contradictions** — a person's judgment.
 - **Your memory of your decisions** — kept fresh by `/wiki-quiz`.
 - Pages are derived only from raw transcripts, never from other wiki pages.
+
+Wiki excerpts and commit messages share a fixed per-turn budget. Disable commit retrieval with
+`LLMWIKI_TURN_COMMITS=off`, absent-subject notes with `LLMWIKI_TURN_ABSENT=off`, the private parsing
+cache with `LLMWIKI_PAGE_CACHE=off`, or the one-time save hint with `LLMWIKI_SAVE_NUDGE=off`.
+Optional `injected`/`injected-feedback` commands collect version-bound self-assessments during
+explicit close-out. Missing/unknown judgments are neutral; `wrong` claims enter `recheck` and
+require raw evidence to resolve. `llmwiki status <repo> --details` expands folded housekeeping.
 
 Transcripts belong to the agent, not to llmwiki:
 

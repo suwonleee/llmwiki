@@ -684,7 +684,8 @@ export class WikiIndex {
           "knowledge_status=CASE WHEN source_kind='wiki' THEN ? ELSE knowledge_status END, " +
           "knowledge_tier=CASE WHEN source_kind='wiki' THEN ? ELSE knowledge_tier END, " +
           "last_indexed_at=datetime('now'), updated_at=datetime('now'), version=version+1, " +
-          "stale_since=NULL WHERE id=?",
+          // Editing a page is not proof that its changed dependencies were rechecked.
+          "stale_since=CASE WHEN source_kind='wiki' THEN stale_since ELSE NULL END WHERE id=?",
         [
           name,
           content,
@@ -884,20 +885,13 @@ export class WikiIndex {
     );
   }
 
-  /**
-   * Mark the pages that link to `docId` as stale — "a source I cite moved on without me".
-   *
-   * Pages updated in the SAME pass are excluded: a close-out routinely edits cross-linked pages
-   * together, and marking each other turned a fully-current wiki into a list of stale pages.
-   */
-  propagateStaleness(db: Database, docId: string, excludeIds: ReadonlySet<string> = new Set()): void {
-    const placeholders = excludeIds.size ? ` AND id NOT IN (${[...excludeIds].map(() => "?").join(", ")})` : "";
+  /** A dependency edit requires explicit re-verification, even when the page was co-edited. */
+  propagateStaleness(db: Database, docId: string): void {
     db.run(
       "UPDATE documents SET stale_since = datetime('now') WHERE id IN " +
         "(SELECT source_document_id FROM document_references " +
-        " WHERE target_document_id = ? AND reference_type = 'links_to') AND stale_since IS NULL" +
-        placeholders,
-      [docId, ...excludeIds],
+        " WHERE target_document_id = ? AND reference_type IN ('links_to', 'cites')) AND stale_since IS NULL",
+      [docId],
     );
   }
 
@@ -905,7 +899,7 @@ export class WikiIndex {
   flushStaleness(db: Database): void {
     const updated = new Set(this._updatedInPass);
     this._updatedInPass.clear();
-    for (const id of updated) this.propagateStaleness(db, id, updated);
+    for (const id of updated) this.propagateStaleness(db, id);
   }
 
   getBacklinks(db: Database, docId: string): DocRow[] {

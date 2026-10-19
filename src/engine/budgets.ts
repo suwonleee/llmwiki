@@ -31,3 +31,9 @@ export const OVERVIEW_BUDGET = Math.max(
   1000,
   parseInt(process.env.LLMWIKI_OVERVIEW_BUDGET ?? "8000", 10) || 8000,
 );
+
+// Shared topic prose budget for lint and the combined cold-start maintenance signal.
+export const TOPIC_BUDGET = Math.max(
+  2000,
+  parseInt(process.env.LLMWIKI_TOPIC_BUDGET ?? "10000", 10) || 10000,
+);

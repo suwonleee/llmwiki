@@ -142,3 +142,8 @@ test("cold-tier lookup never exposes archived body through original-case snippet
   expect(hit).toBeDefined();
   expect(matchSnippet(hit!.page, hit!.terms)).not.toContain("secret implementation");
 });
+
+ test("overlong declared instructions are withheld whole, never truncated", () => {
+  const root = wiki({ "3_decision/long-rule.md": page("Retry policy", "Retry policy background.", `x-llmwiki:\n  rule: "${"Always retry ".repeat(100)}except when the service rejects authentication"\n`) });
+  expect(loadWikiPages(root)[0]!.rule).toBe("");
+ });

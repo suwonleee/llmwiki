@@ -3,7 +3,7 @@
 # below lets Codex run a close-out or a deep pass on its own, mid-task.
 interface:
   display_name: "$wiki-save"
-  short_description: "Session close-out (warm, O(this session)) — file THIS session into the log, consolidate its dur…"
+  short_description: "Fast warm close-out — preserve THIS session’s decisions, contracts, failure lessons and evidenc…"
 
 policy:
   allow_implicit_invocation: false

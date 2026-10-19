@@ -8,7 +8,7 @@
 // sampled page; 28 held-out questions written blind from the same wikis): the FTS path found the
 // right page in its top 5 for 69% / 75%; this ranker for 92% / 89%.
 //
-// How: every page is read (a wiki is hundreds of pages, a few MB — milliseconds), each prompt term
+// How: parsed pages are cached behind a per-file metadata fingerprint; each prompt term
 // is matched by SUBSTRING (so a josa-free stem matches its glued forms and 2-char words count), and
 // the score is BM25-shaped — term rarity across the wiki (idf) × saturating in-page frequency with
 // mild length normalization — plus a bonus when the term names the page itself (title · filename ·
@@ -19,14 +19,17 @@
 // 2026-10-14: on 4 e2e scenarios the prompt and the deciding page shared no title words ("Figma
 // fetch_nodes 추가" vs a rule about outbound httpx User-Agent), so the decision was pointed at 0/4.
 // The rule line and the recall phrases are matched like identity, at a higher weight: an author
-// wrote them as triggers. Read from the page on every call, so a new recall line works at once —
-// there is no index to rebuild (the trigram FTS is not this ranker's input).
+// wrote them as triggers. Page metadata invalidates the parse cache, so a new recall line works
+// at once — there is no index to rebuild (the trigram FTS is not this ranker's input).
+import { sourceChangedPages } from "./source-freshness.ts";
+import { reportedWrongPages } from "./reported-wrong.ts";
 import { posix } from "node:path";
 import { getConfig, type WikiConfig } from "./config.ts";
 import { EDIT_RULE_KEY, RULE_MAX_CHARS } from "./edit-rules.ts";
 import { isRetired, isStale, parseYamlBlock, splitFrontmatter, type YamlMap } from "./okf.ts";
-import { readRepoDir, readRepoFile } from "./repo-write.ts";
-import { extractTerms, termWeight } from "./query-terms.ts";
+import { readRepoFile } from "./repo-write.ts";
+import { cachedWikiPages, type ParsedWikiPage } from "./wiki-page-cache.ts";
+import { extractTerms, subFloorTerms, termWeight } from "./query-terms.ts";
 
 const WIKI_REL = "docs/wiki";
 const K1 = 1.2;
@@ -52,6 +55,8 @@ export type WikiPage = {
   readonly rule: string; // the x-llmwiki rule line as written (whitespace collapsed), or ""
   readonly retired: boolean; // deprecated / superseded / has a successor (okf.ts isRetired)
   readonly stale: boolean; // OKF stale_after has passed
+  readonly sourceChanged?: boolean; // indexed cited/linked source changed; needs verification, not proven false
+  readonly reportedWrong?: boolean; // explicit self-assessment; awaits grounded recheck
   readonly snippetBody?: string; // original casing for display; never populated for cold-tier bodies
   readonly body: string; // lower-cased body without evidence-excerpt lines
 };
@@ -80,58 +85,58 @@ function triggersOf(fm: YamlMap): { rule: string; recall: string[] } {
   if (typeof x !== "object" || x === null || Array.isArray(x)) return { rule: "", recall: [] };
   const v = x as YamlMap;
   let rule = typeof v.rule === "string" ? v.rule.trim().replace(/\s+/g, " ") : "";
-  if (rule.length > RULE_MAX_CHARS) rule = `${rule.slice(0, RULE_MAX_CHARS - 1)}…`;
+  if (rule.length > RULE_MAX_CHARS) rule = ""; // Never inject an instruction with its exception truncated.
   const recall = [v.recall].flat().filter((r): r is string => typeof r === "string" && r.trim() !== "").map((r) => r.trim());
   return { rule, recall };
+}
+
+/** Parse all non-hidden Markdown, independent of the caller's config and skip list. */
+function parseWikiPages(root: string, paths: readonly string[]): ParsedWikiPage[] {
+  const out: ParsedWikiPage[] = [];
+  for (const child of paths) {
+    const name = posix.basename(child);
+    const text = readRepoFile(root, `${WIKI_REL}/${child}`);
+    if (text === null) continue;
+    const { block, body } = splitFrontmatter(text);
+    const fm = block === null ? {} : parseYamlBlock(block).data;
+    const title = typeof fm.title === "string" && fm.title.trim() ? fm.title.trim() : posix.basename(name, ".md");
+    const description = typeof fm.description === "string" ? fm.description : "";
+    // Cold-tier pages remain discoverable by identity, tags and keywords; bodies stay hidden.
+    const cold = fm.tier === "cold";
+    const extra = cold ? ` ${[fm.keywords].flat().filter((x) => typeof x === "string").join(" ")}` : "";
+    const tags = [fm.tags].flat().filter((x): x is string => typeof x === "string").join(" ").toLowerCase();
+    const id = `${title} ${name.replace(/\.md$/, "")} ${description}${extra}`.toLowerCase();
+    const { rule, recall } = triggersOf(fm);
+    const trig = [rule, ...recall].join(" ").toLowerCase();
+    const snippetBody = cold ? "" : body.replace(EVIDENCE_LINE, "");
+    out.push({
+      rel: child, title, description,
+      type: typeof fm.type === "string" ? fm.type.trim() : "",
+      tags: tags ? despaced(tags) : "",
+      status: String(fm.status ?? ""),
+      identity: despaced(id), trigger: trig ? despaced(trig) : "", rule,
+      retired: isRetired(fm),
+      ...(typeof fm.stale_after === "string" ? { staleAfter: fm.stale_after } : {}),
+      snippetBody, body: snippetBody.toLowerCase(),
+    });
+  }
+  return out;
 }
 
 /** The wiki's knowledge pages: reserved files, the queue and the quiz layer excluded. */
 export function loadWikiPages(root: string, cfg: WikiConfig = getConfig(root), skip: ReadonlySet<string> = new Set()): WikiPage[] {
   const hiddenDirs = new Set([cfg.queueDir, cfg.quizDir]);
   const reserved = new Set(["index.md", "log.md", "cold-index.md", cfg.files.log]);
-  const out: WikiPage[] = [];
-  const walk = (rel: string, prefix: string): void => {
-    for (const e of readRepoDir(root, rel)) {
-      if (e.name.startsWith(".")) continue;
-      const child = prefix ? `${prefix}/${e.name}` : e.name;
-      if (e.isDirectory) {
-        if (!(prefix === "" && hiddenDirs.has(e.name))) walk(`${rel}/${e.name}`, child);
-        continue;
-      }
-      if (!e.isFile || !e.name.endsWith(".md") || reserved.has(e.name) || skip.has(e.name)) continue;
-      const text = readRepoFile(root, `${rel}/${e.name}`);
-      if (text === null) continue;
-      const { block, body } = splitFrontmatter(text);
-      const fm = block === null ? {} : parseYamlBlock(block).data;
-      const title = typeof fm.title === "string" && fm.title.trim() ? fm.title.trim() : posix.basename(e.name, ".md");
-      const description = typeof fm.description === "string" ? fm.description : "";
-      // A cold-tier page is discoverable by its identity only (tiering.ts): its body is archived
-      // knowledge the retrieval deliberately does not surface, so tags and keywords stand in for it.
-      const cold = fm.tier === "cold";
-      const extra = cold ? ` ${[fm.keywords].flat().filter((x) => typeof x === "string").join(" ")}` : "";
-      const tags = [fm.tags].flat().filter((x): x is string => typeof x === "string").join(" ").toLowerCase();
-      const id = `${title} ${e.name.replace(/\.md$/, "")} ${description}${extra}`.toLowerCase();
-      const { rule, recall } = triggersOf(fm);
-      const trig = [rule, ...recall].join(" ").toLowerCase();
-      out.push({
-        rel: child,
-        title,
-        description,
-        type: typeof fm.type === "string" ? fm.type.trim() : "",
-        tags: tags ? despaced(tags) : "",
-        status: String(fm.status ?? ""),
-        identity: despaced(id),
-        trigger: trig ? despaced(trig) : "",
-        rule,
-        retired: isRetired(fm),
-        stale: isStale(fm),
-        snippetBody: cold ? "" : body.replace(EVIDENCE_LINE, ""),
-        body: cold ? "" : body.replace(EVIDENCE_LINE, "").toLowerCase(),
-      });
-    }
-  };
-  walk(WIKI_REL, "");
-  return out;
+  const changedSources = sourceChangedPages(root);
+  const reportedWrong = reportedWrongPages(root);
+  return cachedWikiPages(root, parseWikiPages)
+    .filter((p) => !hiddenDirs.has(p.rel.split("/")[0]!) && !reserved.has(posix.basename(p.rel)) && !skip.has(posix.basename(p.rel)))
+    .map(({ staleAfter, ...p }) => ({
+      ...p,
+      stale: isStale({ stale_after: staleAfter }),
+      sourceChanged: changedSources.has(`${WIKI_REL}/${p.rel}`),
+      ...(reportedWrong.has(`${WIKI_REL}/${p.rel}`) ? { reportedWrong: true } : {}),
+    }));
 }
 
 function occurrences(haystack: string, needle: string): number {
@@ -143,7 +148,7 @@ function occurrences(haystack: string, needle: string): number {
 /** The terms a prompt is ranked by: the trigram-floor terms plus the two-character words below it. */
 export function promptTerms(prompt: string): { terms: string[]; subFloor: string[] } {
   const terms = extractTerms(prompt ?? "");
-  const subFloor = extractTerms(prompt ?? "", 2).filter((t) => !terms.includes(t));
+  const subFloor = subFloorTerms(prompt ?? "", terms);
   return { terms, subFloor };
 }
 

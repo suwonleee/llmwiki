@@ -7,7 +7,7 @@
 //
 // Language: LLMWIKI_LANG=ko switches the operating-rules/headers to Korean (default: en).
 import { isOkfBundle } from "./okf-bundle.ts";
-import { isRetired, linkTextOnly } from "./okf.ts";
+import { isRetired, linkTextOnly, splitFrontmatter } from "./okf.ts";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -25,6 +25,8 @@ import { dueCount } from "./quiz.ts";
 import { isRepoKorean, effectiveKo, getConfig, renderRuleAuthoringBrief, scanDirs, type WikiConfig } from "./config.ts";
 import { detectConfigDrift } from "./migrate.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
+import { stripEvidence } from "./refs.ts";
+import { budgetStatus, hasL0Content, type StatusBlock } from "./coldstart-status.ts";
 
 
 // Cold-start L0 standard. The L0 page (current-state, or overview as fallback)
@@ -36,7 +38,7 @@ import { parseFrontmatter } from "./frontmatter.ts";
 // appended, so every session SEES the overage and the warm close-out (/wiki-save) is nudged
 // into ONE structural trim (move detail to current-state-detail). Discipline comes from
 // visibility, not from loss; the oversized-l0 lint adds its structural nag from 1.25× (budgets.ts).
-import { L0_BUDGET } from "./budgets.ts";
+import { L0_BUDGET, TOPIC_BUDGET } from "./budgets.ts";
 import { CLONE_ROOT } from "./paths.ts";
 import { updateAvailable } from "./update-check.ts";
 
@@ -201,7 +203,7 @@ function categoryPages(root: string, catDirs: string[]): string[] {
 
 // `opts.affinity` pins the page-affinity input (null = none) instead of reading this machine's live
 // aggregate — the seam deterministic callers (bench) use so a measurement cannot drift with use.
-export function buildContext(repo: string, opts: { affinity?: AffinityFile | null } = {}): string {
+export function buildContext(repo: string, opts: { affinity?: AffinityFile | null; statusBudget?: number } = {}): string {
   // FAIL CLOSED FIRST — before the per-repo config resolution, before any repository read.
   // An unenrolled repository (a fresh clone of someone else's project, a directory you merely
   // chatted in) produces EXACTLY zero bytes: no header, no newline, no "run init" nag. The
@@ -221,13 +223,28 @@ export function buildContext(repo: string, opts: { affinity?: AffinityFile | nul
   const cs = join(wikiRel, cfg.files.l0);
   const overview = join(wikiRel, cfg.files.overview);
   const L: string[] = [];
+  const statusBlocks: StatusBlock[] = [];
+  const status = (priority: number, ...lines: string[]) => {
+    const start = L.length;
+    L.push(...lines);
+    statusBlocks.push({ start, end: L.length, priority });
+  };
+  let openGaps = 0;
 
   // (A) cold-start context: prefer current-state (L0), fall back to overview.
   const csBody = readRepoFile(proj, cs);
   const overviewBody = csBody === null ? readRepoFile(proj, overview) : null;
   // The label matters because everything between the head and the details line is repository
   // TEXT: enrollment says the human trusts this project, not that a page may issue orders.
-  if (csBody !== null) {
+  if (csBody !== null && !hasL0Content(csBody)) {
+    L.push(lang === "ko"
+      ? "[llmwiki] 아직 위키가 비어 있음 — 의미 있는 작업을 마칠 때 /wiki-save"
+      : "[llmwiki] Wiki is still empty — /wiki-save after meaningful work");
+    // The navigation footer also carries per-repo category names. Keep it even
+    // when the page body is a scaffold, so custom conventions remain discoverable.
+    L.push(T.csDetail(wiki));
+    L.push("");
+  } else if (csBody !== null) {
     L.push(T.csHead(base(proj)));
     L.push(T.refLabel);
     L.push(l0OverNotice(csBody.replace(/\n+$/, ""), T.l0Over));
@@ -259,7 +276,10 @@ export function buildContext(repo: string, opts: { affinity?: AffinityFile | nul
       L.push(`===== [llmwiki] ${cfg.queueDir} pending ${files.length} — docs/wiki/${cfg.queueDir}/ =====`);
       for (const rf of files) {
         const o = owner(proj, rf);
-        L.push(`  - ${title(proj, rf)}${o ? `  [→ ${o}]` : ""}  ->  ${rf}`);
+        // Human judgment is an explicit exception to the housekeeping budget. Keep every
+        // title; a long queue drops path decoration only, never a question.
+        L.push(files.length > 3 ? `  - ${title(proj, rf)}`
+          : `  - ${title(proj, rf)}${o ? `  [→ ${o}]` : ""}  ->  ${rf}`);
       }
       L.push(reviewLlmNote(cfg));
       L.push("");
@@ -267,11 +287,7 @@ export function buildContext(repo: string, opts: { affinity?: AffinityFile | nul
     try {
       const gq = readRepoFile(proj, join(reviewDirRel, "gap-queue.md"));
       if (gq !== null) {
-        const open = parseQueue(gq).filter((g) => g.status === "open").length;
-        if (open > 0) {
-          L.push(T.gapBacklog(open));
-          L.push("");
-        }
+        openGaps = parseQueue(gq).filter((g) => g.status === "open").length;
       }
     } catch {
       /* fail-safe: the backlog line must never break cold-start */
@@ -284,8 +300,7 @@ export function buildContext(repo: string, opts: { affinity?: AffinityFile | nul
   if (hasWiki) {
     const behind = behindUpstream(proj);
     if (behind > 0) {
-      L.push(T.behind(behind));
-      L.push("");
+      status(8, T.behind(behind), "");
     }
   }
 
@@ -296,8 +311,7 @@ export function buildContext(repo: string, opts: { affinity?: AffinityFile | nul
     try {
       const drift = detectConfigDrift(proj, cfg);
       if (drift) {
-        L.push(`----- [llmwiki config drift] ${drift} -----`);
-        L.push("");
+        status(9, `----- [llmwiki config drift] ${drift} -----`, "");
       }
     } catch {
       /* fail-safe: cold-start must never break on drift detection */
@@ -311,8 +325,7 @@ export function buildContext(repo: string, opts: { affinity?: AffinityFile | nul
       const newest = repoFileMtime(proj, pages[0]!);
       const l0At = repoFileMtime(proj, l0);
       if (newest !== null && l0At !== null && newest > l0At) {
-        L.push(T.stale);
-        L.push("");
+        status(7, T.stale, "");
       }
     }
   }
@@ -363,22 +376,22 @@ export function buildContext(repo: string, opts: { affinity?: AffinityFile | nul
     }
   }
 
-  // (B4) topic-gap nudge — concepts that recur across log pages but have no 5_topic page yet.
-  // One bounded line (top few tags) so each session sees what to consolidate next. Failure-safe.
+  // (B4) WIKI-maintenance signals, combined once. A single open fact gap or a
+  // recurring concept already meeting topicGaps' multi-page threshold qualifies;
+  // session backlog is deliberately never a maintenance threshold.
   if (hasWiki) {
-    try {
-      const gaps = topicGaps(proj);
-      if (gaps.length) {
-        const top = gaps.slice(0, 5).map((g) => `${g.tag}(${g.pageCount})`).join(", ");
-        L.push(
-          lang === "ko"
-            ? `----- [llmwiki 주제 갭] 주제 페이지 없는 재발 개념 ${gaps.length}건 → /wiki-deep 로 통합:  ${top} -----`
-            : `----- [llmwiki topic-gap] ${gaps.length} recurring concept(s) without a topic page → /wiki-deep to consolidate:  ${top} -----`,
-        );
-        L.push("");
-      }
-    } catch {
-      /* fail-safe: cold-start must never break on the gap nudge */
+    let topics = 0;
+    try { topics = topicGaps(proj).length; } catch { /* optional, fail-safe */ }
+    let oversize = 0;
+    for (const path of categoryPages(proj, [cfg.topicDir])) {
+      const body = readRepoFile(proj, path);
+      if (body === null || isRetired(parseFrontmatter(body).data)) continue;
+      if (linkTextOnly(stripEvidence(splitFrontmatter(body).body)).length > TOPIC_BUDGET) oversize++;
+    }
+    if (openGaps > 0 || topics > 0 || oversize > 0) {
+      status(4, lang === "ko"
+        ? `[llmwiki] /wiki-deep 권장: 갭 ${openGaps} · 주제 ${topics} · 긴 주제 ${oversize} (LLM 소유·사람 액션 불필요)`
+        : `[llmwiki] /wiki-deep recommended: gaps ${openGaps} · topics ${topics} · oversized topics ${oversize} (LLM-owned; no human action needed)`, "");
     }
   }
 
@@ -414,7 +427,7 @@ export function buildContext(repo: string, opts: { affinity?: AffinityFile | nul
     // perpetually non-empty, so the threshold line degenerated into a permanent banner — the
     // exact countdown UX that decision had rejected. Un-filed sessions are self-selection,
     // not debt; the deadline detail stays on PULL only (`llmwiki doctor`).
-    L.push(T.pending(pendRows.length));
+    status(3, T.pending(pendRows.length));
     try {
       // pending() is first_seen ASC → the last rows are the most recent sessions.
       for (const row of pendRows.slice(-3).reverse()) {
@@ -428,7 +441,7 @@ export function buildContext(repo: string, opts: { affinity?: AffinityFile | nul
         } catch {
           /* stamp is decoration only */
         }
-        L.push(`  • ${stamp}${recap}`);
+        status(0, `  • ${stamp}${recap}`);
       }
     } catch {
       /* fail-safe: recap must never break cold-start; the count line above still stands */
@@ -440,7 +453,7 @@ export function buildContext(repo: string, opts: { affinity?: AffinityFile | nul
   // Quiz CONTENT never enters this blob (the quiz layer is unindexed by design) — only the count.
   {
     const due = dueCount(proj);
-    if (due > 0) L.push(T.quizDue(due));
+    if (due > 0) status(2, T.quizDue(due));
   }
 
   // (C3) engine update notice — automatic CHECK (daemon, daily), manual APPLY. This line only
@@ -451,9 +464,9 @@ export function buildContext(repo: string, opts: { affinity?: AffinityFile | nul
   if (hasWiki) {
     try {
       const upd = updateAvailable();
-      if (upd?.kind === "update") L.push(T.updateAvail(upd.localVersion, upd.remoteVersion, upd.apply));
-      else if (upd?.kind === "commits-behind") L.push(T.commitsBehind(upd.behind, upd.source, upd.apply));
-      else if (upd?.kind === "setup-required") L.push(T.setupRequired());
+      if (upd?.kind === "update") status(5, T.updateAvail(upd.localVersion, upd.remoteVersion, upd.apply));
+      else if (upd?.kind === "commits-behind") status(5, T.commitsBehind(upd.behind, upd.source, upd.apply));
+      else if (upd?.kind === "setup-required") status(6, T.setupRequired());
     } catch {
       /* freshness is an extra: never let it break cold-start */
     }
@@ -463,8 +476,8 @@ export function buildContext(repo: string, opts: { affinity?: AffinityFile | nul
   // Bounded, advisory, never edits; silent when the files are absent or clean.
   if (hasWiki) {
     const nudge = auditNudge(proj);
-    if (nudge) L.push(nudge);
+    if (nudge) status(1, nudge);
   }
 
-  return L.join("\n");
+  return budgetStatus(L, statusBlocks, lang === "ko", opts.statusBudget);
 }

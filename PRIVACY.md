@@ -1,6 +1,6 @@
 # llmwiki privacy policy
 
-Effective date: August 5, 2026
+Effective date: October 19, 2026
 
 llmwiki is a local-first, open-source project wiki. It has no hosted service, account system,
 telemetry, advertising, or analytics. The plugin makes no network requests.
@@ -8,7 +8,11 @@ telemetry, advertising, or analytics. The plugin makes no network requests.
 ## Data processed
 
 - Wiki Markdown from the repository you explicitly enroll.
-- Local derived state: the search index, capture queue, and emitted page-pointer ledger.
+- Local derived state: the search index, capture queue, emitted page paths and content hashes,
+  a bounded Git commit-message cache, and explicit page-use feedback and recheck receipts.
+- Automatic retrieval reads local wiki pages and commit messages. A bounded search of tracked
+  files at HEAD can check whether a named subject appears. Private temporary files cache parsed
+  wiki pages and retain only prompt hashes and flags for a once-per-session save hint.
 - The incremental, task-relevant portion of session transcripts only when you invoke `wiki-save`
   or `wiki-deep`. Automatic hooks inspect transcript modification times, not transcript content.
   Transcript material is credential-screened before it is printed back into model context, and
@@ -43,6 +47,10 @@ You choose which repositories to enroll, when transcript content may be read by 
 deep-pass skill, whether wiki Markdown is committed, and when to disable or uninstall llmwiki. Run
 `llmwiki disable <repo>` to revoke enrollment. Uninstalling the plugin leaves your Markdown intact;
 delete the llmwiki state directory if you also want to remove derived local state.
+
+Use `LLMWIKI_TURN_COMMITS=off`, `LLMWIKI_TURN_ABSENT=off`, `LLMWIKI_PAGE_CACHE=off`, or
+`LLMWIKI_SAVE_NUDGE=off` to disable the corresponding retrieval channel, parsing cache, or save hint.
+Feedback is collected only during explicit close-out. Missing or unknown feedback is neutral.
 
 ## Contact
 

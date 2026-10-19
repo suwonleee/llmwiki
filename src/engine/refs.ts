@@ -359,17 +359,13 @@ export function wikiPageDir(document: Readonly<Record<string, unknown>>): string
   return normalizeBundlePath(dir);
 }
 
-export function updateReferences(
-  index: WikiIndex,
-  conn: Database,
-  document: WikiDocument,
-  content: string,
-): [number, number] {
+/** Pure edge derivation, shared with freshness verification so stale graphs cannot certify a page. */
+export function referenceEdges(document: WikiDocument, content: string, documents: readonly WikiDocument[]): [string, string, number | null][] {
   // Rebuild this document's outgoing edges. document = object with id, path, relative_path.
   const docId = String(document.id);
   const wikiRelDir = wikiPageDir(document);
 
-  const linkIndex = buildLinkIndex(index.listDocuments(conn));
+  const linkIndex = buildLinkIndex(documents);
 
   const edges: [string, string, number | null][] = [];
   for (const citation of citationDeclarations(content)) {
@@ -392,6 +388,18 @@ export function updateReferences(
       edges.push([String(target.id), "links_to", null]);
     }
   }
+
+  return edges;
+}
+
+export function updateReferences(
+  index: WikiIndex,
+  conn: Database,
+  document: WikiDocument,
+  content: string,
+): [number, number] {
+  const docId = String(document.id);
+  const edges = referenceEdges(document, content, index.listDocuments(conn));
 
   index.deleteReferences(conn, docId);
   const seen = new Set<string>();

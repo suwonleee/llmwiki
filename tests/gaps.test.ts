@@ -1,6 +1,6 @@
 // P2: gap-queue lifecycle — extract review findings → track → self-close (loop-until-dry). LLM-0.
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -27,8 +27,11 @@ function makeQueueRoot(): { readonly root: string; readonly reviewPath: string; 
   };
 }
 
+function fullReport(body: string, scope = "scope-1"): string {
+  return `---\nx-llmwiki-review: { total: 1, included: 1, bounded: false, scope_sha256: ${scope} }\n---\n${body}`;
+}
 function reviewWithGaps(count: number): string {
-  return `## Missing concept page\n${Array.from({ length: count }, (_, index) => `- Gap ${index + 1}`).join("\n")}\n`;
+  return fullReport(`## Missing concept page\n${Array.from({ length: count }, (_, index) => `- Gap ${index + 1}`).join("\n")}\n`);
 }
 
 afterEach(() => {
@@ -37,6 +40,7 @@ afterEach(() => {
 
 const REVIEW_EN = `---
 title: review
+x-llmwiki-review: { total: 1, included: 1, bounded: false, scope_sha256: scope-1 }
 ---
 ## Contradiction
 (none)
@@ -105,8 +109,9 @@ test("refreshGapQueue reopens an identity that reappears after resolution", () =
 
   // When: the gap is absent enough times to resolve, then appears again.
   refreshGapQueue(root, "2026-07-01");
-  writeFileSync(reviewPath, "## Missing concept page\n(none)\n", "utf-8");
+  writeFileSync(reviewPath, fullReport("## Missing concept page\n(none)\n", "scope-2"), "utf-8");
   refreshGapQueue(root, "2026-07-02");
+  writeFileSync(reviewPath, fullReport("## Missing concept page\n(none)\n", "scope-3"), "utf-8");
   refreshGapQueue(root, "2026-07-03");
   writeFileSync(reviewPath, REVIEW_EN, "utf-8");
   const result = refreshGapQueue(root, "2026-07-04");
@@ -123,10 +128,11 @@ test("refreshGapQueue bounds resolved output while retaining an old hidden ident
   writeFileSync(reviewPath, reviewWithGaps(101), "utf-8");
   refreshGapQueue(root, "2026-07-01");
   const initialGaps = parseQueue(readFileSync(queuePath, "utf-8"));
-  writeFileSync(reviewPath, "## Missing concept page\n(none)\n", "utf-8");
+  writeFileSync(reviewPath, fullReport("## Missing concept page\n(none)\n", "scope-2"), "utf-8");
   refreshGapQueue(root, "2026-07-02");
 
   // When: the second absence resolves all gaps, then the oldest gap reappears.
+  writeFileSync(reviewPath, fullReport("## Missing concept page\n(none)\n", "scope-3"), "utf-8");
   refreshGapQueue(root, "2026-07-03");
   const resolvedQueue = readFileSync(queuePath, "utf-8");
   const visibleResolved = parseQueue(resolvedQueue);
@@ -150,8 +156,9 @@ test("refreshGapQueue rebuilds absent resolved state without dropping open work"
   writeFileSync(reviewPath, reviewWithGaps(101), "utf-8");
   refreshGapQueue(root, "2026-07-01");
   const initialGaps = parseQueue(readFileSync(queuePath, "utf-8"));
-  writeFileSync(reviewPath, "## Missing concept page\n(none)\n", "utf-8");
+  writeFileSync(reviewPath, fullReport("## Missing concept page\n(none)\n", "scope-2"), "utf-8");
   refreshGapQueue(root, "2026-07-02");
+  writeFileSync(reviewPath, fullReport("## Missing concept page\n(none)\n", "scope-3"), "utf-8");
   refreshGapQueue(root, "2026-07-03");
   const visibleResolved = parseQueue(readFileSync(queuePath, "utf-8"));
   const hiddenGap = initialGaps.find((gap) => !visibleResolved.some((visible) => visible.hash === gap.hash));
@@ -183,4 +190,59 @@ test("refreshGapQueue skips a malformed generated queue instead of overwriting i
   // Then: it fails closed and preserves the damaged file for recovery.
   expect(result.verdict).toBe("skip");
   expect(readFileSync(queuePath, "utf-8")).toBe(malformed);
+});
+
+test("the same report cannot advance absence twice, even after a date or generated-stamp change", () => {
+  const { root, reviewPath, queuePath } = makeQueueRoot();
+  writeFileSync(reviewPath, reviewWithGaps(1));
+  refreshGapQueue(root, "2026-07-01");
+  const absent = fullReport("## Missing concept page\n(none)\n", "scope-2");
+  writeFileSync(reviewPath, absent);
+  expect(refreshGapQueue(root, "2026-07-02").absenceAging).toBe("advanced");
+  expect(refreshGapQueue(root, "2026-07-03").absenceAging).toBe("duplicate-report");
+  const renamed = join(root, "docs/wiki/0_review/semantic-review-2026-07-04.md");
+  writeFileSync(renamed, absent.replace("---\n", "---\ngenerated: { at: '2026-07-04' }\n"));
+  utimesSync(renamed, 2_000_000_000, 2_000_000_000);
+  expect(refreshGapQueue(root, "2026-07-04").absenceAging).toBe("duplicate-report");
+  expect(parseQueue(readFileSync(queuePath, "utf8"))[0]).toMatchObject({ status: "open", absent: 1 });
+  writeFileSync(renamed, fullReport("## Missing concept page\n(none)\n", "scope-3"));
+  utimesSync(renamed, 2_000_000_001, 2_000_000_001);
+  expect(refreshGapQueue(root, "2026-07-05").resolved).toBe(1);
+});
+
+test("partial and unscoped reviews can add findings but cannot age existing gaps", () => {
+  const { root, reviewPath, queuePath } = makeQueueRoot();
+  writeFileSync(reviewPath, reviewWithGaps(1));
+  refreshGapQueue(root, "2026-07-01");
+  for (const [i, meta] of ["x-llmwiki-review: { total: 100, included: 40, bounded: true }", "", "x-llmwiki-review: { total: 100, included: 40, bounded: false }"].entries()) {
+    writeFileSync(reviewPath, `---\n${meta}\n---\n## Missing concept page\n- Another gap ${i}\n`);
+    expect(refreshGapQueue(root, `2026-07-0${i + 2}`).absenceAging).toBe("partial-or-unknown-scope");
+  }
+  const gaps = parseQueue(readFileSync(queuePath, "utf8"));
+  expect(gaps).toHaveLength(4);
+  expect(gaps.every(g => g.status === "open" && g.absent === 0)).toBe(true);
+});
+
+test("latest report follows actual modification time instead of lexical hash order", () => {
+  const { root, reviewPath, queuePath } = makeQueueRoot();
+  const highHashOld = join(root, "docs/wiki/0_review/semantic-review-2026-07-01-ffffffff.md");
+  const lowHashNew = join(root, "docs/wiki/0_review/semantic-review-2026-07-01-00000000.md");
+  writeFileSync(highHashOld, fullReport("## Missing concept page\n- Old stale finding\n"));
+  writeFileSync(lowHashNew, fullReport("## Missing concept page\n- New latest finding\n"));
+  utimesSync(highHashOld, 1_000_000_000, 1_000_000_000);
+  utimesSync(lowHashNew, 1_000_000_001, 1_000_000_001);
+  refreshGapQueue(root, "2026-07-01");
+  expect(readFileSync(queuePath, "utf8")).toContain("New latest finding");
+  expect(readFileSync(queuePath, "utf8")).not.toContain("Old stale finding");
+});
+
+test("check-only calls do not consume a review receipt", () => {
+  const { root, reviewPath, queuePath } = makeQueueRoot();
+  writeFileSync(reviewPath, reviewWithGaps(1));
+  refreshGapQueue(root, "2026-07-01");
+  writeFileSync(reviewPath, fullReport("## Missing concept page\n(none)\n", "scope-2"));
+  expect(refreshGapQueue(root, "2026-07-02", { check: true }).absenceAging).toBe("advanced");
+  expect(parseQueue(readFileSync(queuePath, "utf8"))[0]?.absent).toBe(0);
+  expect(refreshGapQueue(root, "2026-07-02").absenceAging).toBe("advanced");
+  expect(parseQueue(readFileSync(queuePath, "utf8"))[0]?.absent).toBe(1);
 });

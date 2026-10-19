@@ -1,6 +1,7 @@
 // update-done evidence gate: a filed (non-skipped) watermark must be the exact new_offset the last
 // update-next issued for that transcript — the one proof an extract existed for the range being
-// closed. Zero-offset completion of nonempty transcripts must not silently re-pend them as "grew".
+// closed. Measured before the gate: a deep pass bulk-marked 557 rows in ten minutes without
+// reading them, 13 of them at offset 0 (which then silently re-pended as "grew").
 import { test, expect, afterEach } from "bun:test";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

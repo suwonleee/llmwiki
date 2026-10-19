@@ -11,10 +11,11 @@ part of it — that ships only with the clone install (`git clone` + `./setup.sh
 | Component | Trigger | What it does |
 |---|---|---|
 | `SessionStart` hook | session start / resume / clear | prints the repository's `docs/wiki/current-state.md` plus a short index. Prints **nothing** for a repository that was never enrolled. |
-| `UserPromptSubmit` hook | every prompt | prints at most 3 page pointers (title → path) when the prompt lexically matches wiki pages; silent otherwise. No LLM call, no network. |
+| `UserPromptSubmit` hook | every prompt | prints bounded wiki excerpts and related commit messages, may mark an absent named subject, and may offer one model-facing save hint after eight turns with decision signals. No LLM call, no network. |
+| `PreToolUse` hook | matching edit/write/shell tools | supplies confirmed path-specific wiki rules before an edit; a reported-wrong rule version is withheld pending recheck. |
 | `skills/wiki-*` | only when the user invokes them | `wiki-save` (close out this session into the wiki), `wiki-ask`, `wiki-deep`, `wiki-quiz`, `wiki-doctor`. |
 
-Both hooks are shell scripts that run `bun <plugin>/src/cli.ts`. Every failure path exits 0 with
+The hooks are shell scripts that run the Bun engine. Every failure path exits 0 with
 empty output: a broken engine must never break a session. A missing or unsupported Bun runtime
 instead prints a prerequisite notice at session start and skips injection.
 
@@ -31,7 +32,7 @@ Installing the plugin does not enable it anywhere. Each repository is opt-in, on
 bun <plugin-root>/src/cli.ts init <repo>      # or run /wiki-doctor in a session there
 ```
 
-Until then both hooks emit **zero bytes** — indistinguishable from not having the plugin
+Until then the hooks emit **zero bytes** — indistinguishable from not having the plugin
 installed. Enrollment is recorded in that repository's `.git/llmwiki/` (not in the working tree,
 so it is never committed) and is revoked with `llmwiki disable <repo>`.
 
@@ -42,12 +43,16 @@ so it is never committed) and is revoked with `llmwiki disable <repo>`.
 
 - `index.db` — SQLite full-text index of that repository's own wiki pages
 - capture queue — which sessions have been filed into the wiki (paths and offsets, not content)
-- `observe/emissions.jsonl` — which page pointers were injected, for the engine's own metrics
+- `observe/emissions.jsonl` — emitted page paths and content hashes, by session and channel
+- `commit-log.json` — a bounded commit-message cache, only in existing project state
+- `injected-feedback/`, `rechecks/`, `observe/usage-affinity.json` — explicit self-assessments and version-bound recheck evidence; never golden evaluation labels
+
+Parsed wiki pages and prompt-hash-only save-hint state also use private files in the OS temporary directory.
 
 Inside your repository the plugin only ever writes **Markdown under `docs/wiki/`**, and only when
 you run a `/wiki-*` command. No database, no dotfiles, no build artefacts.
 
-**Read.** The wiki pages themselves, the state directory above, and — this is the part worth
+**Read.** The wiki pages themselves, bounded Git commit messages and tracked files at HEAD when checking an absent named subject, the state directory above, and — this is the part worth
 being precise about — your **session transcripts**:
 
 - the automatic hooks **stat** transcript files (modification time only, to say "N sessions not
@@ -71,8 +76,9 @@ notice new versions; the plugin has no daemon and does not do this.)
 
 ## Cost per session
 
-Around 330 tokens of always-on skill metadata, plus the cold-start page (a few KB, sized by your
-own L0 page) and typically 0–350 bytes per prompt, because most turns produce no pointer at all.
+Around 330 tokens of always-on skill metadata, plus the cold-start page (sized by your own L0).
+Housekeeping status has a shared 600-character budget; human judgment items and L0 are preserved
+outside that budget. Per-prompt wiki/commit excerpts and the optional save hint share 1,600 characters.
 
 ## Uninstall
 

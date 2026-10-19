@@ -21,10 +21,13 @@
 // Everything here is offline bench tooling except recordEmission, which runs on the turn path —
 // so it is one appendFileSync behind a try/catch, and a failure means a lost ledger line, never
 // a lost turn.
-import { appendFileSync, readdirSync, readFileSync, renameSync, statSync } from "node:fs";
+import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readdirSync, readFileSync, renameSync, writeSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
-import { ensureProjectStateDir, projectStateIsRegularFile, projectStatePath } from "./project-state.ts";
+import { createHash } from "node:crypto";
+import { ensureProjectStateDir, projectStateIsRegularFile, projectStatePath, readProjectState } from "./project-state.ts";
+import { readRepoFileBytes, repoComponents } from "./repo-write.ts";
+import { getConfig } from "./config.ts";
 import { openReadonlyDatabase } from "./sqlite-open.ts";
 import { opencodeDbPaths } from "./sources/opencode.ts";
 import { codexHome, readRollout } from "./sources/codex.ts";
@@ -39,6 +42,11 @@ import {
 // They carry no page pointers to answer with a read, so the reach report (readEmissionsFor) keeps
 // reading only the two pointer channels.
 export type EmissionChannel = Channel | "edit_rules";
+export interface EmittedPage { page: string; sha256: string }
+export interface DetailedEmission {
+  ts: number; session: string; channel: EmissionChannel; root: string;
+  snapshots: EmittedPage[];
+}
 
 export interface Emission {
   ts: number; // ms epoch, stamped at emission
@@ -104,6 +112,22 @@ export function recordEmission(
   try {
     if (!session.trim()) return; // unmatchable — a session-less line is noise, not data
     const pages = [...emittedText.matchAll(PAGE_RE)].map((m) => m[1]!);
+    const snapshotPages = new Set(pages);
+    if (channel === "cold_start") {
+      const cfg = getConfig(root);
+      // Whole L0s have no pointer line. Do not mistake the empty-template notice for a page.
+      if (emittedText.includes("(cold-start) =====")) {
+        const l0 = `docs/wiki/${cfg.files.l0}`;
+        snapshotPages.add(readRepoFileBytes(root, l0) !== null ? l0 : `docs/wiki/${cfg.files.overview}`);
+      }
+    } else if (channel === "edit_rules") {
+      for (const m of emittedText.matchAll(/docs\/wiki\/[^\s"'`<>\]\)]+\.md/g)) snapshotPages.add(m[0]);
+    }
+    const snapshots: EmittedPage[] = [];
+    for (const page of [...snapshotPages].slice(0, 64)) {
+      const bytes = readRepoFileBytes(root, page);
+      if (bytes !== null) snapshots.push({ page, sha256: createHash("sha256").update(bytes).digest("hex") });
+    }
     // A pointer-free emission used to be dropped as "nothing to match later". That silently hid
     // the WORST case the ledger can show: bytes spent to point at nothing. The reach numbers are
     // unaffected (no pages, no pointer occurrences), and the cost is now visible.
@@ -111,9 +135,11 @@ export function recordEmission(
     const dir = ensureProjectStateDir(root, "observe");
     const file = join(dir, LEDGER_NAME);
     try {
-      if (statSync(file).size > maxBytes) renameSync(file, `${file}.1`);
-    } catch {
-      /* first write */
+      const st = lstatSync(file);
+      if (!st.isFile() || st.isSymbolicLink() || st.nlink !== 1) return;
+      if (st.size > maxBytes) renameSync(file, `${file}.1`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return;
     }
     const line = JSON.stringify({
       ts: Date.now(),
@@ -121,12 +147,43 @@ export function recordEmission(
       channel,
       root: resolve(root).replace(/\\/g, "/"),
       pages,
+      snapshots,
       bytes: Buffer.byteLength(emittedText, "utf8"),
     });
-    appendFileSync(file, line + "\n");
+    const fd = openSync(file, fsConstants.O_WRONLY | fsConstants.O_APPEND | fsConstants.O_CREAT | (fsConstants.O_NOFOLLOW ?? 0), 0o600);
+    try {
+      const st = fstatSync(fd);
+      if (!st.isFile() || st.nlink !== 1 || (typeof process.getuid === "function" && st.uid !== process.getuid())) return;
+      writeSync(fd, line + "\n");
+    } finally { closeSync(fd); }
   } catch {
     /* never surface into the session */
   }
+}
+
+/** Version-bound emissions for explicit close-out feedback. Old pointer-only rows are unknown,
+ * never retroactively assigned today's page hash. Reads no harness transcripts and creates nothing. */
+export function readDetailedEmissions(root: string, session: string): DetailedEmission[] {
+  const out: DetailedEmission[] = [];
+  for (const name of [`${LEDGER_NAME}.1`, LEDGER_NAME]) {
+    if (!projectStateIsRegularFile(root, "observe", name)) continue;
+    const raw = readProjectState(root, `observe/${name}`, LEDGER_MAX_BYTES * 2);
+    if (!raw) continue;
+    for (const line of raw.split("\n")) {
+      try {
+        const e = JSON.parse(line);
+        if (e.session !== session || !Number.isFinite(e.ts) ||
+            !["cold_start", "turn_context", "edit_rules"].includes(e.channel) ||
+            e.root !== resolve(root).replace(/\\/g, "/") || !Array.isArray(e.snapshots)) continue;
+        const snapshots = e.snapshots.filter((s: any) => {
+          if (typeof s?.page !== "string" || !/^docs\/wiki\/.+\.md$/.test(s.page) || !/^[a-f0-9]{64}$/.test(s.sha256)) return false;
+          try { repoComponents(s.page); return true; } catch { return false; }
+        }).slice(0, 64);
+        out.push({ ts: e.ts, session, channel: e.channel, root: e.root, snapshots });
+      } catch { /* a damaged line is missing evidence */ }
+    }
+  }
+  return out;
 }
 
 // ---- reading the ledger -------------------------------------------------------------------

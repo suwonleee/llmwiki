@@ -1431,6 +1431,22 @@ export function mark(transcriptPath: string, byteOffset: number, status = "disti
   db.close();
 }
 
+/** Advance a pending receipt only if no other worker has moved its watermark. */
+export function markIfOffset(transcriptPath: string, expectedOffset: number, byteOffset: number, status = "distilled"): boolean {
+  if (!Number.isSafeInteger(byteOffset) || byteOffset <= expectedOffset) return false;
+  const db = connect();
+  try {
+    const result = db.run(
+      "UPDATE capture_queue SET byte_offset=?, status=?, distilled_at=datetime('now') " +
+      "WHERE transcript_path=? AND byte_offset=? AND status='pending'",
+      [byteOffset, status, transcriptPath, expectedOffset],
+    );
+    return result.changes === 1;
+  } finally {
+    db.close();
+  }
+}
+
 // All transcripts the central queue has seen for a repo (any status). Used by
 // `register-transcript` to make a warm /wiki-save session's transcripts citable sources so
 // decision/insight pages can cite the real session (not a repointed code file).

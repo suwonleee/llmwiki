@@ -38,15 +38,15 @@ const QUEUE_NOTE: LangCatalog<string> = {
 };
 
 const QUEUE_CLOSE_RULE: LangCatalog<(n: number) => string> = {
-  en: (n) => `Absent from ${n} consecutive reviews → closed automatically.`,
-  ko: (n) => `${n}회 연속 review에서 안 보이면 자동 close.`,
-  ja: (n) => `${n} 回連続の review で現れなければ自動クローズ。`,
-  zh: (n) => `连续 ${n} 次 review 都未出现 → 自动关闭。`,
+  en: (n) => `Absent from ${n} independent complete reviews → closed automatically; repeated or partial reports do not count.`,
+  ko: (n) => `독립된 전체 review ${n}회에서 안 보이면 자동 close. 반복·부분 보고서는 미집계.`,
+  ja: (n) => `${n} 回の独立した全体 review で現れなければ自動クローズ。重複・部分レポートは数えません。`,
+  zh: (n) => `${n} 次独立完整 review 都未出现 → 自动关闭；重复或局部报告不计数。`,
 };
 import { LLM_CMD_ENV, llmAvailable } from "./claude.ts";
-import { gapStatePath, loadResolvedGapState, writeResolvedGapState } from "./gap-state.ts";
-import { ensureRepoDir, readRepoDir, readRepoFile, repoRelative, writeRepoFile } from "./repo-write.ts";
-import { isoLocal, renderYaml } from "./okf.ts";
+import { GAP_REVIEW_HISTORY_LIMIT, gapStatePath, loadGapReviewHashes, loadResolvedGapState, writeResolvedGapState } from "./gap-state.ts";
+import { ensureRepoDir, readRepoDir, readRepoFile, repoRelative, repoFileMtime, writeRepoFile } from "./repo-write.ts";
+import { isoLocal, parseYamlBlock, splitFrontmatter, renderYaml } from "./okf.ts";
 import { engineActor } from "./okf-bundle.ts";
 
 export const RESOLVE_AFTER = 2; // consecutive absent reviews before a gap is closed
@@ -204,10 +204,11 @@ function _latestReview(root: string): string | null {
   const rel = join("docs", "wiki", getConfig(root).queueDir);
   const files = readRepoDir(root, rel)
     .filter((entry) => entry.isFile && /^semantic-review-.*\.md$/.test(entry.name))
-    .map((entry) => entry.name)
-    .sort();
+    .map((entry) => ({ name: entry.name, mtime: repoFileMtime(root, join(rel, entry.name)) }))
+    .filter((entry) => entry.mtime !== null)
+    .sort((a, b) => a.mtime! - b.mtime! || a.name.localeCompare(b.name));
   const latest = files.at(-1);
-  return latest === undefined ? null : join(root, rel, latest);
+  return latest === undefined ? null : join(root, rel, latest.name);
 }
 
 export interface GapResult {
@@ -217,6 +218,7 @@ export interface GapResult {
   added?: number;
   path?: string;
   reason?: string;
+  absenceAging?: "advanced" | "duplicate-report" | "partial-or-unknown-scope" | "history-unavailable";
 }
 
 // Merge the latest review's gaps into the queue: reappearing → open(absent=0); newly-absent →
@@ -243,6 +245,23 @@ export function refreshGapQueue(ws: string, date: string, opts: { check?: boolea
   const review = readRepoFile(root, repoRelative(root, reviewPath));
   if (review === null) return { verdict: "skip", reason: "review report is not a safe repository file" };
   const current = extractGapsFromReview(review);
+  const { block, body } = splitFrontmatter(review);
+  const metadata = (block ? parseYamlBlock(block).data["x-llmwiki-review"] : undefined) as Record<string, unknown> | undefined;
+  const included = metadata?.included ?? (Array.isArray(metadata?.pages) ? metadata.pages.length : undefined);
+  // Only an explicit complete review can supply absence evidence. A partial view (or an old
+  // unscoped report) can still add/reopen findings, but never retire out-of-scope work.
+  const complete = metadata?.bounded === false && Number.isSafeInteger(metadata.total) &&
+    typeof metadata.total === "number" && metadata.total > 0 && included === metadata.total;
+  // Generated date/actor stamps are not independent review evidence. Bind semantic content
+  // and input scope, not the filename or number of times someone invoked `gaps`.
+  const reviewHash = createHash("sha256").update(JSON.stringify({ body: body.trim(),
+    scope: metadata?.scope_sha256 ?? null, total: metadata?.total ?? null, bounded: metadata?.bounded ?? null })).digest("hex");
+  const history = loadGapReviewHashes(root);
+  const duplicate = history?.includes(reviewHash) ?? false;
+  const historyAvailable = history !== null && (duplicate || history.length < GAP_REVIEW_HISTORY_LIMIT);
+  const mayAge = complete && !duplicate && historyAvailable;
+  const absenceAging: GapResult["absenceAging"] = !complete ? "partial-or-unknown-scope"
+    : !historyAvailable ? "history-unavailable" : duplicate ? "duplicate-report" : "advanced";
   const queueRel = join("docs", "wiki", getConfig(root).queueDir, "gap-queue.md");
   const queuePath = join(root, queueRel);
   // readRepoFile, not readFileSync: a symlinked queue (or a symlinked ancestor of it) reads as
@@ -278,7 +297,7 @@ export function refreshGapQueue(ws: string, date: string, opts: { check?: boolea
   }
   // gaps not emitted this run → age them; close after RESOLVE_AFTER consecutive absences
   for (const g of byHash.values()) {
-    if (seenNow.has(g.hash)) continue;
+    if (!mayAge || seenNow.has(g.hash)) continue;
     if (g.status === "resolved") continue;
     g.absent += 1;
     if (g.absent >= RESOLVE_AFTER) {
@@ -293,8 +312,11 @@ export function refreshGapQueue(ws: string, date: string, opts: { check?: boolea
   const resolved = gaps.filter((g) => g.status === "resolved").length;
   if (!opts.check) {
     ensureRepoDir(root, join("docs", "wiki", getConfig(root).queueDir));
+    // Persist the consume receipt first. A crash before the derived page write may defer one
+    // absence count, but cannot falsely count the same report twice. Add/reopen is replayable.
+    if (history !== null) writeResolvedGapState(root, gaps,
+      !duplicate && history.length < GAP_REVIEW_HISTORY_LIMIT ? [...history, reviewHash] : history);
     writeRepoFile(root, queueRel, renderQueue(gaps, date, resolveWikiLang(root)));
-    writeResolvedGapState(root, gaps);
   }
-  return { verdict: "refreshed", open, resolved, added, path: queuePath };
+  return { verdict: "refreshed", open, resolved, added, path: queuePath, absenceAging };
 }

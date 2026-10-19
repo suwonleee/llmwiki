@@ -7,6 +7,7 @@ export const GAP_STATE_NAME = "gap-queue-state.json";
 type GapState = {
   readonly version: 1;
   readonly resolved: readonly Gap[];
+  readonly reviewHashes?: readonly string[];
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -58,10 +59,26 @@ export function loadResolvedGapState(root: string): readonly Gap[] | null {
   }
 }
 
-export function writeResolvedGapState(root: string, gaps: readonly Gap[]): void {
+/** Every accepted review semantic hash is remembered. Replaying an old report cannot make
+ * absence look like a new independent review. A full ledger disables aging instead of evicting. */
+export const GAP_REVIEW_HISTORY_LIMIT = 2048;
+export function loadGapReviewHashes(root: string): readonly string[] | null {
+  const raw = readProjectState(root, GAP_STATE_NAME);
+  if (raw === null) return [];
+  try {
+    const v = JSON.parse(raw) as GapState;
+    if (v?.version !== 1 || !Array.isArray(v.resolved)) return null;
+    if (v.reviewHashes === undefined) return []; // pre-receipt state
+    return Array.isArray(v.reviewHashes) && v.reviewHashes.length <= GAP_REVIEW_HISTORY_LIMIT &&
+      v.reviewHashes.every(h => typeof h === "string" && /^[a-f0-9]{64}$/.test(h))
+      ? [...new Set(v.reviewHashes)] : null;
+  } catch { return null; }
+}
+
+export function writeResolvedGapState(root: string, gaps: readonly Gap[], reviewHashes?: readonly string[]): void {
   const resolved = gaps
     .filter((gap) => gap.status === "resolved")
     .sort((a, b) => a.hash.localeCompare(b.hash));
-  const state: GapState = { version: 1, resolved };
+  const state: GapState = { version: 1, resolved, ...(reviewHashes ? { reviewHashes } : {}) };
   writeProjectState(root, GAP_STATE_NAME, JSON.stringify(state));
 }

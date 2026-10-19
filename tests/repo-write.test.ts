@@ -1,9 +1,9 @@
 // The repository I/O boundary's RUNTIME contract (not just its types).
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, readdirSync, symlinkSync, lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { repoFileMetadata } from "../src/engine/repo-write.ts";
+import { repoFileMetadata, createRepoFile } from "../src/engine/repo-write.ts";
 
 describe("repoFileMetadata runtime contract (floor-runtime regression)", () => {
   let root: string;
@@ -30,5 +30,24 @@ describe("repoFileMetadata runtime contract (floor-runtime regression)", () => {
     const a = repoFileMetadata(root, "docs/wiki/q.md")!;
     const b = repoFileMetadata(root, "docs/wiki/q.md")!;
     expect(a.mtimeNs).toBe(b.mtimeNs); // an unstable derivation would disable skipping forever
+  });
+});
+
+describe("atomic candidate publication", () => {
+  let root: string;
+  beforeEach(() => { root = mkdtempSync(join(tmpdir(), "llmwiki-create-")); });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+  test("complete candidate appears once, later creators cannot overwrite it", () => {
+    expect(createRepoFile(root, "page.md", "accepted\n")).toBe(true);
+    expect(createRepoFile(root, "page.md", "racing writer\n")).toBe(false);
+    expect(readFileSync(join(root, "page.md"), "utf8")).toBe("accepted\n");
+    expect(readdirSync(root)).toEqual(["page.md"]);
+  });
+  test("a symlink collision preserves both the link and its target", () => {
+    writeFileSync(join(root, "original.md"), "original");
+    symlinkSync(join(root, "original.md"), join(root, "page.md"));
+    expect(createRepoFile(root, "page.md", "replacement")).toBe(false);
+    expect(lstatSync(join(root, "page.md")).isSymbolicLink()).toBe(true);
+    expect(readFileSync(join(root, "original.md"), "utf8")).toBe("original");
   });
 });

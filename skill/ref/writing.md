@@ -1,6 +1,6 @@
 # writing — page prose and body-structure detail
 
-Use this before writing your first page of a pass, and whenever lint flags `dense-bullet` or a banned term. The always-on rules (who writes, no fabrication, page language, verbatim identifiers, the numbered-section shape) live in the skill itself; this is their full detail.
+Read before your first page of a pass, and when lint flags `dense-bullet` or a banned term. The skill holds the always-on rules; this is their detail.
 
 ## 1. Body structure
 
@@ -20,3 +20,10 @@ Use this before writing your first page of a pass, and whenever lint flags `dens
 
 - Lint-enforced, advisory: avoid jargon a person wouldn't naturally say — e.g. when writing Korean prefer `방향성` over 진북/북극성, `업데이트` over distill.
 - A team config's banned terms print with `llmwiki conventions <repo>`.
+
+## 4. Claims that age well
+
+- Write what the code cannot tell: why (reasons, rejected options), contracts, failures and their fixes.
+- Skip what a reader gets from the code in seconds — file lists, directory trees, signatures. Inventory claims go stale first.
+- A needed location claim names a path or symbol, never a line number; a snapshot says where it holds (`as of <commit>`, branch, worktree).
+- When a later finding overturns a line, mark that line itself (`was …, now …`) — an excerpt can carry it alone.

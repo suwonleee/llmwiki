@@ -42,6 +42,8 @@ const ALLOWED_MUTATORS: Record<string, string> = {
   "engine/hermes-export.ts":
     "writes one Hermes session transcript to a caller-chosen path outside any repository (the ingest hand-off), and stats Hermes' own state.db — never repository content",
   "engine/turncontext.ts": "per-session scratch state in the OS temp dir, not in any repository",
+  "engine/save-nudge.ts": "owner-checked private OS-temp session state and exclusive lock; only prompt hashes/flags, never transcript or repository contents",
+  "engine/wiki-page-cache.ts": "owner-checked private OS-temp parse cache with NOFOLLOW and atomic replacement; wiki metadata comes from entries listed through repo-write and page contents through repo-write",
   "engine/edit-rules.ts":
     "the edit-rule cache and per-session dedupe markers in the OS temp dir (private, owner-checked), plus lstat metadata of docs/wiki entries already listed through repo-write for the cache signature — page content is read only through repo-write",
   "engine/update-check.ts": "records the daily origin check in the machine-local state root; reads the engine clone's own package.json — never repository content",
@@ -72,6 +74,9 @@ const ALLOWED_MUTATORS: Record<string, string> = {
 };
 
 const ALLOWED_READERS: Record<string, string> = {
+  "engine/injected-feedback.ts": "enumerates immutable receipts under machine-local project state only; all wiki and raw-evidence bytes use repo-write",
+  "engine/work-feedback.ts": "reads explicitly selected bounded JSON and lists private feedback state; repository evidence uses repo-write",
+  "engine/source-freshness.ts": "lstats machine-local index journals before opening SQLite; repository evidence uses repo-write",
   ...ALLOWED_MUTATORS,
   "cli.ts": "reads the optional team git-conventions doc and the skill reference sections (skill/ref/) from the engine clone",
   "engine/config.ts": "reads trusted engine-clone config templates, never repository content",

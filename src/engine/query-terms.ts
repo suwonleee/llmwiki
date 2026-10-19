@@ -44,29 +44,41 @@ export function stripJosa(t: string): string | null {
   return null;
 }
 
-export function extractTerms(prompt: string, denseFloor = 3): string[] {
+// Question endings. A wiki states things; it almost never contains "…되나요?", so the asked form
+// only took a slot from a real term. The form comes off and only what remains can match.
+const QUESTION_END = /(?:인가요|나요|까요|가요)$/u;
+// 하다/되다 endings on a noun stem — the shape most Korean technical verbs take (승인할 · 처리되는데
+// · 재사용해도). One layer, stem of two or more characters, original kept: like josa, this can only
+// add recall. Other verb endings stay untouched for the reason given above.
+const HADA_END = /^(.{2,}?)(?:되는데|하는데|되는지|하는지|되어도|되면|하면|되고|하고|해도|해서|되어|됩니다|합니다|되지|하지|된|한|할|될|되|하)$/u;
+const SUB_FLOOR_MAX = MAX_TERMS;
+
+const isAscii = (t: string): boolean => /^[\x00-\x7F]+$/.test(t);
+
+/** Candidate terms in prompt order, before any length ranking or cap. */
+function candidates(prompt: string, denseFloor: number): string[] {
   const seen = new Set<string>();
   const terms: string[] = [];
+  const push = (t: string, floor: number): void => {
+    if ([...t].length < floor) return;
+    const key = t.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    terms.push(t);
+  };
   const add = (raw: string): void => {
     const t = raw.replace(/[./-]+$/, ""); // trim trailing punctuation-ish tail
     // 3 is the FTS5 trigram matching floor; Latin gets 4, because that is what keeps the
     // "the/and/for" class out without a stopword list. A dense script needs no such margin —
     // three characters of Hangul or Han are already a content word.
-    if ([...t].length >= (/^[\x00-\x7F]+$/.test(t) ? 4 : denseFloor)) {
-      const key = t.toLowerCase();
-      if (!seen.has(key)) {
-        seen.add(key);
-        terms.push(t);
-      }
-    }
-    const stripped = stripJosa(t);
-    if (stripped && [...stripped].length >= denseFloor) {
-      const key = stripped.toLowerCase();
-      if (!seen.has(key)) {
-        seen.add(key);
-        terms.push(stripped);
-      }
-    }
+    if (isAscii(t)) return push(t, 4);
+    const asked = t.replace(QUESTION_END, "");
+    const hada = HADA_END.exec(asked)?.[1] ?? null;
+    // The asked form itself is never a term; without a 하다/되다 stem, what remains (바뀌 · 갈라지)
+    // still matches the page's own inflection.
+    if (asked === t) push(t, denseFloor);
+    else if (!hada) push(asked, denseFloor);
+    for (const stem of [stripJosa(asked), hada]) if (stem) push(stem, denseFloor);
   };
   for (const m of prompt.matchAll(ASCII_RE)) add(m[0]!);
   for (const m of prompt.matchAll(UNSPACED_RUN_RE)) for (const w of unspacedWindows(m[0]!)) add(w);
@@ -74,8 +86,22 @@ export function extractTerms(prompt: string, denseFloor = 3): string[] {
     if (UNSPACED_ONLY_RE.test(m[0]!)) continue; // already windowed above; the whole run cannot match
     add(m[0]!);
   }
+  return terms;
+}
+
+export function extractTerms(prompt: string, denseFloor = 3): string[] {
   // longer = more specific; keep the most specific MAX_TERMS
-  return terms.sort((a, b) => b.length - a.length).slice(0, MAX_TERMS);
+  return candidates(prompt, denseFloor).sort((a, b) => b.length - a.length).slice(0, MAX_TERMS);
+}
+
+/** Two-character dense-script words below the trigram floor — 승인·예산·배포 — in prompt order with
+ * their own cap. Drawn from the uncapped candidates: taking them from the length-ranked list cut
+ * every one of them on long prompts, which are exactly the prompts that carry them. */
+export function subFloorTerms(prompt: string, main: readonly string[]): string[] {
+  const taken = new Set(main.map((t) => t.toLowerCase()));
+  return candidates(prompt, 2)
+    .filter((t) => !isAscii(t) && [...t].length === 2 && !taken.has(t.toLowerCase()))
+    .slice(0, SUB_FLOOR_MAX);
 }
 
 

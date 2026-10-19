@@ -22,6 +22,7 @@
 import { test, expect, describe } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { EDIT_HOOK_MATCHER } from "../src/engine/edit-rules.ts";
 
 const ROOT = join(import.meta.dir, "..");
 const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
@@ -65,4 +66,21 @@ describe("SessionStart matcher stays open across every install surface", () => {
       expect(read(src)).toMatch(/matcher:\s*""/);
     }
   });
+});
+
+test("plugin and clone installs use the same edit-time matcher and five-second timeout", () => {
+  const plugin = JSON.parse(read("hooks/hooks.json"));
+  expect(plugin.hooks.PreToolUse).toHaveLength(1);
+  const group = plugin.hooks.PreToolUse[0];
+  expect(group.matcher).toBe(EDIT_HOOK_MATCHER);
+  expect(group.hooks).toHaveLength(1);
+  expect(group.hooks[0]).toMatchObject({ type: "command", timeout: 5, additionalContextLimit: 0 });
+  expect(group.hooks[0].command).toContain("/hooks/pretooluse-inject.sh");
+  const clone = read("src/daemon/wire.ts");
+  expect(clone).toMatch(/matcher:\s*EDIT_HOOK_MATCHER/);
+  expect(clone).toMatch(/const EDIT_TIMEOUT = 5;/);
+  // Keep the shared plugin file on the common command-hook surface.
+  expect(Object.keys(group.hooks[0]).sort()).toEqual(
+    ["type", "command", "timeout", "statusMessage", "additionalContextLimit"].sort(),
+  );
 });

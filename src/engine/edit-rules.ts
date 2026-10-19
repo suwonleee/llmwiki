@@ -348,19 +348,26 @@ async function parseRules(root: string, pages: readonly string[]): Promise<EditR
 export async function loadEditRules(root: string): Promise<EditRule[]> {
   const scan = scanWiki(root);
   if (!scan) return [];
+  // Index currency changes independently of wiki mtimes. Keep the raw declaration cache intact
+  // and apply this read-only signal on EVERY load, including cache hits and acknowledgements.
+  const { sourceChangedPages } = await import("./source-freshness.ts");
+  const { reportedWrongPages } = await import("./reported-wrong.ts");
+  const changed = new Set(sourceChangedPages(root));
+  for (const page of reportedWrongPages(root)) changed.add(page);
+  const current = (rules: EditRule[]) => rules.filter(rule => !changed.has(rule.page));
   const path = cachePath(root);
   try {
     const raw = readPrivate(path);
     if (raw) {
       const cached = JSON.parse(raw) as { v?: number; sig?: string; rules?: EditRule[] };
-      if (cached.v === CACHE_VERSION && cached.sig === scan.sig && Array.isArray(cached.rules)) return cached.rules;
+      if (cached.v === CACHE_VERSION && cached.sig === scan.sig && Array.isArray(cached.rules)) return current(cached.rules);
     }
   } catch {
     /* unreadable cache → rebuild */
   }
   const rules = await parseRules(root, scan.pages);
   writePrivate(path, JSON.stringify({ v: CACHE_VERSION, sig: scan.sig, rules }));
-  return rules;
+  return current(rules);
 }
 
 /** Rules whose globs match `rel` (repo-relative, `/`-separated), newest page first. */

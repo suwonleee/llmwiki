@@ -60,7 +60,7 @@ import {
 } from "./lint.ts";
 import { MODEL_HEAVY, MODEL_LIGHT } from "./models.ts";
 import { generativeModel } from "./session-model.ts";
-import { ensureRepoDir, removeRepoFile, writeRepoFile } from "./repo-write.ts";
+import { ensureRepoDir, createRepoFile } from "./repo-write.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import { isoLocal, mergeSources, parseYamlBlock, renderDocument, splitFrontmatter, type YamlMap } from "./okf.ts";
 import { bundleFiles, categoryType, domainForType, linkResolver, normalizePage } from "./okf-bundle.ts";
@@ -292,7 +292,7 @@ export function _lintCandidate(
     const filename = basename(normalized);
     const slash = normalized.lastIndexOf("/");
     const path = slash >= 0 ? `/${normalized.slice(0, slash + 1)}` : "/";
-    const virtualId = "__llmwiki_direction_candidate__";
+    const virtualId = "__llmwiki_candidate__";
     const virtual: WikiDoc = {
       id: virtualId,
       path,
@@ -503,7 +503,7 @@ export async function updateOne(
     const qrel = join("docs", "wiki", cfg.queueDir, `${_date(inc)}-${titleSlug}.md`);
     const qdest = join(root, qrel);
     ensureRepoDir(root, join("docs", "wiki", cfg.queueDir));
-    writeRepoFile(
+    const created = createRepoFile(
       root,
       qrel,
       _reviewWrapper({
@@ -516,13 +516,18 @@ export async function updateOne(
         actor: writeActor,
       }),
     );
-    idx.indexAll();
+    if (!created) {
+      result.verdict = "conflict";
+      result.reason = "Destination already exists; preserved existing content and pending transcript.";
+    } else {
+      idx.indexAll();
+    }
     result.dest = relpath(root, qdest);
     result.accepted = false;
     return result;
   }
 
-  // 3b) NON-DIRECTION → write to its category, register provenance, run deterministic LINT.
+  // 3b) NON-DIRECTION → prepare provenance and lint in memory before atomic publication.
   ensureRepoDir(root, join("docs", "wiki", subdir));
   // Attach portable evidence before the page leaves this machine — the transcript is open right
   // here, and on any other clone it will not be readable at all (page format v3).
@@ -530,33 +535,34 @@ export async function updateOne(
   page = ensureExcerpts(page, transcriptPath, offset);
   // OKF frontmatter, stamped by the engine: the routed type, this write as `generated`, and —
   // only when the independent VERIFY pass confirmed every claim — that pass as `verified`. A page
-  // that fails a later gate is removed below, so a stamp never outlives a rejection.
+  // that fails a later gate is never published.
   page = okfStamp(root, `${subdir}/${destName0}`, page, cfg, {
     actor: writeActor,
     verifiedBy: verified ? modelActor("llmwiki-verify", vm) : null,
     set: catDef ? { type: categoryType(catDef) } : {},
   });
-  writeRepoFile(root, destRel, page + (page.endsWith("\n") ? "" : "\n"));
-  idx.indexAll();
-  const conn = idx.connect();
   const destName = basename(dest);
-  const doc = idx
-    .listDocumentsWithContent(conn)
-    .find((d) => String(d.relative_path).endsWith(destName));
-  if (doc) {
-    updateReferences(idx, conn, doc, page);
-  }
-  // WikiIndex's row type (DocRow = open-shape) is wider than Linter's WikiDoc; the
-  // runtime rows have all required fields. Cast at the boundary, no runtime cost.
-  const [issues] = new Linter(idx as unknown as WikiIndexLike, conn, cfg).run("*", "wiki");
-  conn.close();
-  const pageErrors: LintIssue[] = issues.filter(
-    (i) => i.severity === "error" && i.path.includes(destName),
-  );
+  const pageErrors = _lintCandidate(idx, cfg, destRel, page)
+    .filter((issue) => issue.severity === "error");
 
   // Accept when Opus-verified AND lint-clean AND grounded (no fabricated file paths) →
   // `ready`, no human.
   if (verified && grounded && pageErrors.length === 0) {
+    if (!createRepoFile(root, destRel, page + (page.endsWith("\n") ? "" : "\n"))) {
+      result.verdict = "conflict";
+      result.reason = "Destination already exists; preserved existing content and pending transcript.";
+      result.accepted = false;
+      return result;
+    }
+    idx.indexAll();
+    const conn = idx.connect();
+    try {
+      const doc = idx.listDocumentsWithContent(conn)
+        .find((d) => String(d.relative_path).replaceAll("\\", "/") === destRel.replaceAll("\\", "/"));
+      if (doc) updateReferences(idx, conn, doc, page);
+    } finally {
+      conn.close();
+    }
     update.appendLog(
       ws,
       "autoupdate",
@@ -573,7 +579,7 @@ export async function updateOne(
   }
 
   // Opus rejected (ungrounded) or lint error → omit. By design, do NOT escalate to the
-  // human queue (0_review is direction-only). Remove the page, log the reason, and advance
+  // human queue (0_review is direction-only). Leave the candidate unpublished, log the reason, and advance
   // the watermark as 'skipped' (the raw transcript is preserved immutably and can be
   // reprocessed). This supersedes the earlier rule that rejection never advanced the watermark.
   const reasonBits: string[] = [];
@@ -583,8 +589,6 @@ export async function updateOne(
       `${ko ? "근거 없는 파일경로" : "ungrounded file path(s)"} — ${grounding.unsupportedPaths.join(", ")}`,
     );
   if (pageErrors.length > 0) reasonBits.push(`${ko ? "lint 오류" : "lint error"} — ${pageErrors.map((i) => i.code).join(", ")}`);
-  removeRepoFile(root, destRel); // roll back through the boundary, never by raw path
-  idx.indexAll();
   update.appendLog(
     ws,
     "autoupdate",

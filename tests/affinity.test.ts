@@ -190,7 +190,16 @@ describe("scoring", () => {
     expect(affinityMultiplier(affOf({ x: { turn_context: ev(7, 0, 3) } }), "x")).toBe(1);
     expect(affinityMultiplier(affOf({ x: { turn_context: ev(20, 0, 1) } }), "x")).toBe(1); // one day only
     expect(affinityMultiplier(affOf({ x: coldDemoted }), "x")).toBe(1); // cold-start evidence is not turn evidence
-    expect(affinityMultiplier(affOf({ x: turnDemoted }), "x")).toBe(0.9);
+    expect(affinityMultiplier(affOf({ x: turnDemoted }), "x")).toBe(1); // excerpts need no read
+    expect(affinityMultiplier(affOf({ x: { turn_context: { ...ev(12, 0, 3), signal: "feedback" } } }), "x")).toBe(0.9);
+    const prior = process.env.LLMWIKI_TURN_EXCERPT;
+    try {
+      process.env.LLMWIKI_TURN_EXCERPT = "off";
+      expect(affinityMultiplier(affOf({ x: turnDemoted }), "x")).toBe(0.9);
+    } finally {
+      if (prior === undefined) delete process.env.LLMWIKI_TURN_EXCERPT;
+      else process.env.LLMWIKI_TURN_EXCERPT = prior;
+    }
     expect(affinityMultiplier(affOf({ x: { turn_context: ev(1, 1, 1) } }), "x")).toBe(1); // one open boosts nothing
     expect(affinityMultiplier(affOf({ x: { turn_context: ev(5, 2, 1) } }), "x")).toBe(1); // two opens, one day
     const boost = affinityMultiplier(affOf({ x: turnOpened }), "x");
@@ -244,6 +253,9 @@ describe("scoring", () => {
 });
 
 describe("refresh", () => {
+  test("automatic daily refresh never discovers or consumes raw transcripts", () => {
+    expect(refreshDueAffinity(NOW)).toEqual({ refreshed: 0, failed: [] });
+  });
   const PAGE = "docs/wiki/3_decision/a.md";
   const banner = `----- [llmwiki] index -----\n  • A  →  ${PAGE}`;
 
@@ -530,6 +542,8 @@ describe("turn context reranks within relevance", () => {
     expect(buildTurnContext(r, PROMPT)).toBe(base);
 
     writeAffinity(r, { [top[0]!]: turnDemoted });
+    expect(buildTurnContext(r, PROMPT)).toBe(base);
+    writeAffinity(r, { [top[0]!]: { turn_context: { ...ev(12, 0, 3), signal: "feedback" } } });
     const demoted = buildTurnContext(r, PROMPT);
     expect(pathsOf(demoted).length).toBe(3);
     expect(pathsOf(demoted)).not.toContain(top[0]!);

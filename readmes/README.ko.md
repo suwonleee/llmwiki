@@ -68,6 +68,10 @@ llmwiki --version
 
 `llmwiki <command> --help`
 
+질문마다 위키 발췌와 관련 커밋 메시지를 전달하고, 확인한 기록에서 특정 이름을 찾지 못했으면 이를 알립니다. `LLMWIKI_TURN_COMMITS=off` 또는 `LLMWIKI_TURN_ABSENT=off`로 각 채널을 끌 수 있습니다. 위키 파싱 결과는 비공개 임시 캐시를 사용합니다(`LLMWIKI_PAGE_CACHE=off`로 해제).
+
+`/wiki-save`는 이번 세션의 결정·교훈과 인계 상태를 저장합니다. 주제 통합·overview·의미 리뷰는 `/wiki-deep`에서 처리합니다. 결정 신호가 있는 8턴 이상 세션에는 모델용 저장 힌트를 한 번 전달할 수 있습니다(`LLMWIKI_SAVE_NUDGE=off`로 해제). 저장은 사용자 선택이며 저장하지 않은 세션은 만료돼도 보관하지 않습니다. 명령 실행 때 선택적으로 남기는 페이지 버전별 피드백을 다음 순위에 반영하고, 판단 불가는 중립으로 처리하며 틀린 주장은 별도 재확인합니다. 리뷰 provider가 없으면 현재 세션이 `review-input`을 검토하고 `review-import`로 제출할 수 있습니다.
+
 ## 위키 형식: OKF v0.2
 
 v0.14.0부터 새 위키에 [Open Knowledge Format v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md)를 적용했습니다. 타입이 있는 YAML 메타데이터, 출처, 상대 Markdown 링크, 폴더별 인덱스와 날짜별 로그를 갖춰 llmwiki 밖에서도 읽을 수 있습니다. 기존 위키는 사용자가 선택할 때만 변환합니다.

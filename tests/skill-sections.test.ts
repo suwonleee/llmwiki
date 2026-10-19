@@ -61,6 +61,7 @@ const STABLE_SECTIONS = [
   "save-rationale",
   "team-merge",
   "topic-page",
+  "work-feedback",
   "writing",
 ];
 test("section names are stable (renaming or removing one is a breaking change)", () => {
@@ -174,6 +175,10 @@ describe("relocated rules live in their sections", () => {
     expect(t).toContain("roughly 6+ top-level bullets");
     expect(t).toContain("`dense-bullet`");
     expect(t).toContain("`방향성` over 진북/북극성");
+    // Inventory claims rot first; contracts and reasons do not (measured 2026-10-19).
+    expect(t).toContain("## 4. Claims that age well");
+    expect(t).toContain("never a line number");
+    expect(t).toContain("mark that line itself");
   });
 
   test("review-findings, team-merge, distill, quiz-schedule, save-rationale keep their rules", () => {
@@ -216,7 +221,6 @@ describe("relocated rules live in their sections", () => {
       "Only **direction shifts** and **unresolved contradictions** go to `0_review`",
       "**save-current fails (no exact match) → file NOTHING for this session**",
       "**never re-summarize other wiki pages**",
-      "llmwiki review <repo> --commit --if-due",
       "cold-start rule 3 defers ALL mid-session page-writing",
       "**never `author:`**",
       "`status: deprecated` + `superseded_by: <new page path>`",
@@ -238,6 +242,16 @@ describe("relocated rules live in their sections", () => {
       expect(save).toContain(rule);
     }
     const deep = read("skill/wiki-deep.md");
+    expect(save).not.toContain("llmwiki review <repo> --commit");
+    expect(save).not.toContain("llmwiki gaps <repo>");
+    expect(save).toContain("--event completed");
+    expect(save).toContain("--event declined");
+    expect(deep).toContain("D1b. **Topic consolidation");
+    expect(deep).toContain("D1c. **Overview and L0");
+    expect(deep).toContain("llmwiki review-input <repo>");
+    expect(deep).toContain("llmwiki review-import <repo> --source <file>");
+    expect(deep).toContain("llmwiki gaps <repo>");
+    expect(deep).not.toContain("propose the unattended daemon");
     expect(deep).toContain("**snapshot FIRST**");
     expect(deep).toContain("`llmwiki distill-verify <snapshot> <page>` must pass");
     expect(read("skill/wiki-quiz.md")).toContain("**never hand-edited**");

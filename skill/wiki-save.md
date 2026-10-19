@@ -1,12 +1,12 @@
 ---
-description: Session close-out (warm, O(this session)) — file THIS session into the log, consolidate its durable concepts into the topic encyclopedia (5_topic), refresh L0 (current-state), finish with overview·lint. The every-session habit; volume work (backlog · review · gaps · re-distill) defers to the periodic `/wiki-deep` deep pass
+description: Fast warm close-out — preserve THIS session’s decisions, contracts, failure lessons and evidence; refresh L0 and active rules, append the log, run deterministic checks. Topic consolidation, overview, review and gaps belong to `/wiki-deep`
 ---
 
 # /wiki-save — session close-out (warm, human-present)
 
-File **THIS session's** work into durable knowledge **right here (warm context)** and keep the **reading input (L0) fresh** — the primary path, not a cron. **Minutes, not tens of minutes.** Volume work defers to **`/wiki-deep`**; an un-filed session ageing out is **self-selection, not loss** (save-rationale §3).
+File **THIS session** in warm context and refresh **L0**. Volume work belongs to `/wiki-deep`; an un-filed session ageing out is self-selection (save-rationale §3).
 
-Steps name a reference section (`llmwiki conventions <repo> --section <name>`) only where needed — never pre-load. Rationale: `llmwiki conventions <repo> --section save-rationale`; command semantics: `llmwiki conventions <repo> --section cli`.
+Load named sections only when needed (`llmwiki conventions <repo> --section <name>`). Rationale: `llmwiki conventions <repo> --section save-rationale`; command semantics: `llmwiki conventions <repo> --section cli`.
 
 Two layers: the **log** (`2_milestone`·`3_decision`·`4_insight` — one immutable entry per session) and the **topic encyclopedia** (`5_topic` — one living page per concept, merged in place). Promotion is log → topic only.
 
@@ -16,9 +16,9 @@ Two layers: the **log** (`2_milestone`·`3_decision`·`4_insight` — one immuta
 - **This is the write moment**: cold-start rule 3 defers ALL mid-session page-writing to here, so sweep the WHOLE session.
 - **Standalone CLI engine** — only `bun ~/llmwiki/src/cli.ts` (`llmwiki` below) + `<repo>/docs/wiki/`; no other wiki/MCP tools.
 - **Routine judgment by the strong model, only direction by the human**: classification, grounding checks, topic merges, and decision/insight confirmation are decided *directly* as `status: stable` — no one-by-one checks with the human. **Never fabricate ungrounded claims — omit** them. Only **direction shifts** and **unresolved contradictions** go to `0_review`.
-- **Latency contract**: O(this session), never O(backlog)/O(wiki). Volume work goes to `/wiki-deep` or the unattended `autoupdate` daemon; the semantic review runs **in the background, never waited on**.
-- **Single-purpose**: finish or queue unrelated work (review fixes, tests, commits) BEFORE starting.
-- **Validate as you write**: after each page write, `llmwiki index <repo> >/dev/null && llmwiki lint <repo> --path '<page path under docs/wiki>' --errors-only`; fix findings NOW.
+- **Latency contract**: O(this session), never O(backlog)/O(wiki). Topic consolidation, overview, semantic review and gaps run only in `/wiki-deep`, never in this fast lane. No unattended transcript consumption or background model call.
+- **Single-purpose**: finish or queue unrelated work (review fixes, tests, commits) BEFORE starting. If the user declines a save offer, record `llmwiki save-event <repo> --session <exact id> --event declined` once; do not ask again. A missing exact ID means skip the event, never infer one.
+- **Validate as you write**: after each page write, `llmwiki lint <repo> --path '<page path under docs/wiki>' --errors-only`; fix findings NOW.
 - **Secrets never enter a page**: no credential/token values, private endpoints, or personal data in prose or 0_review drafts — name and cite the thing instead (`SLACK_TOKEN: issued, stored in 1Password`; placeholders like `API_KEY=<your-key>` are fine). `page-secret`/`excerpt-secret` lint errors are fixed by removing the VALUE, never the claim or its citation.
 - **Routine filing, routine reasoning**; depth only for contradictions, judgment-bearing merges, direction shifts.
 
@@ -41,9 +41,9 @@ Exactly these folders under `docs/wiki/` — never `concepts/`, `entities/`, `sy
 - **Frontmatter** (OKF v0.2): `type` (the folder's) `title` `description` `date` `tags`(≥2) `status`(stable|draft|deprecated) `generated` `sources` — shapes: citations section; **never `author:`** (git owns authorship); no `domain:`/`source:`/`updated:`. **Links**: relative markdown `[Label](../5_topic/x.md)`, never `[[wikilinks]]`; cross-link related pages.
 - **Citations**: every fact/judgment claim has a footnote `[^1]: <transcript>.jsonl` or one bare repo-relative path; the definition line stays bare. The evidence quote goes on the NEXT line, indented 4 spaces, from `llmwiki excerpt <transcript.jsonl> --kind judgment|fact` — never from memory. Before the first footnote of this pass: `llmwiki conventions <repo> --section citations`.
 
-## Topic consolidation (the heart of this ritual)
+## Topic consolidation
 
-At the first candidate concept: `llmwiki conventions <repo> --section consolidate`. Its invariants always hold:
+In `/wiki-deep`, at the first candidate concept: `llmwiki conventions <repo> --section consolidate`. Its invariants always hold:
 - **Selective** — only recurring, explicitly durable, or decision/direction-tied concepts; episodic stays in the log (unsure → log).
 - **Add, never rewrite** — new fact = new bullet with its own citation; every existing grounded line preserved verbatim.
 - **Re-ground from raw** — transcript / raw evidence only, **never re-summarize other wiki pages**.
@@ -51,7 +51,7 @@ At the first candidate concept: `llmwiki conventions <repo> --section consolidat
 
 $ARGUMENTS
 
-## Procedure (minutes, O(this session))
+## Procedure (warm close-out)
 
 1. **REPO = the repo this session's WORK concerned** — normally cwd (`$CLAUDE_PROJECT_DIR`; argument none/`here` = current repo, or another repo's path). Work from a catch-basin cwd into another enrolled repo files into THAT repo. No `docs/wiki/` → `llmwiki skeleton <repo>`, then proceed.
 
@@ -74,15 +74,16 @@ $ARGUMENTS
      - not grounded → omit; noise → no page, `update-done --skipped`
    - `llmwiki update-done <repo> <transcript> <new_offset>`. **Leave the rest of the backlog pending, report its count** — never drain it inline.
 
-2b. **Same-topic weave-in (optional)**: `llmwiki related <repo> <this session's transcript>`. Mention candidates once; weave one in ONLY if it enriches a page this close-out already writes, via `update-next → file → update-done` (own log entry). **Skipping is the default and final for today** — never debt, never a `/wiki-deep` reason.
 
-3. **Consolidate**: dry-run `llmwiki consolidate <repo>` (+ `llmwiki topics <repo>`) → select → create-or-update `5_topic/<slug>.md` (a NEW page: `llmwiki conventions <repo> --section topic-page`) → cross-link.
+3. **Keep the fast lane scoped**: preserve only this session’s durable decisions, contracts, failure lessons and supporting evidence. Topic consolidation is explicitly deferred to `/wiki-deep` D1b; do not run `consolidate` or `topics` here. A concrete correction to a page already used in this task can be repaired with raw evidence, preserving history.
 
-4. **Refresh L0** (most important): in `docs/wiki/current-state.md` update **'now (TL;DR)' and 'next'** from this session + recent milestones + new topic pages. **L0 is the team handoff packet** — name owners (`- <task> (→ name)`). **Trim to ~1,600 chars**: displaced detail moves to `current-state-detail.md` (linked from L0) — **move, never delete**; keep only now+next in L0. Direction and absolute rules are the human's — propose, the human confirms: a direction change → a `1_direction/` draft + draft-marked section as a diff; record after approval. **Active rules** (after Direction, never trimmed): a convention/prohibition the human set this session → one concrete line + decision link; one scoped to code paths also gets `x-llmwiki: { applies_to, rule, recall }` on its decision page (recall: 2–5 phrases a future request would use; save-rationale §9).
+4. **Refresh L0** (most important): in `docs/wiki/current-state.md` update **'now (TL;DR)' and 'next'** from this session and the existing now/next only; do not scan recent milestones or topics. **L0 is the team handoff packet** — name owners (`- <task> (→ name)`). **Trim to ~1,600 chars**: displaced detail moves to `current-state-detail.md` (linked from L0) — **move, never delete**; keep only now+next in L0. Direction and absolute rules are the human's — propose, the human confirms: a direction change → a `1_direction/` draft + draft-marked section as a diff; record after approval. **Active rules** (after Direction, never trimmed): a convention/prohibition the human set this session → one concrete line + decision link; one scoped to code paths also gets `x-llmwiki: { applies_to, rule, recall }` on its decision page (recall: 2–5 phrases a future request would use; save-rationale §9).
 
-5. **Overview (entry point, not a changelog)**: refresh `docs/wiki/overview.md` **Key Findings only** (one line + link each); **never prepend a per-session paragraph**. Then **`llmwiki overview --normalize <repo>`** (idempotent; Recent Updates → one log pointer).
+5. **Defer overview**: `/wiki-deep` D1c owns Key Findings and overview normalization. Do not rewrite the overview on an ordinary session close-out.
 
-6. **Log**: `llmwiki log-append <repo> update "<one-line session>" "<topic page touched>"…` — engine-formatted (dated, newest first); never hand-edit `log.md`.
+6. **Log**: `llmwiki log-append <repo> update "<one-line session>" "<page touched>"…` — engine-formatted (dated, newest first); never hand-edit `log.md`.
+
+6b. **Optional feedback**: for at most **2 concrete cases** witnessed in this task, follow `llmwiki conventions <repo> --section work-feedback` (exact session ID). Use task regression cases or version-bound injected-page judgments; never rate every page merely because it was shown. No evidence → skip; a broader feedback pass belongs to deep.
 
 7. **Close out (deterministic)**: `llmwiki register-transcript <repo>` → `llmwiki okf <repo> --commit --if-okf` (fills `sources`/`generated`, re-stamps `generated.at` — never hand-maintain timestamps) → `llmwiki index <repo>` (regenerates each folder's `index.md`; never hand-edit) → `llmwiki reconcile <repo> --commit` → `llmwiki lint <repo> --errors-only` → `llmwiki daemon-sync` (always exit 0 — never fail the close-out over it). Lint must reach **0 errors**; warnings are advisory — never over-format to silence them. A not-yet-OKF wiki gets a one-line hint; converting is the person's call (`llmwiki okf <repo>` dry-run, then `--commit`), never yours.
    - **`unresolved-citation` → fix the footnote, never delete it**: `llmwiki conventions <repo> --section citations` §3.
@@ -92,9 +93,9 @@ $ARGUMENTS
      ```
      Threshold guidance → report `databaseBytes`, `freeBytes`, `freeRatio` and name **`/wiki-deep`**; else `maintenance: no action`. Never run `compact`, `VACUUM`, `wiki-clean`, or `wiki-clean-apply` from `/wiki-save`.
 
-8. **Semantic review — engine-gated, background**: if this session created or updated pages, launch `llmwiki review <repo> --commit --if-due` **in the background** and **continue immediately — never wait**. The engine's cadence gate decides; don't `--force` here. Output carrying `prev_launch_incomplete` → report it in chat; for that and for findings arriving while this session is open → `llmwiki conventions <repo> --section review-findings`. Then **`llmwiki gaps <repo>`**, and fill **at most 2 quick gaps** (oldest first; `next-question` cross-links with a relation word (grounds · extends · contradicts · exemplifies · enables) or `> [conflict]` callouts only) — the rest is `/wiki-deep`'s; announce the open count. Never hand-edit `<!-- gap:… -->` markers.
+8. **Mark actual completion**: only after filing, L0/log and deterministic checks succeeded, record `llmwiki save-event <repo> --session <exact id> --event completed`. `save-current` only enqueues, and `update-done` only advances a consumed range; neither proves the whole close-out succeeded. If exact resolution failed or lint errors remain, leave completion unrecorded. Never equate a queued session with a saved one.
 
-9. **Report** (1–2 lines): "log reflected N (this session) / **backlog deferred: B sessions** / **topic pages: created A, updated B** / **gaps filled K (open M)** / 0_review pending N / L0 refreshed: yes/no / lint error·warn counts / review: launched-bg|not-due|prev-incomplete / maintenance: no-action|db <databaseBytes>B free <freeBytes>B ratio <freeRatio> → `/wiki-deep` / **deep pass (`/wiki-deep`) recommended: yes/no (why)**". Recommend `/wiki-deep` only for WIKI-maintenance signals (lint `topic-oversize` · gaps repeatedly deferred · maintenance guidance). The pending-backlog count is NEVER a reason — report it as a bare fact.
+9. **Report** (1–2 lines): "log reflected N (this session) / backlog deferred B sessions / L0 refreshed yes/no / lint errors N, warnings M / feedback recorded N|skipped (reason) / maintenance no-action|db D free F ratio R → `/wiki-deep` / deep recommended yes/no (reason)". Recommend deep only for wiki maintenance already witnessed: `topic-oversize`, repeatedly deferred gaps or db-health guidance. The pending-backlog count is a bare fact, never debt or a recommendation trigger. Review and gap filling remain in deep, with a relation word (grounds · extends · contradicts · exemplifies · enables) on new cross-links; do not inspect them to justify a recommendation here.
 
 ## Principles
 - **Supersession (never delete or rewrite a decision)**: a replacing decision gets a NEW page; the old one keeps its body and gains `status: deprecated` + `superseded_by: <new page path>` + `superseded_at: YYYY-MM-DD` (lint errors without the pointer). Never move it to an archive. Numeric `confidence:` values are banned — certainty lives only in footnoted evidence.
