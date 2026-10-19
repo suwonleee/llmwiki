@@ -201,7 +201,8 @@ function prepareCapturedReleaseScenario(): Scenario {
         source: "startup",
       }),
     );
-    expect(firstColdStart).toContain("Current State");
+    expect(firstColdStart).toContain("Wiki is still empty");
+    expect(firstColdStart).not.toContain("<current core state in one line>");
     const swept = mustRun([process.execPath, join(clone, "src", "daemon", "watch.ts"), "--once"]);
     expect(swept).toContain("enqueued=1");
     expect(swept).toContain("failed=0");

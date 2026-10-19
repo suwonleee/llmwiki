@@ -171,7 +171,19 @@ describe("fresh public clone across non-Claude harnesses", () => {
       JSON.stringify({ hook_event_name: "SessionStart", session_id: session, cwd: s.repo }),
     );
     expect(cold.exitCode, text(cold)).toBe(0);
-    expect(text(cold)).toContain("Current State");
+    expect(text(cold)).toContain("Wiki is still empty");
+    expect(text(cold)).not.toContain("<current core state in one line>");
+    writeFileSync(
+      join(s.repo, "docs", "wiki", "current-state.md"),
+      "## Now\n\n- Authored Codex fixture: cobalt stays canonical.\n",
+    );
+    const authoredCold = s.run(
+      ["bash", "-c", command],
+      s.repo,
+      JSON.stringify({ hook_event_name: "SessionStart", session_id: `${session}-authored`, cwd: s.repo }),
+    );
+    expect(authoredCold.exitCode, text(authoredCold)).toBe(0);
+    expect(text(authoredCold)).toContain("Authored Codex fixture: cobalt stays canonical.");
 
     const swept = s.run([process.execPath, join(s.clone, "src", "daemon", "watch.ts"), "--once"]);
     expect(text(swept)).toContain("enqueued=1");
@@ -214,7 +226,17 @@ describe("fresh public clone across non-Claude harnesses", () => {
     const output = { system: [] as string[] };
     await callbacks["chat.message"]({ sessionID: session }, { parts: [{ type: "text", text: "cobalt restart boundary" }] });
     await callbacks["experimental.chat.system.transform"]({ sessionID: session }, output);
-    expect(output.system.join("\n")).toContain("Current State");
+    expect(output.system.join("\n")).toContain("Wiki is still empty");
+    expect(output.system.join("\n")).not.toContain("<current core state in one line>");
+    writeFileSync(
+      join(s.repo, "docs", "wiki", "current-state.md"),
+      "## Now\n\n- Authored OpenCode fixture: cobalt stays canonical.\n",
+    );
+    const authoredSession = `${session}-authored`;
+    const authoredOutput = { system: [] as string[] };
+    await callbacks["chat.message"]({ sessionID: authoredSession }, { parts: [{ type: "text", text: "cobalt restart boundary" }] });
+    await callbacks["experimental.chat.system.transform"]({ sessionID: authoredSession }, authoredOutput);
+    expect(authoredOutput.system.join("\n")).toContain("Authored OpenCode fixture: cobalt stays canonical.");
 
     const swept = s.run([process.execPath, join(s.clone, "src", "daemon", "watch.ts"), "--once"]);
     expect(text(swept)).toContain("enqueued=1");
