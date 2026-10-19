@@ -8,7 +8,6 @@
 // Language: LLMWIKI_LANG=ko switches the operating-rules/headers to Korean (default: en).
 import { isOkfBundle } from "./okf-bundle.ts";
 import { isRetired, linkTextOnly, splitFrontmatter } from "./okf.ts";
-import { statSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { inspectEnrollment, isEnrolled } from "./enrollment.ts";
@@ -16,7 +15,6 @@ import { wikiRootFor } from "./wiki-root.ts";
 import { readRepoDir, readRepoFile, repoDirExists, repoFileMtime } from "./repo-write.ts";
 import { pending } from "./capture.ts";
 import { uncitedPending } from "./reconcile.ts";
-import { sourceForKind } from "./source.ts";
 import { buildSpine, topicGaps } from "./synthesis.ts";
 import { loadAffinity, rerankByAffinity, RECENT_POLICY, type AffinityFile } from "./affinity.ts";
 import { auditNudge } from "./context-audit.ts";
@@ -396,9 +394,8 @@ export function buildContext(repo: string, opts: { affinity?: AffinityFile | nul
   }
 
   // (C) pending-update notice (central capture queue, this repo's slice).
-  // P0 "yesterday bridge": show WHAT the most recent un-condensed sessions were about, not
-  // just how many — recap comes from artifacts the harness already wrote (ai-title /
-  // last-prompt), read via the source's optional recapFor. Deterministic, 0 LLM, ≤3 lines.
+  // Automatic hooks read queue metadata only. Transcript recaps consume raw content and
+  // belong to explicit wiki commands, even when the harness already wrote a session title.
   //
   // Honesty: count only GENUINELY UN-CITED sessions,
   // not raw pending(). A cited-but-partial session (byte_offset>0, tail deferred to autoupdate/deep)
@@ -428,24 +425,6 @@ export function buildContext(repo: string, opts: { affinity?: AffinityFile | nul
     // exact countdown UX that decision had rejected. Un-filed sessions are self-selection,
     // not debt; the deadline detail stays on PULL only (`llmwiki doctor`).
     status(3, T.pending(pendRows.length));
-    try {
-      // pending() is first_seen ASC → the last rows are the most recent sessions.
-      for (const row of pendRows.slice(-3).reverse()) {
-        const recap = sourceForKind(row.source_kind).recapFor?.(row.transcript_path);
-        if (!recap) continue;
-        let stamp = "";
-        try {
-          const d = new Date(statSync(row.transcript_path).mtimeMs);
-          const p = (n: number) => String(n).padStart(2, "0");
-          stamp = `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())} `;
-        } catch {
-          /* stamp is decoration only */
-        }
-        status(0, `  • ${stamp}${recap}`);
-      }
-    } catch {
-      /* fail-safe: recap must never break cold-start; the count line above still stands */
-    }
   }
 
   // (C2) human memory loop — one bounded line when spaced-repetition reviews are due.

@@ -45,6 +45,10 @@ test("requires bounded concrete raw evidence and refuses symlink escapes", () =>
   input.cases = [input.cases[0]!];
   input.cases[0]!.evidence = [page];
   expect(() => prepareFeedback(root, input)).toThrow("raw source");
+  for (const evidence of [page.replaceAll("/", "\\"), page.replace("docs/wiki", "DOCS/WIKI")]) {
+    input.cases[0]!.evidence = [evidence];
+    expect(() => prepareFeedback(root, input)).toThrow("raw source");
+  }
   symlinkSync(join(root, "policy.ts"), join(root, "link.ts"));
   input.cases[0]!.evidence = ["link.ts"];
   expect(() => prepareFeedback(root, input)).toThrow("unsafe");

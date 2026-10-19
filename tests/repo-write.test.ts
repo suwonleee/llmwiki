@@ -13,7 +13,7 @@ describe("repoFileMetadata runtime contract (floor-runtime regression)", () => {
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-  test("mtimeNs is ALWAYS a bigint, whatever the runtime's stat fills in", () => {
+  test("mtimeNs and ctimeNs are ALWAYS bigints, whatever the runtime's stat fills in", () => {
     // bun 1.2.x returns undefined for fstatSync(...).mtimeNs (statSync is fine, 1.3 fixed it).
     // The declared type said bigint, so indexing crashed on the floor runtime with
     // "undefined is not an object" while every macOS run passed. The boundary owns this now.
@@ -23,6 +23,8 @@ describe("repoFileMetadata runtime contract (floor-runtime regression)", () => {
     expect(typeof meta!.mtimeNs).toBe("bigint");
     expect(typeof meta!.mtimeMs).toBe("number");
     expect(meta!.mtimeNs > 0n).toBe(true);
+    expect(typeof meta!.ctimeNs).toBe("bigint");
+    expect(meta!.ctimeNs > 0n).toBe(true);
   });
 
   test("the derived value is stable across calls — the stat fast-path compares it for equality", () => {
@@ -30,6 +32,7 @@ describe("repoFileMetadata runtime contract (floor-runtime regression)", () => {
     const a = repoFileMetadata(root, "docs/wiki/q.md")!;
     const b = repoFileMetadata(root, "docs/wiki/q.md")!;
     expect(a.mtimeNs).toBe(b.mtimeNs); // an unstable derivation would disable skipping forever
+    expect(a.ctimeNs).toBe(b.ctimeNs);
   });
 });
 

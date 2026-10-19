@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { appendFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { budgetStatus, hasL0Content } from "../src/engine/coldstart-status.ts";
@@ -7,6 +7,8 @@ import { _resetForTests } from "../src/engine/config.ts";
 import { resetEnrollmentCache } from "../src/engine/enrollment.ts";
 import { ensureSkeleton } from "../src/engine/update.ts";
 import { TOPIC_BUDGET } from "../src/engine/budgets.ts";
+import { enqueue, setStateDir, stateDir } from "../src/engine/capture.ts";
+import { claudeJsonlSource } from "../src/engine/sources/claude.ts";
 import { enrollRepo, makeGitRepo, tempDir } from "./support/git-repo.ts";
 
 const roots: string[] = [];
@@ -105,4 +107,33 @@ test("topic prose over the shared lint threshold joins the single maintenance si
   expect(buildContext(root, { statusBudget: Infinity })).not.toContain("oversized topics");
   write(TOPIC_BUDGET + 1);
   expect(buildContext(root, { statusBudget: Infinity })).toContain("oversized topics 1");
+});
+
+test("cold-start reports pending count without opening transcript recaps", () => {
+  process.env.LLMWIKI_LANG = "en";
+  _resetForTests();
+  const priorState = stateDir();
+  const base = tempDir("llmwiki-coldstart-no-transcript-");
+  roots.push(base);
+  setStateDir(join(base, "state"));
+  const recap = spyOn(claudeJsonlSource, "recapFor").mockImplementation(() => "PRIVATE-TRANSCRIPT-SENTINEL");
+  try {
+    const root = repo();
+    mkdirSync(join(root, "docs/wiki"), { recursive: true });
+    writeFileSync(join(root, "docs/wiki/current-state.md"), "## Now\n\n- REAL-L0\n");
+    const transcript = join(base, "synthetic-session.jsonl");
+    writeFileSync(transcript, JSON.stringify({
+      type: "user", message: { role: "user", content: "PRIVATE-TRANSCRIPT-SENTINEL" },
+    }) + "\n");
+    enqueue(transcript, "synthetic-session", root, 1, "claude-jsonl");
+
+    const out = buildContext(root, { statusBudget: Infinity });
+    expect(out).toContain("1 un-updated session(s) in this repo");
+    expect(out).toContain("REAL-L0");
+    expect(out).not.toContain("PRIVATE-TRANSCRIPT-SENTINEL");
+    expect(recap).toHaveBeenCalledTimes(0);
+  } finally {
+    recap.mockRestore();
+    setStateDir(priorState);
+  }
 });

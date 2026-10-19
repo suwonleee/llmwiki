@@ -84,7 +84,6 @@ const ALLOWED_READERS: Record<string, string> = {
   "engine/db.ts": "reads the trusted engine-bundled schema.sql; repository indexing uses repo-write",
   "engine/consolidate.ts": "stats machine-local transcript files from the capture ledger",
   "engine/reconcile.ts": "stats machine-local transcript files after repository citations are read safely",
-  "engine/context.ts": "stats machine-local transcript files for display metadata",
   "engine/lint.ts": "checks machine-local citation transcript paths; repository link probes use repo-write",
   "daemon/list-pending-repos.ts": "stats machine-local transcript files from the capture ledger",
   "daemon/install-receipt.ts":

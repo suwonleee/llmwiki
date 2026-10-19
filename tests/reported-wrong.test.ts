@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync, utimesSync, statSync } from "node:fs";
+import { mkdirSync, rmSync, symlinkSync, writeFileSync, utimesSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { makeEnrolledRepo, tempDir } from "./support/git-repo.ts";
 import { setEffectiveStateRoot } from "../src/engine/state-dir.ts";
@@ -47,6 +47,44 @@ test("a wrong report withdraws old explicit positive ranking evidence",()=>{
   resetAffinityCache(); expect(affinityMultiplier(loadAffinity(root,now),page)).toBeGreaterThan(1);
   feedback("wrong-3","wrong",now); resetAffinityCache();
   expect(affinityMultiplier(loadAffinity(root,now),page)).toBe(1);
+});
+test("source revision changes restore warnings and withhold rules without another feedback write",async()=>{
+  const now=Date.now();
+  feedback("used-before-recheck-1","used",now-86400000);
+  feedback("used-before-recheck-2","used",now);
+  feedback("wrong-before-recheck","wrong",now);
+  const id=recheckQueue(root)[0]!.id;
+  const input={id,verification:"Verified current source and retry tests",evidence:["source.ts"]};
+  resolveRecheck(root,input);
+  expect(reportedWrongPages(root).size).toBe(0);
+  expect((await loadEditRules(root)).length).toBe(1);
+  resetAffinityCache(); expect(affinityMultiplier(loadAffinity(root),page)).toBeGreaterThan(1);
+  writeFileSync(join(root,"unrelated.ts"),"unrelated source\n");
+  expect(reportedWrongPages(root).size).toBe(0);
+  const old=statSync(join(root,"source.ts"));
+  writeFileSync(join(root,"source.ts"),"const attempts=4;\n");
+  utimesSync(join(root,"source.ts"),old.atime,old.mtime);
+  expect(recheckQueue(root)[0]?.status).toBe("open");
+  expect(reportedWrongPages(root).has(page)).toBe(true);
+  resetAffinityCache(); expect(affinityMultiplier(loadAffinity(root),page)).toBe(1);
+  expect(await loadEditRules(root)).toEqual([]);
+  expect(buildTurnContext(root,"gateway retry budget")).toContain("reported wrong; recheck required");
+  resolveRecheck(root,input);
+  expect(reportedWrongPages(root).size).toBe(0);
+  expect((await loadEditRules(root)).length).toBe(1);
+});
+for (const unsafe of ["missing","symlink"] as const) test(`${unsafe} recheck evidence restores rule suppression`,async()=>{
+  feedback("wrong-before-unsafe-evidence","wrong",Date.now());
+  resolveRecheck(root,{id:recheckQueue(root)[0]!.id,verification:"Verified source behavior",evidence:["source.ts"]});
+  expect(reportedWrongPages(root).size).toBe(0);
+  rmSync(join(root,"source.ts"));
+  if (unsafe === "symlink") {
+    writeFileSync(join(root,"source-copy.ts"),"const attempts=3;\n");
+    symlinkSync(join(root,"source-copy.ts"),join(root,"source.ts"));
+  }
+  expect(recheckQueue(root)[0]?.status).toBe("open");
+  expect(reportedWrongPages(root).has(page)).toBe(true);
+  expect(await loadEditRules(root)).toEqual([]);
 });
 test("edited content with its old mtime restored invalidates old usage feedback",()=>{
   const now=Date.now();

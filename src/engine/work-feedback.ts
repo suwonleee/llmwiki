@@ -55,7 +55,7 @@ export function prepareFeedback(root: string, input: unknown): FeedbackReceipt {
         c.required.length + c.forbidden.length === 0)
       throw new Error("invalid feedback case: query/page/outcome/evidence and excerpt assertions required");
     const paths = [...new Set(c.evidence)];
-    if (paths.some(p => p.startsWith("docs/wiki/"))) throw new Error("evidence must be raw source/test output outside the wiki");
+    if (paths.some(p => p.replaceAll("\\", "/").toLowerCase().startsWith("docs/wiki/"))) throw new Error("evidence must be raw source/test output outside the wiki");
     return { query: c.query, page: c.page, outcome: c.outcome,
       evidence: [...c.evidence], required: [...c.required], forbidden: [...c.forbidden],
       page_sha256: snapshot(root, c.page).sha256, snapshots: paths.map(p => snapshot(root, p)) };

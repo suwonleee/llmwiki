@@ -77,7 +77,7 @@ export const AFFINITY_MAX_EMISSIONS = 5000;
 export const AFFINITY_MAX_PAGES = 512;
 /** The written file is trimmed (least evidence first) to stay well under the reader's cap. */
 export const AFFINITY_WRITE_MAX_BYTES = 128 * 1024;
-const AFFINITY_READ_MAX_BYTES = 256 * 1024;
+const AFFINITY_READ_MAX_BYTES = 1024 * 1024;
 /**
  * Transcript bytes read per harness per project per refresh. Candidates are already narrowed to
  * sessions the ledger names and to files modified inside the window; whatever the budget leaves out

@@ -7,6 +7,7 @@ import { isEnrolledFresh } from "./enrollment.ts";
 import { readDetailedEmissions, type EmissionChannel } from "./observe.ts";
 import { createRepoFile, readRepoFileBytes, repoFileMtime } from "./repo-write.ts";
 import { ensureProjectStateDir, projectStatePath, projectStateIsRegularFile, readProjectState, writeProjectStateQuietly } from "./project-state.ts";
+import { recheckEvidenceSignature, type RecheckedPage } from "./reported-wrong.ts";
 
 const hash = (v: string | Buffer) => createHash("sha256").update(v).digest("hex");
 const MAX_RECEIPTS = 2000, MAX_BYTES = 64 * 1024, DAY = 86400000;
@@ -112,10 +113,41 @@ function rebuildUsageAffinity(root: string, now: number): void {
   }
   const pages = Object.fromEntries([...byPage.entries()].sort((a,b)=>a[0].localeCompare(b[0])).slice(0,512).map(([path,p]) =>
     [path, { modifiedAt: p.modifiedAt, sha256: p.sha256, channels: Object.fromEntries(Object.entries(p.channels).map(([ch,c])=>[ch,{...c, days:c.days.size}])) }]));
-  const wrong = recheckQueue(root).filter(i=>i.status === "open").slice(0,512).map(i=>({page:i.page,sha256:i.sha256}));
+  const checks = recheckQueue(root).slice(0,512);
+  const wrong = checks.filter(i=>i.status === "open").map(i=>({page:i.page,sha256:i.sha256}));
+  const accepted = resolutions(root);
+  const rechecked: RecheckedPage[] = [];
+  for (const item of checks.filter(i=>i.status === "resolved")) {
+    const bytes = readRepoFileBytes(root, item.page);
+    if (bytes === null) continue;
+    const sha256 = hash(bytes);
+    let evidence: RecheckedPage["evidence"] = [];
+    for (const resolution of accepted.filter(r => r.id === item.id && r.sha256 === sha256)) {
+      const proof = resolution.evidence.map(e => {
+        const before = recheckEvidenceSignature(root, e.path);
+        if (before === null) return null;
+        const b = readRepoFileBytes(root, e.path);
+        return b !== null && b.length <= 1024 * 1024 && hash(b) === e.sha256 &&
+          recheckEvidenceSignature(root, e.path) === before ? { path: e.path, signature: before } : null;
+      });
+      if (proof.every((e): e is NonNullable<typeof e> => e !== null)) { evidence = proof; break; }
+    }
+    rechecked.push({ page: item.page, sha256, evidence });
+  }
   // Explicitly reported wrong versions do not retain positive ranking evidence while pending.
   for (const item of wrong) if (pages[item.page]?.sha256 === item.sha256) delete pages[item.page];
-  if (!writeProjectStateQuietly(root, ["observe", "usage-affinity.json"], JSON.stringify({ version: 1, generatedAt: now, pages, wrong }) + "\n"))
+  const encode = () => JSON.stringify({ version: 1, recheck_schema_version: 1, generatedAt: now, pages, wrong, rechecked }) + "\n";
+  // Keep pending markers before optional ranking evidence. If evidence metadata cannot fit,
+  // retain its page marker with an empty proof (conservatively requiring a fresh recheck).
+  for (const entry of [...rechecked].sort((a,b)=>JSON.stringify(b.evidence).length-JSON.stringify(a.evidence).length)) {
+    if (Buffer.byteLength(encode()) <= 960 * 1024) break;
+    entry.evidence = [];
+  }
+  for (const page of Object.keys(pages).reverse()) {
+    if (Buffer.byteLength(encode()) <= 960 * 1024) break;
+    delete pages[page];
+  }
+  if (!writeProjectStateQuietly(root, ["observe", "usage-affinity.json"], encode()))
     throw new Error("could not write usage affinity in existing engine-held state");
 }
 

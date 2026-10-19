@@ -219,6 +219,7 @@ export interface RepoFileMetadata {
   readonly size: number;
   readonly mtimeMs: number;
   readonly mtimeNs: bigint;
+  readonly ctimeNs: bigint;
 }
 
 /** Descriptor-derived metadata for a regular repository file, or null at any unsafe path. */
@@ -242,10 +243,14 @@ export function repoFileMetadata(root: string, relativePath: string): RepoFileMe
         : Number.isFinite(mtimeMs)
           ? BigInt(Math.round(mtimeMs * 1_000_000))
           : 0n;
+    const ctimeMs = Number(st.ctimeMs);
+    const ctimeNs = typeof st.ctimeNs === "bigint" ? st.ctimeNs
+      : Number.isFinite(ctimeMs) ? BigInt(Math.round(ctimeMs * 1_000_000)) : 0n;
     return {
       size: Number(st.size),
       mtimeMs,
       mtimeNs,
+      ctimeNs,
     };
   } catch {
     return null;
